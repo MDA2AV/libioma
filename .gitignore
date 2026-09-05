@@ -2,4 +2,8 @@ obj/
 ioma
 ioma-tiny
 ioma-trace
+stackful
+stackful-tiny
+stackful-trace
+*.o
 .idea/
