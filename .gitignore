@@ -1,9 +1,19 @@
+# build artifacts
 obj/
+*.o
 ioma
 ioma-tiny
 ioma-trace
 stackful
 stackful-tiny
 stackful-trace
-*.o
+
+# CMake / CLion out-of-source builds
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# IDE
 .idea/
