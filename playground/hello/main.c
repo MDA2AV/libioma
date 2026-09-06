@@ -1,16 +1,17 @@
 /*
- * main.c - an ioma HTTP server. Endpoints are plain functions: take a request, return a response.
- * The framework parses, routes, serializes and flushes; the flush suspends the connection's
- * coroutine until io_uring says the send completed.
+ * playground/hello - a complete ioma HTTP server, built against libioma. Endpoints are plain
+ * functions: take a request, return a response. The framework parses, routes, serializes and
+ * flushes; the flush suspends the connection's coroutine until io_uring says the send completed.
  *
- *     make && ./ioma            # 4 workers on :8080
+ *     make && ./ioma-hello              # 4 workers on :8080
  *     curl http://127.0.0.1:8080/
  *     curl http://127.0.0.1:8080/whoami?x=1
  *     curl -d 'hello' http://127.0.0.1:8080/echo
  *
- * The raw byte-level proactor API (no HTTP) is still there in proactor.h if you want it.
+ * Building against an installed libioma instead:
+ *     cc hello.c $(pkg-config --cflags --libs ioma) -o hello
  */
-#include "http.h"
+#include <ioma.h>
 
 #include <stdlib.h>
 

@@ -6,7 +6,8 @@ buffer group on every request and overflows the per-connection queue at the firs
 
     gcc -O2 -g -Wall -Iinclude -Ithird_party/picohttpparser -pthread \\
         -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4 \\
-        src/*.c src/*.S third_party/picohttpparser/picohttpparser.c -o ioma-tiny
+        playground/hello/main.c src/*.c src/*.S \\
+        third_party/picohttpparser/picohttpparser.c -o ioma-tiny
 
 At shutdown the server must report "0 still open" on every worker.
 """
@@ -17,7 +18,7 @@ import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 REQ = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"
-OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
+OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\nServer: ioma\r\n\r\nok"
 
 
 def connect(timeout=5):

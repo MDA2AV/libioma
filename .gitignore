@@ -1,6 +1,14 @@
-# build artifacts
 obj/
 *.o
+
+# libraries and examples
+libioma.a
+libioma.so
+libioma.so.*
+ioma-hello
+ioma.pc
+
+# old binaries
 ioma
 ioma-tiny
 ioma-trace
@@ -8,7 +16,7 @@ stackful
 stackful-tiny
 stackful-trace
 
-# CMake / CLion out-of-source builds
+# CMake / CLion
 build/
 cmake-build-*/
 CMakeCache.txt
