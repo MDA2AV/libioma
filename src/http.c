@@ -12,6 +12,8 @@
 #include "picohttpparser.h"
 
 #include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -325,8 +327,9 @@ static void serve(conn_t *c)
 
         size_t header_len = (size_t)pret;
 
+        /* Init the scalar fields explicitly. The 2 KB headers[] array is filled up to n_headers
+         * below and never read past it, so zeroing the whole struct per request is wasted work. */
         ioma_request req;
-        memset(&req, 0, sizeof req);
         req.method = method;  req.method_len = ml;
         req.target = target;  req.target_len = tl;
         req.minor_version = minor;
@@ -337,6 +340,7 @@ static void serve(conn_t *c)
             req.query = q + 1;     req.query_len = tl - req.path_len - 1;
         } else {
             req.path = target;     req.path_len = tl;
+            req.query = NULL;      req.query_len = 0;
         }
 
         for (size_t i = 0; i < nphr; i++) {
@@ -438,10 +442,28 @@ static void *worker_thread(void *arg)
     return NULL;
 }
 
+/* CPUs this process may run on (its cpuset), so the default worker count is one per available core
+ * rather than a fixed number that would oversubscribe a small cpuset (e.g. 64 threads on 8 cores). */
+static int ioma_cpu_count(void)
+{
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof set, &set) == 0) {
+        int n = CPU_COUNT(&set);
+        if (n > 0)
+            return n;
+    }
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (int)n : 1;
+}
+
+/* workers <= 0 means "one per available core". */
 int ioma_run(int workers, int port)
 {
-    if (workers < 1 || port < 1 || port > 65535) {
-        fprintf(stderr, "ioma_run: workers>=1 and 1<=port<=65535 required\n");
+    if (workers <= 0)
+        workers = ioma_cpu_count();
+    if (port < 1 || port > 65535) {
+        fprintf(stderr, "ioma_run: 1<=port<=65535 required\n");
         return 2;
     }
 
