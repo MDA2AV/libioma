@@ -161,47 +161,130 @@ static bool compute_keep_alive(const ioma_request *req)
     return ka;
 }
 
+/* Write `v` in decimal at `dst`, return the digit count. No format-string parsing, no division
+ * library call the way printf makes - just a digit loop, which the compiler turns into a few
+ * multiplies. This is the whole reason the response path can drop snprintf. */
+static inline int put_uint(char *dst, size_t v)
+{
+    char tmp[20];
+    int  i = 0;
+    do {
+        tmp[i++] = (char)('0' + v % 10);
+        v /= 10;
+    } while (v);
+    for (int j = 0; j < i; j++)
+        dst[j] = tmp[i - 1 - j];
+    return i;
+}
+
+/* A constant slice: pointer + length, so a precomposed line is a single memcpy. */
+struct cslice { const char *p; int len; };
+#define CSLICE(lit) (struct cslice){ (lit), (int)(sizeof(lit) - 1) }
+
+/* Precomposed status line for the common codes: one memcpy, zero formatting. NULL means "build it"
+ * (rare codes fall through to the general path in the callers). */
+static struct cslice status_line(int code)
+{
+    switch (code) {
+    case 200: return CSLICE("HTTP/1.1 200 OK\r\n");
+    case 204: return CSLICE("HTTP/1.1 204 No Content\r\n");
+    case 400: return CSLICE("HTTP/1.1 400 Bad Request\r\n");
+    case 404: return CSLICE("HTTP/1.1 404 Not Found\r\n");
+    case 405: return CSLICE("HTTP/1.1 405 Method Not Allowed\r\n");
+    case 500: return CSLICE("HTTP/1.1 500 Internal Server Error\r\n");
+    default:  return (struct cslice){ NULL, 0 };
+    }
+}
+
 /* A bodyless framework reply (parse errors, limits). Best effort; the caller then closes. */
 static void send_status(conn_t *c, int code)
 {
-    char head[256];
-    int hl = snprintf(head, sizeof head,
-                      "HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                      code, ioma_reason(code));
-    if (hl > 0) await_send(c, head, (size_t)hl);
+    char  head[128];
+    char *p = head;
+
+    struct cslice sl = status_line(code);
+    if (sl.p) {
+        memcpy(p, sl.p, (size_t)sl.len);
+        p += sl.len;
+    } else {
+        memcpy(p, "HTTP/1.1 ", 9);
+        p += 9;
+        p += put_uint(p, (size_t)code);
+        *p++ = ' ';
+        const char *r = ioma_reason(code);
+        size_t rl = strlen(r);
+        memcpy(p, r, rl);
+        p += rl;
+        memcpy(p, "\r\n", 2);
+        p += 2;
+    }
+    memcpy(p, "Content-Length: 0\r\nConnection: close\r\n\r\n", 40);
+    p += 40;
+
+    await_send(c, head, (size_t)(p - head));
 }
 
+/* Serialize the response head (and inline a small body) with memcpy of precomposed pieces plus the
+ * integer writer above - no snprintf on the hot path - then one send when the body fits. */
 static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
 {
-    char head[IOMA_HEAD_CAP];
-    int hl = 0;
+    char  head[IOMA_HEAD_CAP];
+    char *p   = head;
+    char *end = head + sizeof head;
 
-#define APP(...)                                                             \
-    do {                                                                     \
-        int _n = snprintf(head + hl, sizeof head - (size_t)hl, __VA_ARGS__); \
-        if (_n < 0 || (size_t)_n >= sizeof head - (size_t)hl) {              \
-            send_status(c, 500);                                             \
-            return -1;                                                       \
-        }                                                                    \
-        hl += _n;                                                            \
-    } while (0)
+    /* Refuse (500) rather than overrun if a response's headers are pathologically large. */
+#define NEED(n)     do { if ((size_t)(end - p) < (size_t)(n)) { send_status(c, 500); return -1; } } while (0)
+#define PUT(src, n) do { NEED(n); memcpy(p, (src), (size_t)(n)); p += (n); } while (0)
+#define PUTC(lit)   PUT((lit), sizeof(lit) - 1)
 
-    APP("HTTP/1.1 %d %s\r\n", res->status, ioma_reason(res->status));
-    APP("Content-Type: %s\r\n", res->content_type ? res->content_type : "text/plain");
-    APP("Content-Length: %zu\r\n", res->body_len);
-    APP("Connection: %s\r\n", (req->keep_alive && !res->close) ? "keep-alive" : "close");
-    for (int i = 0; i < res->n_extra; i++)
-        APP("%.*s: %.*s\r\n", (int)res->extra[i].name_len, res->extra[i].name,
-                              (int)res->extra[i].value_len, res->extra[i].value);
-    APP("\r\n");
-#undef APP
+    struct cslice sl = status_line(res->status);
+    if (sl.p) {
+        PUT(sl.p, sl.len);
+    } else {
+        PUTC("HTTP/1.1 ");
+        NEED(3);
+        p += put_uint(p, (size_t)res->status);
+        PUTC(" ");
+        const char *reason = ioma_reason(res->status);
+        PUT(reason, strlen(reason));
+        PUTC("\r\n");
+    }
+
+    PUTC("Content-Type: ");
+    const char *ct = res->content_type ? res->content_type : "text/plain";
+    PUT(ct, strlen(ct));
+    PUTC("\r\n");
+
+    PUTC("Content-Length: ");
+    NEED(20);
+    p += put_uint(p, res->body_len);
+    PUTC("\r\n");
+
+    if (req->keep_alive && !res->close)
+        PUTC("Connection: keep-alive\r\n");
+    else
+        PUTC("Connection: close\r\n");
+
+    for (int i = 0; i < res->n_extra; i++) {
+        PUT(res->extra[i].name, res->extra[i].name_len);
+        PUTC(": ");
+        PUT(res->extra[i].value, res->extra[i].value_len);
+        PUTC("\r\n");
+    }
+
+    PUTC("\r\n");
+#undef PUTC
+#undef PUT
+#undef NEED
+
+    size_t hl = (size_t)(p - head);
 
     /* One send when the body fits right after the head (the common small-response case). */
-    if (res->body_len && (size_t)hl + res->body_len <= sizeof head) {
+    if (res->body_len && hl + res->body_len <= sizeof head) {
         memcpy(head + hl, res->body, res->body_len);
-        return await_send(c, head, (size_t)hl + res->body_len) < 0 ? -1 : 0;
+        return await_send(c, head, hl + res->body_len) < 0 ? -1 : 0;
     }
-    if (await_send(c, head, (size_t)hl) < 0) return -1;
+    if (await_send(c, head, hl) < 0) return -1;
     if (res->body_len && await_send(c, res->body, res->body_len) < 0) return -1;
     return 0;
 }
