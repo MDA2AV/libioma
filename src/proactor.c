@@ -463,13 +463,34 @@ static int listener_open(uint16_t port)
 
 /* ── the loop ──────────────────────────────────────────────────────────────────────────── */
 
-static void pin_to(int cpu)
+/* Pin worker `idx` to the idx-th CPU the process is actually allowed to run on. Reading the
+ * inherited affinity mask (rather than assuming CPUs 0..n-1) keeps the mapping correct under a
+ * non-contiguous cpuset, e.g. a container pinned to 0-31,64-95. */
+static void pin_to(int idx)
 {
-    long n = sysconf(_SC_NPROCESSORS_ONLN);
-    cpu_set_t set;
-    CPU_ZERO(&set);
-    CPU_SET(cpu % (n > 0 ? n : 1), &set);
-    pthread_setaffinity_np(pthread_self(), sizeof set, &set);
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof allowed, &allowed) != 0)
+        return;
+
+    int count = CPU_COUNT(&allowed);
+    if (count <= 0)
+        return;
+
+    int target = idx % count;
+    int seen = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE; cpu++) {
+        if (!CPU_ISSET(cpu, &allowed))
+            continue;
+        if (seen == target) {
+            cpu_set_t one;
+            CPU_ZERO(&one);
+            CPU_SET(cpu, &one);
+            pthread_setaffinity_np(pthread_self(), sizeof one, &one);
+            return;
+        }
+        seen++;
+    }
 }
 
 void proactor_run(proactor_t *p)
