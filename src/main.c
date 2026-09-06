@@ -1,126 +1,69 @@
 /*
- * main.c - a complete server: N workers, one per core, and a plaintext HTTP/1.1 handler written
- * as linear code. Every await parks the handler's coroutine; the worker's loop resumes it when
- * the io_uring completion arrives, on the same thread, inside the dispatch of that completion.
+ * main.c - an ioma HTTP server. Endpoints are plain functions: take a request, return a response.
+ * The framework parses, routes, serializes and flushes; the flush suspends the connection's
+ * coroutine until io_uring says the send completed.
  *
- *     make && ./ioma [workers] [port]
+ *     make && ./ioma            # 4 workers on :8080
  *     curl http://127.0.0.1:8080/
+ *     curl http://127.0.0.1:8080/whoami?x=1
+ *     curl -d 'hello' http://127.0.0.1:8080/echo
+ *
+ * The raw byte-level proactor API (no HTTP) is still there in proactor.h if you want it.
  */
-#define _GNU_SOURCE
-#include "proactor.h"
+#include "http.h"
 
-#include <pthread.h>
-#include <signal.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
-static volatile sig_atomic_t g_stop;
-
-static void on_signal(int sig)
+/* GET / - a string literal body: valid for the whole program, so returning it is fine. */
+static ioma_response home(ioma_request *req)
 {
-    (void)sig;
-    g_stop = 1;
+    (void)req;
+    return ioma_text(200, "hello from ioma\n");
 }
 
-static const char RESPONSE[] =
-    "HTTP/1.1 200 OK\r\n"
-    "Content-Type: text/plain\r\n"
-    "Content-Length: 2\r\n"
-    "\r\n"
-    "ok";
-#define RESPONSE_LEN (sizeof RESPONSE - 1)
-
-/* The handler. Its locals live on the coroutine's stack across every await. */
-static void handler(conn_t *c)
+/* GET /health */
+static ioma_response health(ioma_request *req)
 {
-    char   buf[8192];
-    size_t have = 0;
-
-    for (;;) {
-        int n = await_recv(c, buf + have, sizeof buf - have);
-        if (n <= 0) {                                        /* 0: peer closed, <0: -errno */
-#ifdef TRACE
-            fprintf(stderr, "handler fd=%d: recv -> %d, have=%zu\n", c->fd, n, have);
-#endif
-            return;
-        }
-        have += (size_t)n;
-
-        /* answer every complete request in the buffer, keep a partial tail for the next recv */
-        size_t off = 0;
-        for (;;) {
-            char *end = memmem(buf + off, have - off, "\r\n\r\n", 4);
-            if (!end)
-                break;
-            off = (size_t)(end + 4 - buf);
-            int rc = await_send(c, RESPONSE, RESPONSE_LEN);
-            if (rc < 0) {
-#ifdef TRACE
-                fprintf(stderr, "handler fd=%d: send -> %d\n", c->fd, rc);
-#endif
-                return;
-            }
-        }
-        if (off) {
-            memmove(buf, buf + off, have - off);
-            have -= off;
-        }
-        if (have == sizeof buf) {
-#ifdef TRACE
-            fprintf(stderr, "handler fd=%d: request larger than the buffer\n", c->fd);
-#endif
-            return;                                          /* request larger than the buffer */
-        }
-    }
+    (void)req;
+    return ioma_text(200, "ok");
 }
 
-static void *worker_thread(void *arg)
+/* GET /whoami - a dynamic body. ioma_textf formats into req->scratch, which lives long enough
+ * (it is the serve loop's buffer) to survive until the framework sends the reply. */
+static ioma_response whoami(ioma_request *req)
 {
-    proactor_run(arg);
-    return NULL;
+    ioma_response res = ioma_textf(req, 200,
+        "method = %.*s\npath   = %.*s\nquery  = %.*s\nkeep-alive = %s\n",
+        (int)req->method_len, req->method,
+        (int)req->path_len,   req->path,
+        (int)req->query_len,  req->query ? req->query : "",
+        req->keep_alive ? "yes" : "no");
+    ioma_header_set(&res, "X-Powered-By", "ioma");
+    return res;
 }
 
-int main(int argc, char **argv)
+/* POST /echo - reflect the request body back. req->body points into the read buffer, which is
+ * still alive when the framework serializes the reply, so pointing at it is safe. */
+static ioma_response echo(ioma_request *req)
 {
-    int workers = argc > 1 ? atoi(argv[1]) : 4;
-    int port    = argc > 2 ? atoi(argv[2]) : 8080;
-    if (workers < 1 || port < 1 || port > 65535) {
-        fprintf(stderr, "usage: %s [workers] [port]\n", argv[0]);
-        return 2;
-    }
+    return ioma_bytes(200, "application/octet-stream", req->body, req->body_len);
+}
 
-    signal(SIGPIPE, SIG_IGN);
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = on_signal;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+int main(void)
+{
+    ioma_route("GET",  "/",       home);
+    ioma_route("GET",  "/health", health);
+    ioma_route("GET",  "/whoami", whoami);
+    ioma_route("POST", "/echo",   echo);
+    /* anything else falls through to the built-in 404 (override with ioma_default) */
 
-    proactor_t *ws = calloc((size_t)workers, sizeof *ws);
-    pthread_t  *th = calloc((size_t)workers, sizeof *th);
-    if (!ws || !th) {
-        perror("calloc");
-        return 1;
-    }
+    int workers = 4;
+    const char *env = getenv("IOMA_WORKERS");
+    if (env) { int v = atoi(env); if (v > 0) workers = v; }
 
-    for (int i = 0; i < workers; i++) {
-        ws[i].id      = i;
-        ws[i].cpu     = i;                                   /* thread per core */
-        ws[i].port    = (uint16_t)port;
-        ws[i].handler = handler;
-        ws[i].stop    = &g_stop;
-        if (pthread_create(&th[i], NULL, worker_thread, &ws[i]) != 0) {
-            perror("pthread_create");
-            return 1;
-        }
-    }
-    fprintf(stderr, "ioma: %d workers on :%d\n", workers, port);
+    int port = 8080;
+    env = getenv("IOMA_PORT");
+    if (env) { int v = atoi(env); if (v > 0 && v < 65536) port = v; }
 
-    for (int i = 0; i < workers; i++)
-        pthread_join(th[i], NULL);
-    free(th);
-    free(ws);
-    return 0;
+    return ioma_run(workers, port);
 }

@@ -21,11 +21,18 @@ add_executable(ioma
         src/uring.c
         src/coro.c
         src/proactor.c
+        src/http.c
+        src/router.c
         src/main.c
-        src/switch_x86_64.S)
+        src/switch_x86_64.S
+        third_party/picohttpparser/picohttpparser.c)
 
-target_include_directories(ioma PRIVATE include)
+target_include_directories(ioma PRIVATE include third_party/picohttpparser)
 target_compile_options(ioma PRIVATE -Wall -Wextra)
 target_link_libraries(ioma PRIVATE Threads::Threads)
+
+# Vendored parser: silence its warnings, they are not ours to fix.
+set_source_files_properties(third_party/picohttpparser/picohttpparser.c
+        PROPERTIES COMPILE_OPTIONS "-w")
 
 # The tiny / trace builds from tests/stress.py are one-off gcc invocations, not targets here.

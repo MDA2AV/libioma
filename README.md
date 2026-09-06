@@ -1,45 +1,85 @@
 # ioma
 
-A minimal thread-per-core io_uring runtime in C where connection handlers are stackful
-coroutines: linear code with `await_recv` / `await_send`, no state machines, no callbacks.
-Modelled on [ioxide](https://github.com/MDA2AV/ioxide)'s TCP core; the design notes are in
+A minimal HTTP/1.1 server framework in C on a thread-per-core io_uring runtime. You write
+endpoints as plain functions, take a request, return a response, and the framework parses, routes,
+serializes, and flushes. Under it, each connection is a stackful coroutine: the flush suspends it
+and the io_uring completion resumes it, so the endpoint reads as linear code with no state machine.
+Modelled on [ioxide](https://github.com/MDA2AV/ioxide)'s TCP core; runtime design notes in
 [`DESIGN.md`](DESIGN.md).
 
-- **No liburing.** Three raw syscalls, the kernel's own structs, the rings mmap'd by hand
-  (`src/uring.c`, the twin of ioxide's `Ring.cs`).
-- **One ring per thread**, `SINGLE_ISSUER | DEFER_TASKRUN | NO_SQARRAY`, one `SO_REUSEPORT`
-  listener per worker, one provided-buffer ring per worker. Nothing is shared, nothing is locked.
-- **Multishot accept, multishot recv** with buffer select, `MSG_WAITALL` sends, `ASYNC_CANCEL` on
-  close — the same io_uring shape as ioxide.
-- **The proactor loop**: run spawned coroutines, re-arm recvs parked on `-ENOBUFS`, one
-  `io_uring_enter` (submit everything, wait for at least one completion), dispatch the batch,
-  advance the CQ head once. Handlers resume inline inside dispatch, so their sends ride the
-  next enter.
-- **Routing**: `user_data` is a pointer plus a tag in its low bits. A one-shot op's key is an
-  `op_t` in the awaiting coroutine's stack frame, frozen while it is parked. A multishot recv's
-  key is the heap `conn_t`, kept alive by a refcount until its terminal CQE.
+```c
+#include "http.h"
+
+static ioma_response home(ioma_request *req)   { (void)req; return ioma_text(200, "hello\n"); }
+static ioma_response echo(ioma_request *req)   { return ioma_bytes(200, "text/plain", req->body, req->body_len); }
+
+int main(void) {
+    ioma_route("GET",  "/",     home);
+    ioma_route("POST", "/echo", echo);
+    return ioma_run(4, 8080);          // 4 workers, one per core; blocks until Ctrl+C
+}
+```
 
 ```
 make
-./ioma [workers] [port]            # default 4 workers, pinned to cpus 0..3, port 8080
+./ioma                                     # 4 workers on :8080 (IOMA_WORKERS / IOMA_PORT override)
 curl http://127.0.0.1:8080/
-python3 tests/smoke.py 8080        # keep-alive, pipelining, split requests, half-close, ...
-wrk -t8 -c64 -d10s http://127.0.0.1:8080/
+curl -d hello http://127.0.0.1:8080/echo
+python3 tests/smoke.py 8080                # routing, keep-alive, pipelining, 404, half-close, ...
+wrk -t8 -c64 -d10s http://127.0.0.1:8080/health
 ```
 
-Layout:
+## Two layers
+
+- **The HTTP framework** (`include/http.h`): `ioma_request`, `ioma_response`, the `ioma_text` /
+  `ioma_json` / `ioma_bytes` / `ioma_textf` builders, `ioma_route` / `ioma_default`, and
+  `ioma_run`. This is what you write endpoints against.
+- **The runtime** (`include/proactor.h`): raw byte-level `await_recv` / `await_send` on the
+  proactor, if you want a protocol other than HTTP. The HTTP layer is just one handler on top of it.
+
+## How a request flows
+
+Each accepted connection runs the serve loop on its own coroutine (`src/http.c`):
+
+1. `await_recv` accumulates bytes into a fixed request buffer (this suspends until data arrives).
+2. [picohttpparser](https://github.com/h2o/picohttpparser) parses the request line and headers,
+   zero-copy, and returns "incomplete" until the full head is in, so a split request just reads more.
+3. The body is read to its `Content-Length`.
+4. The router matches `(method, path)` and calls your endpoint, which returns an `ioma_response`.
+5. The framework serializes the status line, headers, and body, and `await_send` flushes it (this
+   suspends until io_uring reports the send done).
+6. Keep-alive loops for the next request on the same connection; otherwise the connection closes.
+
+Requests and their slices point straight into the read buffer and are valid only for the endpoint
+call. A response body must point at memory alive until the send completes: a string literal, static
+data, or `req->scratch` (which `ioma_textf` uses).
+
+## Why picohttpparser
+
+One small file, zero-copy, battle-tested, and re-parse-friendly for streamed reads. It parses the
+request line and headers; the body is yours, which is trivial for `Content-Length`. If you later
+need chunked request bodies or strict validation without hand-rolling them, swap the parse step in
+`src/http.c` for [llhttp](https://github.com/nodejs/llhttp) behind the same `ioma_request`.
+
+## Layout
 
 ```
-src/switch_x86_64.S   swap_ctx: push callee-saved, swap rsp, pop, ret
-src/coro.c            stacks with a guard page, the forged first frame, resume/yield
-src/uring.c           raw ring: setup, mmap, get_sqe, submit(+wait), batched CQ drain
-src/proactor.c        worker: buffer ring, listener, accept/recv/send, conn lifetime, the loop
-src/main.c            threads, signals, the HTTP handler
+include/http.h          the framework API: request, response, routing, run
+include/proactor.h      the runtime API: workers, await_recv / await_send
+include/coro.h uring.h  coroutine and raw io_uring interfaces
+src/http.c              parse, route, serialize, the connection serve loop, ioma_run
+src/router.c            the route table (exact method + path match)
+src/proactor.c          worker: buffer ring, listener, accept/recv/send, the proactor loop
+src/coro.c switch_*.S   stackful coroutines: the guard-page stack and the register swap
+src/uring.c             raw io_uring: setup, mmap, submit, batched CQ drain (no liburing)
+third_party/picohttpparser   vendored HTTP request parser (MIT)
 ```
 
-Rules a handler lives by: it runs on the worker that accepted it and never leaves; an await parks
-it and the loop resumes it; anything it needs across an await can sit on its stack (64 KiB, no
-growth); it returns to close the connection.
+## v1 limits
 
-Requires Linux 6.6+ (for `NO_SQARRAY`; it falls back on older kernels) and a recent
-`linux/io_uring.h`. Build: `gcc -O2`, no external dependencies. MIT licensed.
+Deliberately small, to grow: `Content-Length` bodies only (chunked answers 501); the request head
+plus body must fit a 16 KiB buffer (larger answers 413/431); routing is exact `(method, path)` with
+no path parameters yet; one static route table shared read-only across workers.
+
+Requires Linux 6.6+ (for `NO_SQARRAY`; it falls back on older kernels). Build with `gcc -O2`, no
+external dependencies. MIT licensed.

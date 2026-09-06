@@ -4,8 +4,9 @@
 Run it against the default build, and against a tiny-buffer build that starves the provided
 buffer group on every request and overflows the per-connection queue at the first stall:
 
-    gcc -O2 -g -Wall -Iinclude -pthread -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4 \\
-        src/*.c src/*.S -o ioma-tiny
+    gcc -O2 -g -Wall -Iinclude -Ithird_party/picohttpparser -pthread \\
+        -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4 \\
+        src/*.c src/*.S third_party/picohttpparser/picohttpparser.c -o ioma-tiny
 
 At shutdown the server must report "0 still open" on every worker.
 """
@@ -15,8 +16,8 @@ import sys
 import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
-REQ = b"GET / HTTP/1.1\r\nHost: x\r\n\r\n"
-OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok"
+REQ = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"
+OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nok"
 
 
 def connect(timeout=5):
@@ -65,7 +66,7 @@ results = []
 #    handlers hand buffers back. Every client still gets its answer.
 N = 64
 conns = [connect() for _ in range(N)]
-big = b"GET / HTTP/1.1\r\nX-A: " + b"a" * 3000 + b"\r\n\r\n"
+big = b"GET /health HTTP/1.1\r\nX-A: " + b"a" * 3000 + b"\r\n\r\n"
 for s in conns:
     s.send(big)
 good = all(recv_exact(s, len(OK)) == OK for s in conns)
@@ -96,7 +97,7 @@ results.append(check("server healthy after flood", healthy()))
 
 # 3. Reset in the middle of a request: the multishot recv completes with -ECONNRESET.
 s = connect()
-s.send(b"GET / HTTP/1.1\r\nHost:")
+s.send(b"GET /health HTTP/1.1\r\nHost:")
 s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
 s.close()
 results.append(check("RST mid-request", healthy()))
