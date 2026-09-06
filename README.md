@@ -82,7 +82,7 @@ Each accepted connection runs the serve loop on its own coroutine (`src/http.c`)
 1. `await_recv` accumulates bytes into a fixed request buffer (this suspends until data arrives).
 2. [picohttpparser](https://github.com/h2o/picohttpparser) parses the request line and headers,
    zero-copy, returning "incomplete" until the full head is in, so a split request just reads more.
-3. The body is read to its `Content-Length`.
+3. The body is read to its `Content-Length`, or a chunked body is decoded in place (both fragmentation-safe).
 4. The middleware chain runs, then the router matches `(method, path)` and calls your endpoint.
 5. The response head is built with memcpy of precomposed pieces plus a hand-rolled integer writer
    (no snprintf), and `await_send` flushes it (this suspends until io_uring reports the send done).
@@ -103,7 +103,7 @@ third_party/picohttpparser   vendored HTTP request parser (MIT)
 
 ## v1 limits
 
-Deliberately small, to grow: `Content-Length` bodies only (chunked answers 501); the request head
+Deliberately small, to grow: chunked and Content-Length request bodies (both fragmentation-safe); the request head
 plus body must fit a 16 KiB buffer (larger answers 413/431); routing is exact `(method, path)` with
 no path parameters yet; the route and middleware tables are set once and then read-only.
 

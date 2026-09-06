@@ -345,31 +345,66 @@ static void serve(conn_t *c)
         }
         req.n_headers = nphr;
 
-        /* body: Content-Length only for now */
+        /* Body: chunked (decoded in place) or Content-Length. leftover_* is what to carry to the
+         * next request on a kept-alive connection (pipelining). */
+        size_t leftover_off = 0, leftover_len = 0;
+
         size_t tel;
         const char *te = ioma_header_get(&req, "transfer-encoding", &tel);
+
         if (te && token_present_ci(te, tel, "chunked")) {
-            send_status(c, 501);
-            return;
+            /* Decode the chunked body in place at buf+header_len, reading more as needed. phr keeps
+             * state across calls and asks for more with -2, so this survives arbitrary TCP
+             * fragmentation - a split mid chunk-size hex included. */
+            struct phr_chunked_decoder dec;
+            memset(&dec, 0, sizeof dec);
+            dec.consume_trailer = 1;
+
+            size_t decoded = have - header_len;          /* raw bytes already here to decode */
+            ssize_t pret = phr_decode_chunked(&dec, buf + header_len, &decoded);
+            while (pret == -2) {
+                size_t off = header_len + decoded;       /* append after the decoded prefix */
+                if (off == IOMA_REQ_CAP) {
+                    send_status(c, 413);
+                    return;
+                }
+                int n = await_recv(c, buf + off, IOMA_REQ_CAP - off);
+                if (n <= 0) return;
+                size_t rsize = (size_t)n;
+                pret = phr_decode_chunked(&dec, buf + off, &rsize);
+                decoded += rsize;
+            }
+            if (pret < 0) {                              /* -1 malformed */
+                send_status(c, 400);
+                return;
+            }
+
+            req.body = buf + header_len;
+            req.body_len = decoded;
+            /* Bytes pipelined after a chunked body are not carried (the common clients don't do
+             * it); a kept-alive connection just reads the next request fresh. */
+        } else {
+            size_t cll;
+            const char *cl = ioma_header_get(&req, "content-length", &cll);
+            size_t content_length = cl ? parse_size(cl, cll) : 0;
+
+            size_t total = header_len + content_length;
+            if (total > IOMA_REQ_CAP) {
+                send_status(c, 413);
+                return;
+            }
+            while (have < total) {
+                int n = await_recv(c, buf + have, IOMA_REQ_CAP - have);
+                if (n <= 0) return;
+                have += (size_t)n;
+            }
+
+            req.body = buf + header_len;
+            req.body_len = content_length;
+            leftover_off = total;
+            leftover_len = have - total;
         }
 
-        size_t cll;
-        const char *cl = ioma_header_get(&req, "content-length", &cll);
-        size_t content_length = cl ? parse_size(cl, cll) : 0;
-
-        size_t total = header_len + content_length;
-        if (total > IOMA_REQ_CAP) {
-            send_status(c, 413);
-            return;
-        }
-        while (have < total) {
-            int n = await_recv(c, buf + have, IOMA_REQ_CAP - have);
-            if (n <= 0) return;
-            have += (size_t)n;
-        }
-
-        req.body = buf + header_len;
-        req.body_len = content_length;
         req.keep_alive = compute_keep_alive(&req);
         req.conn = c;
         req.scratch = scratch;
@@ -381,9 +416,8 @@ static void serve(conn_t *c)
         if (!req.keep_alive || res.close) return;
 
         /* pipelining: carry bytes that belong to the next request */
-        size_t leftover = have - total;
-        if (leftover) memmove(buf, buf + total, leftover);
-        have = leftover;
+        if (leftover_len) memmove(buf, buf + leftover_off, leftover_len);
+        have = leftover_len;
         last_len = 0;
     }
 }
