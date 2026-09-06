@@ -93,8 +93,15 @@ ioma_response ioma_bytes(int status, const char *content_type, const void *body,
     return r;
 }
 
-ioma_response ioma_text(int status, const char *s) { return ioma_bytes(status, "text/plain", s, strlen(s)); }
-ioma_response ioma_json(int status, const char *s) { return ioma_bytes(status, "application/json", s, strlen(s)); }
+ioma_response ioma_text(int status, const char *s)
+{
+    return ioma_bytes(status, "text/plain", s, strlen(s));
+}
+
+ioma_response ioma_json(int status, const char *s)
+{
+    return ioma_bytes(status, "application/json", s, strlen(s));
+}
 
 ioma_response ioma_textf(ioma_request *req, int status, const char *fmt, ...)
 {
@@ -169,10 +176,14 @@ static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
     char head[IOMA_HEAD_CAP];
     int hl = 0;
 
-#define APP(...) do {                                                                       \
-        int _n = snprintf(head + hl, sizeof head - (size_t)hl, __VA_ARGS__);                \
-        if (_n < 0 || (size_t)_n >= sizeof head - (size_t)hl) { send_status(c, 500); return -1; } \
-        hl += _n;                                                                           \
+#define APP(...)                                                             \
+    do {                                                                     \
+        int _n = snprintf(head + hl, sizeof head - (size_t)hl, __VA_ARGS__); \
+        if (_n < 0 || (size_t)_n >= sizeof head - (size_t)hl) {              \
+            send_status(c, 500);                                             \
+            return -1;                                                       \
+        }                                                                    \
+        hl += _n;                                                            \
     } while (0)
 
     APP("HTTP/1.1 %d %s\r\n", res->status, ioma_reason(res->status));
@@ -214,14 +225,20 @@ static void serve(conn_t *c)
                                      &minor, phr, &nphr, last_len);
 
         if (pret == -2) {                                  /* headers not complete yet */
-            if (have == IOMA_REQ_CAP) { send_status(c, 431); return; }
+            if (have == IOMA_REQ_CAP) {
+                send_status(c, 431);
+                return;
+            }
             last_len = have;
             int n = await_recv(c, buf + have, IOMA_REQ_CAP - have);
             if (n <= 0) return;                            /* peer closed or error */
             have += (size_t)n;
             continue;
         }
-        if (pret < 0) { send_status(c, 400); return; }     /* malformed */
+        if (pret < 0) {                                    /* malformed */
+            send_status(c, 400);
+            return;
+        }
 
         size_t header_len = (size_t)pret;
 
@@ -248,14 +265,20 @@ static void serve(conn_t *c)
         /* body: Content-Length only for now */
         size_t tel;
         const char *te = ioma_header_get(&req, "transfer-encoding", &tel);
-        if (te && token_present_ci(te, tel, "chunked")) { send_status(c, 501); return; }
+        if (te && token_present_ci(te, tel, "chunked")) {
+            send_status(c, 501);
+            return;
+        }
 
         size_t cll;
         const char *cl = ioma_header_get(&req, "content-length", &cll);
         size_t content_length = cl ? parse_size(cl, cll) : 0;
 
         size_t total = header_len + content_length;
-        if (total > IOMA_REQ_CAP) { send_status(c, 413); return; }
+        if (total > IOMA_REQ_CAP) {
+            send_status(c, 413);
+            return;
+        }
         while (have < total) {
             int n = await_recv(c, buf + have, IOMA_REQ_CAP - have);
             if (n <= 0) return;
@@ -286,8 +309,17 @@ static void serve(conn_t *c)
 
 static volatile sig_atomic_t g_stop;
 
-static void on_signal(int sig) { (void)sig; g_stop = 1; }
-static void *worker_thread(void *arg) { proactor_run(arg); return NULL; }
+static void on_signal(int sig)
+{
+    (void)sig;
+    g_stop = 1;
+}
+
+static void *worker_thread(void *arg)
+{
+    proactor_run(arg);
+    return NULL;
+}
 
 int ioma_run(int workers, int port)
 {
@@ -306,7 +338,10 @@ int ioma_run(int workers, int port)
 
     proactor_t *ws = calloc((size_t)workers, sizeof *ws);
     pthread_t  *th = calloc((size_t)workers, sizeof *th);
-    if (!ws || !th) { perror("calloc"); return 1; }
+    if (!ws || !th) {
+        perror("calloc");
+        return 1;
+    }
 
     for (int i = 0; i < workers; i++) {
         ws[i].id      = i;

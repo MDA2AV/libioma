@@ -59,11 +59,19 @@ int main(void)
 
     int workers = 4;
     const char *env = getenv("IOMA_WORKERS");
-    if (env) { int v = atoi(env); if (v > 0) workers = v; }
+    if (env) {
+        int v = atoi(env);
+        if (v > 0)
+            workers = v;
+    }
 
     int port = 8080;
     env = getenv("IOMA_PORT");
-    if (env) { int v = atoi(env); if (v > 0 && v < 65536) port = v; }
+    if (env) {
+        int v = atoi(env);
+        if (v > 0 && v < 65536)
+            port = v;
+    }
 
     return ioma_run(workers, port);
 }
