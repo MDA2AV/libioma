@@ -131,16 +131,36 @@ static void return_buf(proactor_t *p, uint16_t bid)
 
 /* ── connections ───────────────────────────────────────────────────────────────────────── */
 
+#ifndef CONN_POOL_MAX
+#define CONN_POOL_MAX 1024   /* recycled conn_t objects kept warm per worker */
+#endif
+
 static conn_t *conn_new(proactor_t *p, int fd)
 {
-    conn_t *c = calloc(1, sizeof *c);
-    if (!c) {
-        perror("calloc");
-        abort();
+    conn_t *c = p->conn_free;
+    if (c) {
+        p->conn_free = c->pool_next;
+        p->conn_free_count--;
+    } else {
+        c = calloc(1, sizeof *c);
+        if (!c) {
+            perror("calloc");
+            abort();
+        }
     }
-    c->fd   = fd;
-    c->p    = p;
-    c->refs = 2;                                 /* the handler coroutine and the multishot recv */
+
+    /* reset every mutable field so a recycled conn starts as clean as a fresh calloc */
+    c->fd        = fd;
+    c->p         = p;
+    c->waiter    = NULL;
+    c->rx_head   = 0;
+    c->rx_tail   = 0;
+    c->recv      = RECV_ARMED;                   /* arm_recv sets it again right after */
+    c->refs      = 2;                            /* the handler coroutine and the multishot recv */
+    c->closed    = false;
+    c->eof       = false;
+    c->err       = 0;
+    c->pool_next = NULL;
     p->live++;
     return c;
 }
@@ -148,8 +168,17 @@ static conn_t *conn_new(proactor_t *p, int fd)
 static void conn_unref(conn_t *c)
 {
     if (--c->refs == 0) {
-        c->p->live--;
-        free(c);
+        proactor_t *p = c->p;
+        p->live--;
+        /* Recycle for the next accept instead of freeing - the fd is closed and every buffer
+         * returned by now, so a pooled conn holds nothing. Past the cap, free it. */
+        if (p->conn_free_count < CONN_POOL_MAX) {
+            c->pool_next = p->conn_free;
+            p->conn_free = c;
+            p->conn_free_count++;
+        } else {
+            free(c);
+        }
     }
 }
 
@@ -541,4 +570,12 @@ void proactor_run(proactor_t *p)
     munmap(p->buf_ring, (size_t)BUF_COUNT * sizeof(struct io_uring_buf));
     munmap(p->slab, (size_t)BUF_COUNT * BUF_SIZE);
     free(p->starved);
+
+    /* free the recycled-object pools */
+    while (p->conn_free) {
+        conn_t *c = p->conn_free;
+        p->conn_free = c->pool_next;
+        free(c);
+    }
+    coro_pool_drain();
 }

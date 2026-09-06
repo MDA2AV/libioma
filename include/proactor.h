@@ -63,6 +63,7 @@ struct conn {
     bool            closed;               /* the handler returned; fd closed                   */
     bool            eof;                  /* recv ended: peer FIN, error, or queue overflow    */
     int             err;                  /* 0 on FIN, else the negative errno                 */
+    struct conn    *pool_next;            /* free-list link while recycled (not in use)        */
 };
 
 struct proactor {
@@ -85,6 +86,8 @@ struct proactor {
     coro_t                   *ready_head, *ready_tail;   /* spawned, not yet started           */
     unsigned                  live;       /* open connections                                  */
     uint64_t                  accepted;
+    conn_t                   *conn_free;         /* recycled conn_t objects, reused on accept   */
+    unsigned                  conn_free_count;
 };
 
 /* The worker thread's whole life: ring, buffers, listener, loop until *stop, teardown. */

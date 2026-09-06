@@ -36,3 +36,6 @@ void coro_yield(void);
 
 /* The running coroutine, NULL on the loop stack. */
 coro_t *coro_current(void);
+
+/* Unmap the per-thread free list of pooled stacks. Call at worker teardown, on the worker thread. */
+void coro_pool_drain(void);
