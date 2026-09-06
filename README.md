@@ -1,4 +1,4 @@
-# ioma
+# libioma
 
 A minimal HTTP/1.1 server **library** in C on a thread-per-core io_uring runtime. You write
 endpoints as plain functions, take a request, return a response, and the framework parses, routes,
