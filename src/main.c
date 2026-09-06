@@ -49,8 +49,20 @@ static ioma_response echo(ioma_request *req)
     return ioma_bytes(200, "application/octet-stream", req->body, req->body_len);
 }
 
+/* Middleware: runs the handler, then stamps a Server header on whatever it returned. A middleware
+ * that wanted to block the request (auth, rate limit) would return its own response here instead
+ * of calling ioma_next_run. */
+static ioma_response add_server(ioma_request *req, ioma_next *next)
+{
+    ioma_response res = ioma_next_run(req, next);
+    ioma_header_set(&res, "Server", "ioma");
+    return res;
+}
+
 int main(void)
 {
+    ioma_use(add_server);   /* global middleware, runs on every request */
+
     ioma_route("GET",  "/",       home);
     ioma_route("GET",  "/health", health);
     ioma_route("GET",  "/whoami", whoami);

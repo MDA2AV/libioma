@@ -22,16 +22,31 @@ static route_t      g_routes[IOMA_MAX_ROUTES];
 static int          g_nroutes;
 static ioma_handler g_fallback;
 
-void ioma_route(const char *method, const char *path, ioma_handler fn)
+#ifndef IOMA_MAX_MW
+#define IOMA_MAX_MW 16
+#endif
+
+/* The chain cursor handed to each middleware; ioma_next_run advances it. */
+struct ioma_next {
+    const ioma_mw *mws;
+    int            n;
+    int            i;
+    ioma_handler   handler;
+};
+
+static ioma_mw g_mws[IOMA_MAX_MW];
+static int     g_nmw;
+
+void ioma_route(const char *method, const char *path, const ioma_handler fn)
 {
     if (g_nroutes == IOMA_MAX_ROUTES) {
         fprintf(stderr, "ioma: route table full (%d), dropping %s %s\n", IOMA_MAX_ROUTES, method, path);
         return;
     }
-    g_routes[g_nroutes++] = (route_t){ method, path, fn };
+    g_routes[g_nroutes++] = (route_t){ .method = method, .path = path, .fn = fn };
 }
 
-void ioma_default(ioma_handler fn)
+void ioma_default(const ioma_handler fn)
 {
     g_fallback = fn;
 }
@@ -53,4 +68,37 @@ ioma_handler ioma__match(const ioma_request *req)
         }
     }
     return g_fallback ? g_fallback : not_found;
+}
+
+void ioma_use(ioma_mw mw)
+{
+    if (g_nmw == IOMA_MAX_MW) {
+        fprintf(stderr, "ioma: middleware chain full (%d), dropping one\n", IOMA_MAX_MW);
+        return;
+    }
+    g_mws[g_nmw++] = mw;
+}
+
+/* Invoke the next middleware in the chain, or the handler once the chain is exhausted. A
+ * middleware calls this to pass control on; not calling it short-circuits the request. */
+ioma_response ioma_next_run(ioma_request *req, ioma_next *next)
+{
+    if (next->i < next->n) {
+        ioma_mw   mw    = next->mws[next->i];
+        ioma_next inner = { next->mws, next->n, next->i + 1, next->handler };
+        return mw(req, &inner);
+    }
+    return next->handler(req);
+}
+
+/* Called by the serve loop: run the global middleware chain, then the matched handler. With no
+ * middleware registered this is a direct handler call - the chain costs nothing when unused. */
+ioma_response ioma__dispatch(ioma_request *req)
+{
+    ioma_handler h = ioma__match(req);
+    if (g_nmw == 0) {
+        return h(req);
+    }
+    ioma_next next = { g_mws, g_nmw, 0, h };
+    return ioma_next_run(req, &next);
 }

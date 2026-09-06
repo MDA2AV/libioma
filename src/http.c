@@ -30,7 +30,7 @@
 #define IOMA_HEAD_CAP  4096         /* serialized status line + headers (+ small inlined body)   */
 #endif
 
-ioma_handler ioma__match(const ioma_request *req);   /* router.c */
+ioma_response ioma__dispatch(ioma_request *req);   /* router.c */
 
 /* ── small parsers ─────────────────────────────────────────────────────────────────────── */
 
@@ -375,7 +375,7 @@ static void serve(conn_t *c)
         req.scratch = scratch;
         req.scratch_cap = IOMA_SCRATCH_CAP;
 
-        ioma_response res = ioma__match(&req)(&req);       /* route + run the endpoint */
+        ioma_response res = ioma__dispatch(&req);            /* middleware chain + endpoint */
         if (write_response(c, &req, &res) < 0) return;      /* suspends on the send */
 
         if (!req.keep_alive || res.close) return;

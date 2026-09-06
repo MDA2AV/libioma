@@ -60,6 +60,7 @@ results = []
 st, hd, body = get("/")
 results.append(check("GET / -> 200 'hello from ioma'", st == 200 and body == b"hello from ioma\n"))
 results.append(check("GET / content-type text/plain", hd.get("content-type") == "text/plain"))
+results.append(check("Server header added by middleware", hd.get("server") == "ioma"))
 
 st, hd, body = get("/health")
 results.append(check("GET /health -> 200 'ok'", st == 200 and body == b"ok"))

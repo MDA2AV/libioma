@@ -65,6 +65,13 @@ typedef struct ioma_response {
 
 typedef ioma_response (*ioma_handler)(ioma_request *req);
 
+/* Middleware runs around the handler (the onion model): do work before, call ioma_next_run to
+ * invoke the rest of the chain and then the endpoint, then do work after and return its response -
+ * or return a response WITHOUT calling ioma_next_run to short-circuit (auth failure, cache hit). */
+typedef struct ioma_next ioma_next;
+typedef ioma_response (*ioma_mw)(ioma_request *req, ioma_next *next);
+ioma_response ioma_next_run(ioma_request *req, ioma_next *next);
+
 /* ── response builders ─────────────────────────────────────────────────────────────────── */
 
 ioma_response ioma_text (int status, const char *s);                      /* text/plain, strlen(s)   */
@@ -91,6 +98,9 @@ bool ioma_slice_eq(const char *s, size_t n, const char *cstr);
 void ioma_route(const char *method, const char *path, ioma_handler fn);
 /* Fallback handler when nothing matches (default is a built-in 404). */
 void ioma_default(ioma_handler fn);
+
+/* Register global middleware; it runs on every request in the order added, wrapping the handler. */
+void ioma_use(ioma_mw mw);
 
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
