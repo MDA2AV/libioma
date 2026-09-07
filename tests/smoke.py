@@ -11,7 +11,16 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 
 
 def connect(timeout=3):
-    s = socket.create_connection(("127.0.0.1", PORT))
+    # back-to-back runs leave thousands of sockets in TIME-WAIT; an ephemeral-port hiccup is
+    # retried a few times instead of failing the suite
+    for attempt in range(20):
+        try:
+            s = socket.create_connection(("127.0.0.1", PORT))
+            break
+        except OSError:
+            if attempt == 19:
+                raise
+            time.sleep(0.05)
     s.settimeout(timeout)
     return s
 
@@ -191,10 +200,14 @@ results.append(check("200 concurrent connections answered", good))
 # a handler that ignores the body (here the 404 fallback) still leaves the connection in sync
 s = connect()
 s.send(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhelloGET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-st1, _, b1 = read_response(s)
-st2, _, b2 = read_response(s)
+raw = b""
+while True:                      # both replies may arrive in one packet: read to the close
+    chunk = s.recv(65536)
+    if not chunk: break
+    raw += chunk
 s.close()
-results.append(check("unread body drained, pipelined next request served", st1 == 404 and st2 == 200 and b2 == b"ok"))
+results.append(check("unread body drained, pipelined next request served",
+                     raw.startswith(b"HTTP/1.1 404") and raw.count(b"HTTP/1.1 200") == 1 and raw.endswith(b"ok")))
 
 # a 1 MB upload streamed through a 4 KB loop (the request buffer is 16 KB), then chunked
 hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
