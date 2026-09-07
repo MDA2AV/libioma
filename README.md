@@ -29,6 +29,8 @@ An endpoint is a function that receives a context holding the request and the re
 Everything in the request is a slice (pointer and length); headers, query parameters and route
 parameters are key/value arrays on it that you read directly, and the body is read only when you
 ask: `ioma_body` reads it whole, `ioma_body_read` streams it, and what you leave unread is drained.
+Everything arrives as slices, bytes with a length; `ioma_to_int`, `ioma_to_double`, `ioma_to_bool` and
+the `ioma_slice_*` helpers compare and convert them without copying, and fail instead of guessing.
 Set the status and content type on the response, add headers with `ioma_header`, and write the
 body into its slab with `ioma_write`, `ioma_text` or `ioma_printf`; the framework sends the head
 in front of it, in one send when it fits and streamed when it does not. Register endpoints with `ioma_route`

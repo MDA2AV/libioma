@@ -24,8 +24,8 @@ static void hello(ioma_ctx *c)
  * once the peer is gone. */
 static void repeat(ioma_ctx *c)
 {
-    long times = ioma_slice_int(c->req.route_params[0].value);
-    if (times < 1) {
+    int64_t times;
+    if (!ioma_to_i64(c->req.route_params[0].value, &times) || times < 1) {
         c->res.status = 400;
         ioma_text(c, "usage: POST a body to /repeat/<times>\n");
         return;
@@ -33,8 +33,8 @@ static void repeat(ioma_ctx *c)
     ioma_slice body = ioma_body(c);                  /* the whole body; over 16 KB it is refused */
     if (c->res.status != 200)
         return;                                      /* 413: the engine sends it, nothing to add */
-    for (long i = 1; i <= times; i++) {
-        if (ioma_printf(c, "%ld: %.*s\n", i, (int)body.len, body.p) < 0)
+    for (int64_t i = 1; i <= times; i++) {
+        if (ioma_printf(c, "%lld: %.*s\n", (long long)i, (int)body.len, body.p) < 0)
             return;
         if (i % 10 == 0 && ioma_flush(c) < 0)
             return;

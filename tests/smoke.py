@@ -82,6 +82,14 @@ results.append(check("  custom header X-Powered-By: ioma", hd.get("x-powered-by"
 # route parameter + percent-decoded query parameter
 st, hd, body = get("/users/42?fields=a%20b+c&x=1")
 results.append(check("GET /users/:id -> route param + decoded query param", st == 200 and body == b"user 42 fields=a b c\n"))
+st, hd, body = get("/users/42/posts/7")
+results.append(check("GET /users/:id/posts/:post -> two captures converted", st == 200 and body == b"post 7 of user 42\n"))
+st, hd, body = get("/users/4x/posts/7")
+results.append(check("GET /users/:id/posts/:post with a non-number -> 400", st == 400))
+st, hd, body = get("/convert?i=-42&d=2.5&b=YES")
+results.append(check("GET /convert -> typed conversions", st == 200 and body == b"i=-42\nd=2.5\nb=true\n"))
+st, hd, body = get("/convert?i=42&d=abc")
+results.append(check("GET /convert with a bad double -> 400", st == 400))
 st, hd, body = get("/users/42/extra")
 results.append(check("  extra segment does not match the pattern", st == 404))
 

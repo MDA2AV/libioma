@@ -26,3 +26,4 @@ compile_commands.json
 # IDE
 .idea/
 tests/ioma-test-server
+tests/ioma-unit

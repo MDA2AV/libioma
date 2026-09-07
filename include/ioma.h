@@ -23,6 +23,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifndef IOMA_MAX_HEADERS
 #define IOMA_MAX_HEADERS      64            /* request headers kept                          */
@@ -138,8 +139,29 @@ int  ioma_flush         (ioma_ctx *c);                 /* send what is in the sl
 
 /* ── slices ────────────────────────────────────────────────────────────────────────────── */
 
-bool   ioma_slice_eq (ioma_slice s, const char *cstr);           /* exact compare with a C string */
-long   ioma_slice_int(ioma_slice s);                             /* leading integer, else 0        */
+/* Everything a request carries is a slice: bytes with a length, not NUL-terminated, valid until
+ * the handler returns. These compare and convert one without copying it. */
+bool       ioma_slice_eq         (ioma_slice s, const char *cstr);     /* exact                     */
+bool       ioma_slice_eq_ci      (ioma_slice s, const char *cstr);     /* ASCII case-insensitive    */
+bool       ioma_slice_starts_with(ioma_slice s, const char *prefix);
+bool       ioma_slice_ends_with  (ioma_slice s, const char *suffix);
+ioma_slice ioma_slice_trim       (ioma_slice s);                       /* no leading/trailing space, tab, CR, LF */
+
+/* A NUL-terminated copy in buf, for whatever wants a C string. False when it did not fit: buf
+ * then holds what fit, still terminated (cap 0 writes nothing). */
+bool ioma_cstr(ioma_slice s, char *buf, size_t cap);
+
+/* Conversions. The whole slice must be the value - nothing around it, nothing after it - and a
+ * number that does not fit the type fails. On failure *out is left alone and false comes back,
+ * so "0" and "not a number" cannot be confused. Integers: an optional '-' and decimal digits.
+ * Doubles: also a fraction and an exponent ("2.5", ".5", "1e-3"); never inf, nan or hex; too
+ * large fails, too small rounds towards zero.
+ * Booleans: true/false, 1/0, yes/no, on/off, any case. */
+bool ioma_to_int   (ioma_slice s, int      *out);
+bool ioma_to_i64   (ioma_slice s, int64_t  *out);
+bool ioma_to_u64   (ioma_slice s, uint64_t *out);
+bool ioma_to_double(ioma_slice s, double   *out);
+bool ioma_to_bool  (ioma_slice s, bool     *out);
 
 /* Parse "k=v&k2=v2" - a query string, a form body - into out, up to cap pairs. Keys and values
  * that need it ('+', %XX) are decoded into arena and point there; the rest are views of s.

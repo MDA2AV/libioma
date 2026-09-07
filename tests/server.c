@@ -55,12 +55,40 @@ static void user(ioma_ctx *c)
     ioma_printf(c, "user %.*s fields=%.*s\n", (int)id.len, id.p, (int)fields.len, fields.p);
 }
 
-/* GET /users/:id/posts/:post - captures come in pattern order; ioma_slice_int reads a number. */
+/* GET /users/:id/posts/:post - captures come in pattern order; ioma_to_i64 reads a whole number
+ * or fails, so a non-numeric id is a 400 instead of a silent zero. */
 static void post(ioma_ctx *c)
 {
-    long user_id = ioma_slice_int(c->req.route_params[0].value);
-    long post_id = ioma_slice_int(c->req.route_params[1].value);
-    ioma_printf(c, "post %ld of user %ld\n", post_id, user_id);
+    int64_t user_id, post_id;
+    if (!ioma_to_i64(c->req.route_params[0].value, &user_id) ||
+        !ioma_to_i64(c->req.route_params[1].value, &post_id)) {
+        c->res.status = 400;
+        ioma_text(c, "ids must be integers\n");
+        return;
+    }
+    ioma_printf(c, "post %lld of user %lld\n", (long long)post_id, (long long)user_id);
+}
+
+/* GET /convert?i=..&d=..&b=.. - the typed conversions; a value that does not parse is a 400. */
+static void convert(ioma_ctx *c)
+{
+    for (size_t k = 0; k < c->req.n_params; k++) {
+        ioma_kv p = c->req.params[k];
+        int64_t i;
+        double  d;
+        bool    b;
+        if (ioma_slice_eq(p.key, "i") && ioma_to_i64(p.value, &i)) {
+            ioma_printf(c, "i=%lld\n", (long long)i);
+        } else if (ioma_slice_eq(p.key, "d") && ioma_to_double(p.value, &d)) {
+            ioma_printf(c, "d=%g\n", d);
+        } else if (ioma_slice_eq(p.key, "b") && ioma_to_bool(p.value, &b)) {
+            ioma_printf(c, "b=%s\n", b ? "true" : "false");
+        } else {
+            c->res.status = 400;
+            ioma_printf(c, "bad %.*s\n", (int)p.key.len, p.key.p);
+            return;
+        }
+    }
 }
 
 /* POST /echo - the body read whole (Content-Length or chunked, decoded) and sent back with the
@@ -98,12 +126,12 @@ static void greet(ioma_ctx *c)
  * each write that reaches the wire just suspends this handler until the send completes. */
 static void stream(ioma_ctx *c)
 {
-    long n = 1000;
+    int64_t n = 1000;
     for (size_t i = 0; i < c->req.n_params; i++)
         if (ioma_slice_eq(c->req.params[i].key, "n"))
-            n = ioma_slice_int(c->req.params[i].value);
-    for (long i = 1; i <= n; i++)
-        ioma_printf(c, "line %ld of %ld\n", i, n);
+            ioma_to_i64(c->req.params[i].value, &n);
+    for (int64_t i = 1; i <= n; i++)
+        ioma_printf(c, "line %lld of %lld\n", (long long)i, (long long)n);
 }
 
 /* POST /upload - a body of any size, streamed: each ioma_body_read hands over the next bytes
@@ -158,6 +186,7 @@ int main(void)
     ioma_route("GET",  "/whoami",                whoami);
     ioma_route("GET",  "/users/:id",             user);
     ioma_route("GET",  "/users/:id/posts/:post", post);
+    ioma_route("GET",  "/convert",               convert);
     ioma_route("POST", "/echo",                  echo);
     ioma_route("POST", "/greet",                 greet);
     ioma_route("GET",  "/stream",                stream);
