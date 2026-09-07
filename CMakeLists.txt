@@ -6,7 +6,32 @@
 # or, after `cmake --install`, via find_package:
 #     find_package(ioma REQUIRED)
 #     target_link_libraries(myapp PRIVATE ioma::ioma)
-cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL
+cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL, find_program(NO_CACHE)
+
+# The compiler: unless one is given (-DCMAKE_C_COMPILER, CC in the environment, a toolchain file),
+# the newest gcc on the PATH - a distro's `gcc` is often older than a `gcc-NN` installed beside it,
+# and the code is C23, which needs gcc 14. Decided before project(), where CMake fixes the
+# compiler; the make build does the same.
+if(NOT CMAKE_C_COMPILER AND NOT DEFINED ENV{CC} AND NOT CMAKE_TOOLCHAIN_FILE)
+    set(ioma_newest_gcc "")
+    set(ioma_newest_gcc_version 0)
+    foreach(candidate gcc gcc-14 gcc-15 gcc-16)
+        unset(candidate_path)
+        find_program(candidate_path ${candidate} NO_CACHE)
+        if(candidate_path)
+            execute_process(COMMAND ${candidate_path} -dumpfullversion
+                            OUTPUT_VARIABLE candidate_version OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+            if(candidate_version VERSION_GREATER ioma_newest_gcc_version)
+                set(ioma_newest_gcc ${candidate_path})
+                set(ioma_newest_gcc_version ${candidate_version})
+            endif()
+        endif()
+    endforeach()
+    if(ioma_newest_gcc)
+        set(CMAKE_C_COMPILER ${ioma_newest_gcc})
+    endif()
+endif()
+
 project(ioma VERSION 0.1.0 LANGUAGES C ASM)
 
 set(CMAKE_C_STANDARD 23)

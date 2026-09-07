@@ -9,7 +9,7 @@ runtime works is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 Run `make` in the repo root. It produces `libioma.a`, `libioma.so` and the demo server
 `ioma-hello`. CMake works too. Requirements: Linux 6.x, x86-64, gcc 14 or newer: the code is C23. On Ubuntu 24.04
-`sudo apt install gcc-14`; make picks the newest gcc it finds, CMake needs `-DCMAKE_C_COMPILER=gcc-14`.
+`sudo apt install gcc-14`; make and CMake pick the newest gcc they find unless told otherwise.
 
 ## Run
 
