@@ -6,6 +6,8 @@ serializes, and flushes. Under it, each connection is a stackful coroutine: the 
 and the io_uring completion resumes it, so the endpoint reads as linear code with no state machine.
 Modelled on [ioxide](https://github.com/MDA2AV/ioxide)'s TCP core; runtime design notes in
 [`DESIGN.md`](DESIGN.md).
+For how it works — the io_uring setup, the coroutines, the worker loop, the HTTP engine and
+the router — read [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ```c
 #include <ioma.h>
