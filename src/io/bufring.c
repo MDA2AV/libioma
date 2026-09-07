@@ -1,6 +1,6 @@
 /*
  * bufring.c - the provided buffer ring: a slab of BUF_COUNT x BUF_SIZE bytes that the kernel
- * picks from when a multishot recv delivers data. Returning a buffer is inline in internal.h.
+ * picks from when a multishot recv delivers data, and how buffers go back to it.
  */
 #define _GNU_SOURCE
 #include "io/internal.h"
@@ -37,7 +37,7 @@ void ioma__bufring_init(proactor_t *p)
     }
 
     /* Fill every slot, then publish the tail once. bufs[0] overlaps the ring header and the tail
-     * sits in bufs[0].resv, so writing only addr/len/buf_id leaves it untouched. */
+     * sits in bufs[0].resv, so writing only addr/len/bid leaves it untouched. */
     for (unsigned i = 0; i < BUF_COUNT; i++) {
         struct io_uring_buf *b = &p->buf_ring->bufs[i];
         b->addr = (uint64_t)(uintptr_t)(p->slab + (size_t)i * BUF_SIZE);

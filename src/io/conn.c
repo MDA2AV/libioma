@@ -146,7 +146,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 {
     bool     more    = flags & IORING_CQE_F_MORE;
     bool     has_buf = flags & IORING_CQE_F_BUFFER;
-    uint16_t buf_id     = (uint16_t)(flags >> IORING_CQE_BUFFER_SHIFT);
+    uint16_t buf_id  = (uint16_t)(flags >> IORING_CQE_BUFFER_SHIFT);
 
     trace("[w%d] recv fd=%d result=%d more=%d buf=%d buf_id=%u queued=%u state=%d closed=%d eof=%d\n",
           p->id, c->fd, result, more, has_buf, buf_id, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
@@ -176,7 +176,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (c->closed) {
-        ioma__return_buf(p, buf_id);                          /* the handler is gone; nobody will read item */
+        ioma__return_buf(p, buf_id);                          /* the handler is gone; nobody will read it */
     } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
         /* The handler is not draining. Rather than let one peer hoard the buffer group, end its
          * input: the next read sees -ENOBUFS. */

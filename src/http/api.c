@@ -115,10 +115,10 @@ size_t ioma_kv_parse(const char *text, size_t len, ioma_kv *out, size_t cap, cha
 /* Add a header to the reply. false once the head is on the wire, or when the table is full. */
 bool ioma_header(ioma_ctx *c, const char *name, const char *value)
 {
-    ioma_response *r = &c->res;
-    if (r->head_sent || r->n_headers == IOMA_MAX_RESP_HEADERS)
+    ioma_response *res = &c->res;
+    if (res->head_sent || res->n_headers == IOMA_MAX_RESP_HEADERS)
         return false;
-    r->headers[r->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
+    res->headers[res->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
     return true;
 }
 

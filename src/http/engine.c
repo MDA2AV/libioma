@@ -41,20 +41,19 @@ _Static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
 /* The engine's per-request state, behind ctx->priv. */
 struct serve_state {
     conn_t *conn;
-    char   *read_buf;                       /* the read buffer: the head, then body bytes         */
-    size_t  read_cap;
-    size_t  filled;                       /* bytes of this request received into read_buf so far   */
-    size_t  head_len;                 /* where the body starts in read_buf                      */
-    size_t  body_read;                   /* body bytes handed out so far                       */
-    bool    body_done;                  /* the whole body has been taken off the wire         */
-    bool    body_whole;                 /* ioma_body read it into read_buf                        */
-    int     body_err;                   /* 0, a status to answer (400, 413), or -1: peer gone */
-    size_t  next_req_off, next_req_len; /* the next pipelined request's bytes, in read_buf        */
+    char   *read_buf;                       /* the read buffer (IOMA_REQ_CAP): head, then body     */
+    size_t  filled;                         /* bytes of this request received into it so far      */
+    size_t  head_len;                       /* where the body starts                              */
+    size_t  body_read;                      /* body bytes handed out so far                       */
+    bool    body_done;                      /* the whole body has been taken off the wire         */
+    bool    body_whole;                     /* ioma_body read it into read_buf                    */
+    int     body_err;                       /* 0, a status to answer (400, 413), or -1: peer gone */
+    size_t  next_req_off, next_req_len;     /* the next pipelined request's bytes, in read_buf    */
     /* streaming a chunked body: raw bytes are staged after the head and decoded in place */
     struct phr_chunked_decoder decoder;
-    size_t  staged_raw;                    /* undecoded bytes at the stage                       */
-    size_t  decoded_pos, decoded_len;           /* decoded bytes at the stage, not yet handed out     */
-    size_t  parked_len;                   /* bytes past the terminator, parked at the end of read_buf */
+    size_t  staged_raw;                     /* undecoded bytes at the stage                       */
+    size_t  decoded_pos, decoded_len;       /* decoded bytes at the stage, not yet handed out     */
+    size_t  parked_len;                     /* bytes past the terminator, parked at the buffer end */
 };
 #define STATE(c) ((struct serve_state *)(c)->priv)
 
@@ -89,18 +88,18 @@ static size_t parse_size(const char *s, size_t n)
 }
 
 /* Is `tok` one of the comma-separated tokens in the header value [s, s+n)? Case-insensitive. */
-static bool token_present_ci(const char *s, size_t n, const char *tok)
+static bool token_present_ci(const char *value, size_t len, const char *tok)
 {
     size_t tok_len = strlen(tok);
-    size_t i = 0;
-    while (i < n) {
-        while (i < n && (s[i] == ' ' || s[i] == ',' || s[i] == '\t')) i++;
-        size_t j = i;
-        while (j < n && s[j] != ',') j++;
-        size_t e = j;
-        while (e > i && (s[e - 1] == ' ' || s[e - 1] == '\t')) e--;
-        if (eq_ci(s + i, e - i, tok, tok_len)) return true;
-        i = j + 1;
+    size_t at = 0;
+    while (at < len) {
+        while (at < len && (value[at] == ' ' || value[at] == ',' || value[at] == '\t')) at++;
+        size_t start = at;
+        while (at < len && value[at] != ',') at++;
+        size_t end = at;                                   /* trim trailing blanks */
+        while (end > start && (value[end - 1] == ' ' || value[end - 1] == '\t')) end--;
+        if (eq_ci(value + start, end - start, tok, tok_len)) return true;
+        at++;
     }
     return false;
 }
@@ -215,36 +214,22 @@ static struct cslice status_line(int code)
     }
 }
 
-/* A bodyless framework reply (parse errors, limits). Best effort; the caller then closes. */
+/* A bodyless framework reply (parse errors, limits): an error path, so plain snprintf. Best
+ * effort; the caller then closes. */
 static void send_status(conn_t *conn, int code)
 {
-    char  head[128];
-    char *p = head;
-
-    struct cslice line = status_line(code);
-    if (line.p) {
-        memcpy(p, line.p, (size_t)line.len);
-        p += line.len;
-    } else {
-        memcpy(p, "HTTP/1.1 ", 9);
-        p += 9;
-        p += put_uint(p, (size_t)code);
-        *p++ = ' ';
-        const char *r = ioma_reason(code);
-        size_t rl = strlen(r);
-        memcpy(p, r, rl);
-        p += rl;
-        memcpy(p, "\r\n", 2);
-        p += 2;
-    }
-    memcpy(p, "content-length: 0\r\nconnection: close\r\n\r\n", 40);
-    p += 40;
-
-    await_send(conn, head, (size_t)(p - head));
+    char head[128];
+    int  len = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+                        code, ioma_reason(code));
+    await_send(conn, head, (size_t)len);
 }
 
 /* How the body is delimited on the wire. */
-enum framing { FRAME_LENGTH, FRAME_CHUNKED, FRAME_UNTIL_CLOSE };
+enum framing {
+    FRAME_LENGTH,
+    FRAME_CHUNKED,
+    FRAME_UNTIL_CLOSE
+};
 
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
  * snprintf. Every field name goes out lower-cased: the engine's own are lowercase literals, a
@@ -326,26 +311,30 @@ static void frame_chunk(char *body, size_t len, char **start, size_t *total)
     *total = len + (size_t)digits + 4;
 }
 
+/* Mark the reply dead (the peer is gone, or a head that cannot be built) and fail the call. */
+static int fail(ioma_response *res)
+{
+    res->failed = true;
+    return -1;
+}
+
 /* Send the slab, with the head in front of it the first time. That first time decides the
  * framing: a final flush with the head unsent means the whole body is here (Content-Length, one
  * send); an early flush means the body outgrew the slab, so it streams - with the declared length
  * if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. */
 static int flush(ioma_ctx *c, bool final)
 {
-    ioma_response *res = &c->res;
+    ioma_response *res  = &c->res;
+    conn_t        *conn = STATE(c)->conn;
     if (res->failed)
         return -1;
-    char  *body  = res->buf;
-    size_t len   = res->len;
-    char  *start = body;
-    size_t total = len;
 
-    if (!res->head_sent) {
-        enum framing framing      = FRAME_LENGTH;
-        size_t       body_len = len;
-        if (res->has_length) {
-            body_len = res->content_length;
-        } else if (!final) {
+    char head[IOMA_HEAD_CAP];
+    int  head_len = 0;
+    if (!res->head_sent) {                                /* the first send: decide the framing */
+        enum framing framing  = FRAME_LENGTH;
+        size_t       body_len = res->has_length ? res->content_length : res->len;
+        if (!res->has_length && !final) {
             if (c->req.minor_version >= 1) {
                 framing = FRAME_CHUNKED;
                 res->chunked = true;
@@ -354,33 +343,31 @@ static int flush(ioma_ctx *c, bool final)
                 res->close = true;
             }
         }
+        head_len = build_head(c, head, sizeof head, framing, body_len);
+        if (head_len < 0)
+            return fail(res);
         res->head_sent = true;
+    }
 
-        char head[IOMA_HEAD_CAP];
-        int  head_len = build_head(c, head, sizeof head, framing, body_len);
-        if (head_len < 0) {
-            res->failed = true;
-            return -1;
-        }
-        if (res->chunked && len)
-            frame_chunk(body, len, &start, &total);
-        if ((size_t)head_len <= (size_t)(start - (res->buf - IOMA_LEAD))) {   /* the head fits in the lead */
+    char  *start = res->buf;                              /* the span to send */
+    size_t total = res->len;
+    if (res->chunked && res->len)
+        frame_chunk(res->buf, res->len, &start, &total);
+
+    if (head_len) {
+        size_t lead_room = (size_t)(start - (res->buf - IOMA_LEAD));   /* free bytes in front of the span */
+        if ((size_t)head_len <= lead_room) {              /* prepend: one contiguous send */
             start -= head_len;
             memcpy(start, head, (size_t)head_len);
             total += (size_t)head_len;
-        } else if (await_send(STATE(c)->conn, head, (size_t)head_len) < 0) {
-            res->failed = true;
-            return -1;
+        } else if (await_send(conn, head, (size_t)head_len) < 0) {
+            return fail(res);
         }
-    } else if (res->chunked && len) {
-        frame_chunk(body, len, &start, &total);
     }
 
     res->len = 0;
-    if (total && await_send(STATE(c)->conn, start, total) < 0) {
-        res->failed = true;
-        return -1;
-    }
+    if (total && await_send(conn, start, total) < 0)
+        return fail(res);
     return 0;
 }
 
@@ -422,40 +409,45 @@ int ioma_write(ioma_ctx *c, const void *data, size_t len)
     return 0;
 }
 
-/* Format straight into the slab. If it does not fit the room left, flush and format again;
- * something bigger than the whole slab is formatted on the heap and written in pieces. */
+/* Something bigger than the whole slab: format it on the heap and write it in pieces. */
+static int write_formatted_heap(ioma_ctx *c, const char *fmt, va_list ap, size_t len)
+{
+    char *tmp = malloc(len + 1);
+    if (!tmp)
+        return -1;
+    vsnprintf(tmp, len + 1, fmt, ap);
+    int rc = ioma_write(c, tmp, len);
+    free(tmp);
+    return rc;
+}
+
+/* Format straight into the slab. If it does not fit the room left, flush and format again into
+ * the empty slab; if it would not fit even that, it goes through the heap. */
 int ioma_printf(ioma_ctx *c, const char *fmt, ...)
 {
     ioma_response *res = &c->res;
     if (res->failed)
         return -1;
-    for (int attempt = 0; attempt < 2; attempt++) {
-        size_t  room = res->cap - res->len;
-        va_list ap;
-        va_start(ap, fmt);
-        int n = vsnprintf(res->buf + res->len, room, fmt, ap);
-        va_end(ap);
-        if (n < 0)
-            return -1;
-        if ((size_t)n < room) {
-            res->len += (size_t)n;
-            return 0;
-        }
-        if ((size_t)n >= res->cap) {                            /* larger than the slab itself */
-            char *tmp = malloc((size_t)n + 1);
-            if (!tmp)
-                return -1;
-            va_start(ap, fmt);
-            vsnprintf(tmp, (size_t)n + 1, fmt, ap);
-            va_end(ap);
-            int rc = ioma_write(c, tmp, (size_t)n);
-            free(tmp);
-            return rc;
-        }
-        if (flush(c, false) < 0)
-            return -1;
-    }
-    return -1;
+    va_list ap, again;
+    va_start(ap, fmt);
+    va_copy(again, ap);
+    size_t room = res->cap - res->len;
+    int    n    = vsnprintf(res->buf + res->len, room, fmt, ap);
+    va_end(ap);
+
+    int rc = 0;
+    if (n < 0)
+        rc = -1;
+    else if ((size_t)n < room)                            /* it fit */
+        res->len += (size_t)n;
+    else if ((size_t)n >= res->cap)                       /* bigger than the slab itself */
+        rc = write_formatted_heap(c, fmt, again, (size_t)n);
+    else if (flush(c, false) < 0)                         /* make room, then it fits */
+        rc = -1;
+    else
+        res->len += (size_t)vsnprintf(res->buf, res->cap, fmt, again);
+    va_end(again);
+    return rc;
 }
 
 /* Send what is in the slab now. Starts streaming: the head goes out with it. */
@@ -489,11 +481,11 @@ ioma_slice ioma_body(ioma_ctx *c)
         ssize_t rc      = phr_decode_chunked(&decoder, body, &decoded);
         while (rc == -2) {                               /* needs more: append after the decoded prefix */
             size_t off = state->head_len + decoded;
-            if (off == state->read_cap) {
+            if (off == IOMA_REQ_CAP) {
                 state->body_err = 413;
                 return none;
             }
-            int n = await_recv(state->conn, state->read_buf + off, state->read_cap - off);
+            int n = await_recv(state->conn, state->read_buf + off, IOMA_REQ_CAP - off);
             if (n <= 0) {
                 state->body_err = -1;
                 return none;
@@ -511,12 +503,12 @@ ioma_slice ioma_body(ioma_ctx *c)
         state->next_req_len = (size_t)rc;
     } else {
         size_t total = state->head_len + req->content_length;
-        if (total > state->read_cap) {
+        if (total > IOMA_REQ_CAP) {
             state->body_err = 413;
             return none;
         }
         while (state->filled < total) {
-            int n = await_recv(state->conn, state->read_buf + state->filled, state->read_cap - state->filled);
+            int n = await_recv(state->conn, state->read_buf + state->filled, IOMA_REQ_CAP - state->filled);
             if (n <= 0) {
                 state->body_err = -1;
                 return none;
@@ -542,27 +534,24 @@ static int body_read_fixed(ioma_ctx *c, struct serve_state *state, char *dst, si
         state->body_done = true;
         return 0;
     }
-    size_t buffered = state->filled - state->head_len;
+    size_t n        = remaining < cap ? remaining : cap;
+    size_t buffered = state->filled - state->head_len;    /* body bytes that came with the head */
     if (state->body_read < buffered) {
-        size_t n = buffered - state->body_read;
-        if (n > remaining) n = remaining;
-        if (n > cap)       n = cap;
+        if (n > buffered - state->body_read)
+            n = buffered - state->body_read;
         memcpy(dst, state->read_buf + state->head_len + state->body_read, n);
-        state->body_read += n;
-        if (state->body_read == c->req.content_length)
-            state->body_done = true;
-        return (int)n;
+    } else {
+        int got = await_recv(state->conn, dst, n);
+        if (got <= 0) {
+            state->body_err = -1;
+            return -1;
+        }
+        n = (size_t)got;
     }
-    size_t n = remaining < cap ? remaining : cap;
-    int r = await_recv(state->conn, dst, n);
-    if (r <= 0) {
-        state->body_err = -1;
-        return -1;
-    }
-    state->body_read += (size_t)r;
+    state->body_read += n;
     if (state->body_read == c->req.content_length)
         state->body_done = true;
-    return r;
+    return (int)n;
 }
 
 /* Stream a chunked body. Raw bytes are staged after the head and decoded in place; decoded bytes
@@ -571,7 +560,7 @@ static int body_read_fixed(ioma_ctx *c, struct serve_state *state, char *dst, si
 static int body_read_chunked(struct serve_state *state, char *dst, size_t cap)
 {
     char  *stage = state->read_buf + state->head_len;
-    size_t stage_cap = state->read_cap - state->head_len;
+    size_t stage_cap = IOMA_REQ_CAP - state->head_len;
     for (;;) {
         if (state->decoded_len) {
             size_t n = state->decoded_len < cap ? state->decoded_len : cap;
@@ -584,12 +573,12 @@ static int body_read_chunked(struct serve_state *state, char *dst, size_t cap)
         if (state->body_done)
             return 0;
         if (state->staged_raw == 0) {
-            int r = await_recv(state->conn, stage, stage_cap - 2);   /* keep the parked tail's room */
-            if (r <= 0) {
+            int got = await_recv(state->conn, stage, stage_cap);
+            if (got <= 0) {
                 state->body_err = -1;
                 return -1;
             }
-            state->staged_raw = (size_t)r;
+            state->staged_raw = (size_t)got;
         }
         size_t  decoded = state->staged_raw;
         ssize_t rc      = phr_decode_chunked(&state->decoder, stage, &decoded);
@@ -602,9 +591,11 @@ static int body_read_chunked(struct serve_state *state, char *dst, size_t cap)
         }
         if (rc >= 0) {
             state->body_done = true;
-            if (rc > 0) {                                   /* the next request's bytes */
+            if (rc > 0) {                                   /* the next request's bytes: park them at the
+                                                             * buffer's end (the stage never reaches it while
+                                                             * decoded bytes are still pending) */
                 state->parked_len = (size_t)rc;
-                memmove(state->read_buf + state->read_cap - state->parked_len, stage + decoded, state->parked_len);
+                memmove(state->read_buf + IOMA_REQ_CAP - state->parked_len, stage + decoded, state->parked_len);
             }
         }
     }
@@ -669,7 +660,7 @@ static long read_head(conn_t *conn, char *read_buf, size_t *filled, ioma_request
                                            already_parsed);
             if (parsed >= 0)
                 return parsed;
-            if (parsed != -2) {                       /* malformed */
+            if (parsed == -1) {                       /* malformed */
                 send_status(conn, 400);
                 return -1;
             }
@@ -720,7 +711,6 @@ static void init_body_state(struct serve_state *state, conn_t *conn, char *read_
     memset(state, 0, sizeof *state);
     state->conn     = conn;
     state->read_buf = read_buf;
-    state->read_cap = IOMA_REQ_CAP;
     state->filled   = filled;
     state->head_len = head_len;
     if (req->chunked) {
@@ -739,14 +729,18 @@ static void init_body_state(struct serve_state *state, conn_t *conn, char *read_
 /* A response with its defaults and an empty slab. */
 static void init_response(ioma_response *res, char *slab)
 {
-    memset(res, 0, offsetof(ioma_response, buf));
-    res->status       = 200;
-    res->content_type = (ioma_slice){ "text/plain", 10 };
-    res->buf          = slab + IOMA_LEAD;
-    res->cap          = IOMA_OUT_CAP;
-    res->len          = 0;
-    res->chunked      = false;
-    res->failed       = false;
+    res->status         = 200;
+    res->content_type   = (ioma_slice){ "text/plain", 10 };
+    res->n_headers      = 0;                          /* headers[] is only read up to here */
+    res->close          = false;
+    res->head_sent      = false;
+    res->content_length = 0;
+    res->has_length     = false;
+    res->buf            = slab + IOMA_LEAD;
+    res->cap            = IOMA_OUT_CAP;
+    res->len            = 0;
+    res->chunked        = false;
+    res->failed         = false;
 }
 
 /* After a kept-alive reply: move the bytes that belong to the next request to the front of the

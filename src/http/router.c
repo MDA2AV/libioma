@@ -56,21 +56,22 @@ static void compile_pattern(route_t *route)
     route->nseg = 0;
     if (!memchr(route->path, ':', route->path_len))
         return;
-    const char *p = route->path, *end = route->path + route->path_len;
-    while (p < end) {
-        while (p < end && *p == '/') p++;
-        if (p == end) break;
-        const char *e = memchr(p, '/', (size_t)(end - p));
-        if (!e) e = end;
+    const char *at = route->path, *end = route->path + route->path_len;
+    while (at < end) {
+        while (at < end && *at == '/') at++;
+        if (at == end) break;
+        const char *seg_end = memchr(at, '/', (size_t)(end - at));
+        if (!seg_end) seg_end = end;
         if (route->nseg == IOMA_MAX_SEGMENTS) {
             fprintf(stderr, "ioma: pattern %s has more than %d segments\n", route->path, IOMA_MAX_SEGMENTS);
             route->nseg = 0;
             return;
         }
         struct seg *segment = &route->seg[route->nseg++];
-        segment->capture = *p == ':';
-        segment->s = segment->capture ? (ioma_slice){ p + 1, (size_t)(e - p - 1) } : (ioma_slice){ p, (size_t)(e - p) };
-        p = e;
+        segment->capture = *at == ':';
+        segment->s = segment->capture ? (ioma_slice){ at + 1, (size_t)(seg_end - at - 1) }
+                                      : (ioma_slice){ at, (size_t)(seg_end - at) };
+        at = seg_end;
     }
 }
 
@@ -104,28 +105,40 @@ static void not_found(ioma_ctx *c)
  * req->route_params. A trailing slash is tolerated; extra or missing segments are not. */
 static bool match_pattern(const route_t *route, ioma_request *req)
 {
-    const char *p = req->path.p, *end = p + req->path.len;
+    const char *at = req->path.p, *end = at + req->path.len;
     size_t captured = 0;
     for (int i = 0; i < route->nseg; i++) {
-        while (p < end && *p == '/') p++;
-        if (p == end)
+        while (at < end && *at == '/') at++;
+        if (at == end)
             return false;                                    /* fewer segments than the pattern */
-        const char *e = memchr(p, '/', (size_t)(end - p));
-        if (!e) e = end;
-        ioma_slice seg = { p, (size_t)(e - p) };
+        const char *seg_end = memchr(at, '/', (size_t)(end - at));
+        if (!seg_end) seg_end = end;
+        ioma_slice seg = { at, (size_t)(seg_end - at) };
         if (route->seg[i].capture) {
             if (captured < IOMA_MAX_ROUTE_PARAMS)
                 req->route_params[captured++] = (ioma_kv){ route->seg[i].s, seg };
         } else if (seg.len != route->seg[i].s.len || memcmp(seg.p, route->seg[i].s.p, seg.len) != 0) {
             return false;
         }
-        p = e;
+        at = seg_end;
     }
-    while (p < end && *p == '/') p++;
-    if (p != end)
+    while (at < end && *at == '/') at++;
+    if (at != end)
         return false;                                        /* more segments than the pattern */
     req->n_route_params = captured;
     return true;
+}
+
+/* Does the request's method match the route's? Lengths first, memcmp only on a hit. */
+static bool same_method(const route_t *route, const ioma_request *req)
+{
+    return req->method.len == route->method_len && memcmp(req->method.p, route->method, route->method_len) == 0;
+}
+
+/* Does the request's path equal the route's exact path? */
+static bool same_path(const route_t *route, const ioma_request *req)
+{
+    return req->path.len == route->path_len && memcmp(req->path.p, route->path, route->path_len) == 0;
 }
 
 /* Find the route for a request and fill its route parameters. Exact routes first, so a static
@@ -135,15 +148,12 @@ static const route_t *match(ioma_request *req)
     req->n_route_params = 0;
     for (int i = 0; i < g_nroutes; i++) {
         const route_t *route = &g_routes[i];
-        if (route->nseg == 0 && req->path.len == route->path_len && req->method.len == route->method_len &&
-            memcmp(req->path.p, route->path, route->path_len) == 0 &&
-            memcmp(req->method.p, route->method, route->method_len) == 0)
+        if (route->nseg == 0 && same_path(route, req) && same_method(route, req))
             return route;
     }
     for (int i = 0; i < g_nroutes; i++) {
         const route_t *route = &g_routes[i];
-        if (route->nseg && req->method.len == route->method_len &&
-            memcmp(req->method.p, route->method, route->method_len) == 0 && match_pattern(route, req))
+        if (route->nseg && same_method(route, req) && match_pattern(route, req))
             return route;
     }
     return &g_fallback_route;
