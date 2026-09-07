@@ -690,7 +690,7 @@ void ioma__serve(conn_t *conn)
         rq->n_params = rq->query.len
             ? ioma_kv_parse(rq->query.p, rq->query.len, rq->params, IOMA_MAX_PARAMS, params, sizeof params)
             : 0;
-        rq->n_route = 0;                                 /* the router fills these */
+        rq->n_route_params = 0;                                 /* the router fills these */
 
         struct hdrs h = pick_headers(rq);
         rq->chunked        = h.transfer_enc.p && token_present_ci(h.transfer_enc.p, h.transfer_enc.len, "chunked");
