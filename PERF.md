@@ -39,8 +39,15 @@ Build the library and your program with `-fprofile-generate -fprofile-update=ato
 representative load (keep-alive GETs, some POSTs with Content-Length and chunked bodies, some
 connection churn), stop the server with SIGINT so it exits cleanly and writes the `.gcda` files
 next to the objects, then delete the objects and rebuild with `-fprofile-use -fprofile-correction`.
-The objects must be compiled to the same paths in both phases. The HttpArena entry's Dockerfile
-does exactly this.
+The objects must be compiled to the same paths in both phases.
+
+It cannot be done inside `docker build`: a RUN step runs under Docker's default seccomp profile,
+which blocks the io_uring syscalls, so the instrumented server never starts. To ship a PGO build
+in a container, train once outside the build (a `docker run --security-opt seccomp=unconfined` of
+the instrumented image), copy the `.gcda` files out, commit them next to the Dockerfile and COPY
+them into place before the profile-use build. The profile is tied to the library commit and the
+image's gcc version; with `-Wno-error=coverage-mismatch` a stale profile degrades to plain -O3 for
+the changed functions instead of failing the build.
 
 ## Where the time goes
 
