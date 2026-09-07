@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Functional checks for the ioma HTTP layer: python3 tests/smoke.py [port].
 
-Assumes the demo routes in src/main.c: GET /, GET /health, GET /whoami, POST /echo.
+Talks to tests/server.c (make check builds and runs it): GET /, /health, /whoami, /users/:id, POST /echo, ...
 """
 import socket
 import sys

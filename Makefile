@@ -31,8 +31,9 @@ OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/switch_x86_64.o obj/pic
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/switch_x86_64.o obj/pic/picohttpparser.o
 
 EXAMPLES := ioma-hello
+TESTSRV  := tests/ioma-test-server
 
-.PHONY: all lib examples clean install uninstall
+.PHONY: all lib examples check clean install uninstall
 all: lib examples
 
 lib: libioma.a libioma.so
@@ -68,6 +69,17 @@ examples: $(EXAMPLES)
 ioma-hello: playground/hello/main.c libioma.a
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioma.a -o $@ $(PTHREAD)
 
+# --- tests: the fixture server, then both suites against it ---
+$(TESTSRV): tests/server.c libioma.a
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioma.a -o $@ $(PTHREAD)
+
+CHECK_PORT ?= 8099
+check: $(TESTSRV)
+	@IOMA_WORKERS=2 IOMA_PORT=$(CHECK_PORT) ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
+	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(CHECK_PORT) " && break; sleep 0.1; done; \
+	 python3 tests/smoke.py $(CHECK_PORT); s=$$?; python3 tests/stress.py $(CHECK_PORT); t=$$?; \
+	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t))
+
 # --- pkg-config ---
 ioma.pc: ioma.pc.in
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
@@ -89,4 +101,4 @@ uninstall:
 	rm -f $(DESTDIR)$(PCDIR)/ioma.pc
 
 clean:
-	rm -rf obj libioma.a libioma.so $(EXAMPLES) ioma.pc
+	rm -rf obj libioma.a libioma.so $(EXAMPLES) $(TESTSRV) ioma.pc

@@ -12,12 +12,9 @@ Run `make` in the repo root. It produces `libioma.a`, `libioma.so` and the demo 
 
 ## Run
 
-`./ioma-hello` serves on port 8080 with one worker per core; `IOMA_WORKERS` and `IOMA_PORT`
-override that. Ctrl-C stops it. Its handlers cover the whole request model: `/whoami` dumps the
-request, `/users/:id` and `/users/:id/posts/:post` read route captures and a query parameter,
-`POST /echo` reflects the body with its content type, `POST /greet` parses a form body, `/stream`
-writes far more than the slab holds and streams out, and `POST /upload` streams a body of any size
-in.
+`./ioma-hello` is the smallest server: one route, `GET /hello/:name`, one worker per core on
+port 8080. Ctrl-C stops it. A server exercising every feature of the request and response model
+is `tests/server.c`, the fixture the test suites run against.
 
 ## Use it in your project
 
@@ -40,5 +37,6 @@ with `ioma_default`, then call `ioma_run` with a worker count (zero means one pe
 
 ## Tests and limits
 
-`tests/smoke.py` and `tests/stress.py` run against a live server, given its port. HTTP/1.1 only,
-no TLS, requests up to 16 KB, Content-Length or chunked bodies. MIT licensed.
+`make check` builds the fixture server, runs `tests/smoke.py` and `tests/stress.py` against it
+and stops it. HTTP/1.1 only, no TLS, a request head and a body read whole up to 16 KB (streamed
+bodies have no limit). MIT licensed.
