@@ -13,10 +13,10 @@ Run `make` in the repo root. It produces `libioma.a`, `libioma.so` and the demo 
 ## Run
 
 `./ioma-hello` serves on port 8080 with one worker per core; `IOMA_WORKERS` and `IOMA_PORT`
-override that. Ctrl-C stops it. Its handlers cover the whole request model: `/whoami` dumps the request, `/users/:id` and
-`/users/:id/posts/:post` read route captures and a query parameter, `POST /echo` reflects the body
-with its content type, `POST /greet` parses a form body, and `/stream` writes far more than the
-buffer holds and streams.
+override that. Ctrl-C stops it. Its handlers cover the whole request model: `/whoami` dumps the
+request, `/users/:id` and `/users/:id/posts/:post` read route captures and a query parameter,
+`POST /echo` reflects the body with its content type, `POST /greet` parses a form body, and
+`/stream` writes far more than the buffer holds and streams.
 
 ## Use it in your project
 
