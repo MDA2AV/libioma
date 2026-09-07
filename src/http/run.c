@@ -71,6 +71,8 @@ int ioma_run(int workers, int port)
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
+    ioma__router_build();                          /* the routes, resolved once, shared read-only */
+
     proactor_t *ws = calloc((size_t)workers, sizeof *ws);
     pthread_t  *th = calloc((size_t)workers, sizeof *th);
     if (!ws || !th) {

@@ -699,7 +699,7 @@ int ioma_body_read_until(ioma_ctx *ctx, void *dst, size_t n)
 
 /* The next chunk of a chunked body, whole, into dst: the rest of the current one when a read
  * stopped inside it, else the next. */
-int ioma_body_read_chunk(ioma_ctx *ctx, void *dst, size_t cap)
+int ioma_body_read_next_chunk(ioma_ctx *ctx, void *dst, size_t cap)
 {
     struct serve_state *state = STATE(ctx);
     if (state->body_err || !ctx->req.chunked)

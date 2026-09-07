@@ -28,15 +28,16 @@ about two percent.
 An endpoint is a function that receives a context holding the request and the response.
 Everything in the request is a slice (pointer and length); headers, query parameters and route
 parameters are key/value arrays on it that you read directly, and the body is read only when you
-ask: `ioma_body_all` reads it whole, `ioma_body_read_until` streams it, `ioma_body_read_chunk` hands over
+ask: `ioma_body_all` reads it whole, `ioma_body_read_until` streams it, `ioma_body_read_next_chunk` hands over
 one chunk at a time, and what you leave unread is drained.
 Everything arrives as slices, bytes with a length; `ioma_to_int`, `ioma_to_double`, `ioma_to_bool` and
 the `ioma_slice_*` helpers compare and convert them without copying, and fail instead of guessing.
 Set the status and content type on the response, add headers with `ioma_header`, and write the
 body into its slab with `ioma_write`, `ioma_text` or `ioma_printf`; the framework sends the head
-in front of it, in one send when it fits and streamed when it does not. Register endpoints with `ioma_route`
-(an exact path, or a pattern such as `/users/:id`), optional middleware with `ioma_use`, a fallback
-with `ioma_default`, then call `ioma_run` with a worker count (zero means one per core) and a port.
+in front of it, in one send when it fits and streamed when it does not. Endpoints live in groups: a group is a path prefix plus middleware, groups nest, and `ioma_get(api, "/users/:id", user)`
+under a group at `/api` answers at `/api/users/:id`, wrapped by the middleware of every group above it; the root
+is `NULL`, with `ioma_use` for middleware on everything. `ioma_run` resolves it all once into a segment tree and flat
+chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port.
 `playground/hello/main.c` is a complete example.
 
 ## Tests and limits

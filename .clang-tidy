@@ -32,7 +32,8 @@ Checks: >
   -readability-else-after-return,
   -readability-implicit-bool-conversion,
   -readability-avoid-nested-conditional-operator,
-  -readability-math-missing-parentheses
+  -readability-math-missing-parentheses,
+  -misc-no-recursion
 CheckOptions:
   bugprone-signed-bitwise.IgnorePositiveIntegerLiterals: true
 HeaderFilterRegex: '(include|src)/.*'

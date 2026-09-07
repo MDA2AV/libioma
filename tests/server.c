@@ -163,7 +163,7 @@ static void chunks(ioma_ctx *ctx)
     if (first > 0 && first <= (int64_t)sizeof buf)
         ioma_printf(ctx, "first=%d\n", ioma_body_read_until(ctx, buf, (size_t)first));
     int n;
-    while ((n = ioma_body_read_chunk(ctx, buf, sizeof buf)) > 0)
+    while ((n = ioma_body_read_next_chunk(ctx, buf, sizeof buf)) > 0)
         ioma_printf(ctx, "%d:%.*s\n", n, n, buf);
     if (n == 0) {
         ioma_text(ctx, "end\n");
@@ -171,6 +171,56 @@ static void chunks(ioma_ctx *ctx)
         ctx->res.status = 400;
         ioma_text(ctx, "not chunked\n");
     }
+}
+
+/* GET /users/new - a static segment beside the :id capture; the static one wins for GET. */
+static void new_user_form(ioma_ctx *ctx)
+{
+    ioma_text(ctx, "new user form\n");
+}
+
+/* POST /users/:id - and POST /users/new lands here, since the static segment has no POST. */
+static void update_user(ioma_ctx *ctx)
+{
+    ioma_slice id = ctx->req.route_params[0].value;
+    ioma_printf(ctx, "updated %.*s\n", (int)id.len, id.p);
+}
+
+/* GET /api/ping and GET /api/admin/stats - endpoints in groups; the prefixes come from the groups. */
+static void ping(ioma_ctx *ctx)
+{
+    ioma_text(ctx, "pong\n");
+}
+static void stats(ioma_ctx *ctx)
+{
+    ioma_text(ctx, "stats\n");
+}
+
+/* Middleware on the /api group: every reply below it carries the header. */
+static void api_header(ioma_ctx *ctx, ioma_next *next)
+{
+    ioma_header(ctx, "x-api", "v1");
+    ioma_next_run(ctx, next);
+}
+
+/* Middleware on /api/admin: the token, or a 401 without running what is below. */
+static void require_token(ioma_ctx *ctx, ioma_next *next)
+{
+    for (size_t i = 0; i < ctx->req.n_headers; i++) {
+        if (ioma_slice_eq(ctx->req.headers[i].key, "x-token") && ioma_slice_eq(ctx->req.headers[i].value, "secret")) {
+            ioma_next_run(ctx, next);
+            return;
+        }
+    }
+    ctx->res.status = 401;
+    ioma_text(ctx, "token required\n");
+}
+
+/* Middleware on one endpoint only. */
+static void endpoint_header(ioma_ctx *ctx, ioma_next *next)
+{
+    ioma_header(ctx, "x-endpoint", "stats");
+    ioma_next_run(ctx, next);
 }
 
 /* Middleware: stamps a Server header, then runs the rest of the chain. Setting headers before
@@ -207,18 +257,29 @@ int main(void)
 {
     ioma_use(add_server);                        /* global middleware, runs on every request */
 
-    ioma_route("GET",  "/",                      home);
-    ioma_route("GET",  "/health",                health);
-    ioma_route("GET",  "/whoami",                whoami);
-    ioma_route("GET",  "/users/:id",             user);
-    ioma_route("GET",  "/users/:id/posts/:post", post);
-    ioma_route("GET",  "/convert",               convert);
-    ioma_route("POST", "/echo",                  echo);
-    ioma_route("POST", "/greet",                 greet);
-    ioma_route("GET",  "/stream",                stream);
-    ioma_route("POST", "/upload",                upload);
-    ioma_route("POST", "/chunks",                chunks);
+    ioma_get (NULL, "/",                      home);         /* NULL: the root group, no prefix */
+    ioma_get (NULL, "/health",                health);
+    ioma_get (NULL, "/whoami",                whoami);
+    ioma_get (NULL, "/users/:id",             user);
+    ioma_get (NULL, "/users/new",             new_user_form); /* static beside the capture: wins for GET */
+    ioma_post(NULL, "/users/:id",             update_user);   /* so POST /users/new falls through to :id */
+    ioma_get (NULL, "/users/:id/posts/:post", post);
+    ioma_get (NULL, "/convert",               convert);
+    ioma_post(NULL, "/echo",                  echo);
+    ioma_post(NULL, "/greet",                 greet);
+    ioma_get (NULL, "/stream",                stream);
+    ioma_post(NULL, "/upload",                upload);
+    ioma_post(NULL, "/chunks",                chunks);
     ioma_default(not_found);
+
+    /* groups: /api with middleware of its own, /api/admin below it gated by a token, and one
+     * endpoint with middleware for itself only */
+    ioma_group *api = ioma_group_new(NULL, "/api");
+    ioma_group_use(api, api_header);
+    ioma_get(api, "/ping", ping);
+    ioma_group *admin = ioma_group_new(api, "/admin");
+    ioma_group_use(admin, require_token);
+    ioma_endpoint_use(ioma_get(admin, "/stats", stats), endpoint_header);
 
     int workers = (int)env_number("IOMA_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOMA_PORT", 8080);

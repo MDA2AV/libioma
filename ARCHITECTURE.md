@@ -173,7 +173,7 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
    `Transfer-Encoding` and `Connection` (a length test rejects almost every header before a byte
    is compared), but the body stays on the wire. `ioma_body_all` reads it whole into the request
    buffer, a chunked one decoded down over its own raw bytes; `ioma_body_read_until` streams it, any
-   size, filling the caller's buffer; `ioma_body_read_chunk` hands over one chunk exactly as the
+   size, filling the caller's buffer; `ioma_body_read_next_chunk` hands over one chunk exactly as the
    sender framed it. All three chunked paths share one small parser (a raw stage after the head, a
    size-line reader, a data mover) that survives a split at any byte. Whatever a handler leaves
    unread is drained after it returns, up to a limit, past which the reply says close.
@@ -207,18 +207,29 @@ a body (`ioma_textf`).
 
 ## 5. Router and middleware
 
-`ioma_route(method, path, fn)` fills a table that is read-only once the workers start, so all
-workers share it with no lock. A path is exact (lengths first, `memcmp` only on a hit) or a
-pattern with `:name` segments (`/users/:id`), matched segment by segment with the captures written
-to `req->route_params`. Exact routes are tried first, so a static path beats a pattern. `ioma_default`
-replaces the built-in 404.
+Endpoints are registered in groups before the workers start: a group is a path prefix plus
+middleware, groups nest, and the root (`NULL`) is the group with no prefix whose middleware
+`ioma_use` adds. `ioma_run` resolves the whole table once, and after that it is read-only, so
+every worker reads it without a lock.
 
-Middleware (`ioma_use`) is an onion: each layer receives the request and a `next`; it does work,
-calls `ioma_next_run` to run the rest of the chain and the endpoint, then may inspect or replace the
-response on the way out. Not calling `next` short-circuits (auth, cache). With no middleware
-registered the dispatch is a direct function call.
+The resolution turns each endpoint's full path (the prefixes of its groups, outermost first, then
+its own path) into a segment tree: a node per static segment, plus at most one capture child per
+node for a `:name` segment, with the endpoints at a node kept one per method. A request is one
+walk down the tree along its path segments. The static child is tried before the capture, so a
+static segment wins at any depth, and the walk backs up to the capture when the static branch
+comes to nothing - including when it reaches the end without the request's method, so a static
+path with only a GET lets a POST fall through to a capture route that has one. Captured segments
+land in `req->route_params`, named from the endpoint that matched. A path the tree knows without
+the method is a 405 with an `allow` header; a path it does not know goes to the fallback
+(`ioma_default`, a plain 404 unless replaced). Nothing is scanned and nothing is compiled per
+request; the tree is the map.
 
----
+Middleware is an onion: each layer receives the context and a `next`; it does work, calls
+`ioma_next_run` to continue, and can do more on the way back out, or it replies and returns to
+short-circuit the request. Each endpoint's chain is flattened at resolution - the root's
+middleware, then each group's from outermost to innermost, then the endpoint's own - into one
+array, so dispatch is a call through it with no walking of groups. The fallbacks run behind the
+root's middleware only.
 
 ## 6. One keep-alive request, end to end
 

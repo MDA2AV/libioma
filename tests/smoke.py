@@ -131,7 +131,7 @@ s = connect()
 s.send(b"DELETE / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 st, hd, body = read_response(s)
 s.close()
-results.append(check("DELETE / -> 404 (method not matched)", st == 404))
+results.append(check("DELETE / -> 405 with allow (path known, method not)", st == 405 and hd.get("allow") == "GET"))
 
 # keep-alive: five requests on one connection
 s = connect()
@@ -299,6 +299,27 @@ except Exception:
     st, hd, body = None, {}, b""
 s.close()
 results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+# --- groups: prefixes chain, middleware wraps outer to inner, one endpoint's own middleware ---
+st, hd, body = get("/api/ping")
+results.append(check("GET /api/ping -> group prefix, group middleware, root middleware",
+                     st == 200 and body == b"pong\n" and hd.get("x-api") == "v1" and hd.get("server") == "ioma"))
+st, hd, body = get("/api/ping/")
+results.append(check("GET /api/ping/ -> trailing slash tolerated", st == 200 and body == b"pong\n"))
+st, hd, body = get("/api/admin/stats")
+results.append(check("GET /api/admin/stats without token -> 401 from the subgroup, outer middleware still ran",
+                     st == 401 and hd.get("x-api") == "v1" and hd.get("x-endpoint") is None))
+st, hd, body = get("/api/admin/stats", extra=b"x-token: secret\r\n")
+results.append(check("GET /api/admin/stats with token -> 200, every layer's header",
+                     st == 200 and body == b"stats\n" and hd.get("x-api") == "v1" and hd.get("x-endpoint") == "stats"))
+st, hd, body = get("/api")
+results.append(check("GET /api -> 404 (a prefix is not an endpoint)", st == 404))
+st, hd, body = get("/users/new")
+results.append(check("GET /users/new -> the static segment beats the :id capture", st == 200 and body == b"new user form\n"))
+rs = raw_exchange([b"POST /users/new HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"])
+results.append(check("POST /users/new -> no POST on the static segment: falls through to POST /users/:id",
+                     rs == [(200, b"updated new\n")]))
+rs = raw_exchange([b"PUT /users/new HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"])
+results.append(check("PUT /users/new -> 405 (the path is known, no PUT anywhere on it)", len(rs) == 1 and rs[0][0] == 405))
 
 print("all passed" if all(results) else "FAILURES")
 sys.exit(0 if all(results) else 1)

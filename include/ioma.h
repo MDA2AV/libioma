@@ -127,7 +127,7 @@ int ioma_body_read_until(ioma_ctx *ctx, void *dst, size_t n);
  * current chunk when a read stopped inside one, else the next whole one. Returns its length, 0 at
  * the last chunk, -1 on error - a chunk larger than cap is a 413 - or when the body is not
  * chunked. */
-int ioma_body_read_chunk(ioma_ctx *ctx, void *dst, size_t cap);
+int ioma_body_read_next_chunk(ioma_ctx *ctx, void *dst, size_t cap);
 
 /* ── the reply ─────────────────────────────────────────────────────────────────────────── */
 
@@ -177,15 +177,40 @@ size_t ioma_kv_parse(const char *text, size_t len, ioma_kv *out, size_t cap, cha
 
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 
-/* Register an endpoint. method is matched exactly; path is matched by segment and may contain
- * :name captures ("/users/:id") that land in req.route_params. An exact path always beats a pattern.
- * Call before ioma_run, from the main thread; the table is then read-only and shared. */
-void ioma_route(const char *method, const char *path, ioma_handler fn);
-/* Fallback handler when nothing matches (default is a built-in 404). */
-void ioma_default(ioma_handler fn);
+/* Endpoints live in groups, and groups nest. A group is a path prefix plus middleware: an
+ * endpoint "/users" in a group "/api" under a group "/v1" answers at "/v1/api/users", wrapped by
+ * the middleware of every group above it, outermost first, then its own. NULL as the group is
+ * the root: no prefix, and the middleware given to ioma_use.
+ *
+ * Register everything before ioma_run, from the main thread. ioma_run resolves it once: every
+ * endpoint's full path into a segment tree and its middleware into one flat chain, which the
+ * workers then share read-only. A request costs one walk down the tree - no scan, no regex - and
+ * one call through its chain. */
+typedef struct ioma_group    ioma_group;
+typedef struct ioma_endpoint ioma_endpoint;
 
-/* Register global middleware; it runs on every request in the order added, wrapping the handler. */
+ioma_group *ioma_group_new(ioma_group *parent, const char *prefix);   /* "/api"; "" for middleware only */
+void        ioma_group_use(ioma_group *group, ioma_mw mw);            /* wraps everything below it     */
+
+/* An endpoint: method matched exactly; path matched by segment below the group's prefix, with
+ * :name captures ("/users/:id") landing in req.route_params. A static segment beats a capture at
+ * any depth, and a static path that lacks the method falls through to a capture route that has
+ * it. A trailing slash is tolerated. */
+ioma_endpoint *ioma_route(ioma_group *group, const char *method, const char *path, ioma_handler fn);
+void           ioma_endpoint_use(ioma_endpoint *endpoint, ioma_mw mw);   /* wraps this one only */
+
+/* The verbs, for short: ioma_get(api, "/users/:id", user). */
+static inline ioma_endpoint *ioma_get   (ioma_group *g, const char *path, ioma_handler fn) { return ioma_route(g, "GET",    path, fn); }
+static inline ioma_endpoint *ioma_post  (ioma_group *g, const char *path, ioma_handler fn) { return ioma_route(g, "POST",   path, fn); }
+static inline ioma_endpoint *ioma_put   (ioma_group *g, const char *path, ioma_handler fn) { return ioma_route(g, "PUT",    path, fn); }
+static inline ioma_endpoint *ioma_patch (ioma_group *g, const char *path, ioma_handler fn) { return ioma_route(g, "PATCH",  path, fn); }
+static inline ioma_endpoint *ioma_delete(ioma_group *g, const char *path, ioma_handler fn) { return ioma_route(g, "DELETE", path, fn); }
+
+/* Root middleware: every request, the fallbacks included. */
 void ioma_use(ioma_mw mw);
+/* The fallback when no path matches (a built-in 404 by default). A path that matches without the
+ * method gets a built-in 405 with an allow header. */
+void ioma_default(ioma_handler fn);
 
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 

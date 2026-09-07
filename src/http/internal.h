@@ -13,6 +13,7 @@
 
 void ioma__serve(conn_t *conn);                   /* engine.c: the per-connection HTTP loop  */
 void ioma__dispatch(ioma_ctx *ctx);               /* router.c: middleware chain + endpoint   */
+void ioma__router_build(void);                    /* router.c: resolve the routes, once      */
 
 /* The value of a hex digit, or -1. */
 static inline int ioma__hexval(unsigned char c)
