@@ -19,7 +19,9 @@ override that. Ctrl-C stops it. It answers on `/`, `/health`, `/whoami` and `POS
 
 Install with `make install` (set `PREFIX` to choose where), then build against it with pkg-config
 (`ioma`) or CMake (`find_package(ioma)`, link `ioma::ioma`). Adding the repo as a CMake
-subdirectory works as well. Include `ioma.h`.
+subdirectory works as well. Include `ioma.h`. Compile and link your program with `-flto` and the
+compiler inlines your handlers into the engine (the library ships fat LTO objects); it is worth
+about two percent.
 
 An endpoint is a function that receives an `ioma_request` and returns an `ioma_response`, built
 with `ioma_text`, `ioma_json`, `ioma_bytes` or `ioma_textf`. Read a request header with

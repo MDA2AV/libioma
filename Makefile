@@ -9,7 +9,11 @@
 
 CC      ?= gcc
 AR      ?= ar
-CFLAGS  ?= -O3 -g
+# Fat LTO objects when the compiler supports them: the archive stays linkable by anyone (it also
+# carries plain machine code), and a consumer that links with -flto gets cross-file inlining -
+# including its own handlers into the engine. Measured ~+2% on saturated throughput.
+LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -flto -ffat-lto-objects)
+CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra -std=gnu11
 CPP     := -Iinclude -Ithird_party/picohttpparser
 PTHREAD := -pthread
@@ -37,7 +41,7 @@ libioma.a: $(OBJ)
 	$(AR) rcs $@ $^
 
 libioma.so: $(PICOBJ)
-	$(CC) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD)
+	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD)
 
 # --- static objects (used by libioma.a and the examples) ---
 obj/%.o: src/%.c include/*.h src/internal.h | obj

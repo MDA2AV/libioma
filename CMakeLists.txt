@@ -44,6 +44,14 @@ target_include_directories(ioma
         PRIVATE
             third_party/picohttpparser)
 target_compile_options(ioma PRIVATE -Wall -Wextra)
+# Fat LTO objects when supported: the archive stays plain-linkable, and consumers that link with
+# -flto get cross-file inlining (the demo below does).
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-flto -ffat-lto-objects" IOMA_HAVE_FAT_LTO)
+if(IOMA_HAVE_FAT_LTO)
+    target_compile_options(ioma PRIVATE -flto -ffat-lto-objects)
+    target_link_options(ioma PRIVATE -flto)
+endif()
 target_link_libraries(ioma PUBLIC Threads::Threads)
 set_target_properties(ioma PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
 
@@ -56,6 +64,10 @@ option(IOMA_EXAMPLES "Build the playground examples" ${PROJECT_IS_TOP_LEVEL})
 if(IOMA_EXAMPLES)
     add_executable(ioma-hello playground/hello/main.c)
     target_link_libraries(ioma-hello PRIVATE ioma::ioma)
+    if(IOMA_HAVE_FAT_LTO)
+        target_compile_options(ioma-hello PRIVATE -flto)
+        target_link_options(ioma-hello PRIVATE -flto)
+    endif()
 endif()
 
 # --- install + export so find_package(ioma) works ---
