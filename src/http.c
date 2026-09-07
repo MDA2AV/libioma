@@ -8,6 +8,7 @@
 #include "picohttpparser.h"
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifndef IOMA_REQ_CAP
@@ -66,22 +67,43 @@ struct hdrs {
     ioma_slice content_length, transfer_enc, connection;   /* p == NULL when absent */
 };
 
-/* One pass over the request headers. The switch on the name length rejects nearly every header
- * before a single byte is compared. */
-static struct hdrs pick_headers(const ioma_request *req)
+/* Lower-case ASCII in place, eight bytes per step. The bytes must all be below 0x80 - true for
+ * header names, which picohttpparser only accepts as HTTP tokens - so the adds cannot carry
+ * between bytes: +0x3f sets a byte's high bit from 'A' up, +0x25 from 'Z'+1 up, and the
+ * difference marks exactly 'A'..'Z'. */
+static inline void lower_inplace(char *s, size_t n)
+{
+    size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        uint64_t w;
+        memcpy(&w, s + i, 8);
+        uint64_t upper = ((w + 0x3f3f3f3f3f3f3f3fULL) & ~(w + 0x2525252525252525ULL)) & 0x8080808080808080ULL;
+        w |= upper >> 2;                                    /* 0x80 >> 2 == 0x20 */
+        memcpy(s + i, &w, 8);
+    }
+    for (; i < n; i++)
+        if ((unsigned)(s[i] - 'A') < 26u) s[i] |= 0x20;
+}
+
+/* One pass over the request headers: lower-case each name in place (the buffer is ours), so
+ * handlers and this switch compare with plain memcmp. The switch on the name length rejects
+ * nearly every header before a byte is compared. */
+static struct hdrs pick_headers(ioma_request *req)
 {
     struct hdrs h = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
     for (size_t i = 0; i < req->n_headers; i++) {
-        const ioma_kv *x = &req->headers[i];
+        ioma_kv *x = &req->headers[i];
+        char *k = (char *)x->key.p;
+        lower_inplace(k, x->key.len);
         switch (x->key.len) {
         case 14:
-            if (eq_ci(x->key.p, 14, "content-length", 14))    h.content_length = x->value;
+            if (memcmp(k, "content-length", 14) == 0)    h.content_length = x->value;
             break;
         case 17:
-            if (eq_ci(x->key.p, 17, "transfer-encoding", 17)) h.transfer_enc = x->value;
+            if (memcmp(k, "transfer-encoding", 17) == 0) h.transfer_enc = x->value;
             break;
         case 10:
-            if (eq_ci(x->key.p, 10, "connection", 10))        h.connection = x->value;
+            if (memcmp(k, "connection", 10) == 0)        h.connection = x->value;
             break;
         default:
             break;

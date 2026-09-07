@@ -51,13 +51,17 @@ static ioma_response echo(ioma_request *req)
     return ioma_bytes(200, "application/octet-stream", req->body.p, req->body.len);
 }
 
-/* GET /users/:id?fields=... - a route parameter and a (percent-decoded) query parameter. */
+/* GET /users/:id?fields=... - the route parameter is req->route[0] (the pattern's only capture);
+ * the query parameters are in req->params, already split and percent-decoded. */
 static ioma_response user(ioma_request *req)
 {
-    ioma_slice id     = ioma_route_get(req, "id");
-    ioma_slice fields = ioma_query_get(req, "fields");
+    ioma_slice id     = req->route[0].value;
+    ioma_slice fields = { "", 0 };
+    for (size_t i = 0; i < req->n_params; i++)
+        if (ioma_slice_eq(req->params[i].key, "fields"))
+            fields = req->params[i].value;
     return ioma_textf(req, 200, "user %.*s fields=%.*s\n",
-                      (int)id.len, id.p, (int)fields.len, fields.p ? fields.p : "");
+                      (int)id.len, id.p, (int)fields.len, fields.p);
 }
 
 /* Middleware: runs the handler, then stamps a Server header on whatever it returned. A middleware

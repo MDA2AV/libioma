@@ -7,7 +7,7 @@
  * connection's read buffer, valid only for the duration of the handler call.
  *
  *     static ioma_response user(ioma_request *req) {
- *         ioma_slice id = ioma_route_get(req, "id");          // from "/users/:id"
+ *         ioma_slice id = req->route[0].value;                // the :id of "/users/:id"
  *         return ioma_textf(req, 200, "user %.*s\n", (int)id.len, id.p);
  *     }
  *     int main(void) {
@@ -41,9 +41,9 @@ typedef struct { const char *p; size_t len; } ioma_slice;
 /* One key/value pair of slices: a header, a query parameter, a route parameter. */
 typedef struct { ioma_slice key, value; } ioma_kv;
 
-/* A parsed request. Every slice points into the connection's read buffer (decoded parameters
- * into a per-request arena) and is valid only until the handler returns. The request's own
- * slices are never NULL, only possibly empty; a lookup returns p == NULL when the key is absent. */
+/* A parsed request: all the data, as slices into the connection's read buffer (decoded
+ * parameters into a per-request arena), valid only until the handler returns. Read the arrays
+ * directly; header names are lower-cased, so compare them with lowercase literals. */
 typedef struct ioma_request {
     ioma_slice  method;                         /* "GET", "POST", ...                        */
     ioma_slice  target;                         /* raw request target: path plus any query   */
@@ -51,11 +51,11 @@ typedef struct ioma_request {
     ioma_slice  query;                          /* raw text after '?', undecoded             */
     int         minor_version;                  /* 0 or 1 for HTTP/1.0 or 1.1                */
 
-    ioma_kv     headers[IOMA_MAX_HEADERS];      /* as received                               */
+    ioma_kv     headers[IOMA_MAX_HEADERS];      /* names lower-cased, values as received     */
     size_t      n_headers;
     ioma_kv     params[IOMA_MAX_PARAMS];        /* query parameters, percent-decoded         */
     size_t      n_params;
-    ioma_kv     route[IOMA_MAX_ROUTE_PARAMS];   /* the :name captures of the matched route   */
+    ioma_kv     route[IOMA_MAX_ROUTE_PARAMS];   /* the :name captures, in pattern order      */
     size_t      n_route;
 
     ioma_slice  body;                           /* Content-Length body, or a chunked one decoded */
@@ -85,14 +85,10 @@ typedef struct ioma_next ioma_next;
 typedef ioma_response (*ioma_mw)(ioma_request *req, ioma_next *next);
 ioma_response ioma_next_run(ioma_request *req, ioma_next *next);
 
-/* ── slices and lookups ────────────────────────────────────────────────────────────────── */
+/* ── slices ────────────────────────────────────────────────────────────────────────────── */
 
 bool       ioma_slice_eq (ioma_slice s, const char *cstr);       /* exact compare with a C string */
 long       ioma_slice_int(ioma_slice s);                         /* leading integer, else 0        */
-
-ioma_slice ioma_header_get(const ioma_request *req, const char *name);   /* case-insensitive     */
-ioma_slice ioma_query_get (const ioma_request *req, const char *key);    /* first match, decoded */
-ioma_slice ioma_route_get (const ioma_request *req, const char *name);   /* a :name capture      */
 
 /* Parse "k=v&k2=v2" - a query string, a form body - into out, up to cap pairs. Keys and values
  * that need it ('+', %XX) are decoded into arena and point there; the rest are views of s.
@@ -114,7 +110,7 @@ void ioma_header_set(ioma_response *res, const char *name, const char *value);
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 
 /* Register an endpoint. method is matched exactly; path is matched by segment and may contain
- * :name captures ("/users/:id"), read with ioma_route_get. An exact path always beats a pattern.
+ * :name captures ("/users/:id") that land in req->route. An exact path always beats a pattern.
  * Call before ioma_run, from the main thread; the table is then read-only and shared. */
 void ioma_route(const char *method, const char *path, ioma_handler fn);
 /* Fallback handler when nothing matches (default is a built-in 404). */

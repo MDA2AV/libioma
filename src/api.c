@@ -1,5 +1,5 @@
 /*
- * api.c - the helpers a handler calls: slices, lookups by key, response builders, reasons.
+ * api.c - the helpers a handler calls: slices, key/value parsing, response builders, reasons.
  * Nothing here touches the runtime.
  */
 #define _GNU_SOURCE
@@ -30,40 +30,6 @@ long ioma_slice_int(ioma_slice s)
     for (; i < s.len && s.p[i] >= '0' && s.p[i] <= '9'; i++)
         v = v * 10 + (s.p[i] - '0');
     return neg ? -v : v;
-}
-
-static const ioma_slice none = { NULL, 0 };
-
-/* ── lookups ───────────────────────────────────────────────────────────────────────────── */
-
-/* Case-insensitive header lookup; p == NULL when absent. */
-ioma_slice ioma_header_get(const ioma_request *req, const char *name)
-{
-    size_t nl = strlen(name);
-    for (size_t i = 0; i < req->n_headers; i++)
-        if (eq_ci(req->headers[i].key.p, req->headers[i].key.len, name, nl))
-            return req->headers[i].value;
-    return none;
-}
-
-/* First query parameter with this key (case-sensitive), decoded; p == NULL when absent. */
-ioma_slice ioma_query_get(const ioma_request *req, const char *key)
-{
-    size_t kl = strlen(key);
-    for (size_t i = 0; i < req->n_params; i++)
-        if (req->params[i].key.len == kl && memcmp(req->params[i].key.p, key, kl) == 0)
-            return req->params[i].value;
-    return none;
-}
-
-/* The :name capture of the matched route; p == NULL when the pattern has no such name. */
-ioma_slice ioma_route_get(const ioma_request *req, const char *name)
-{
-    size_t nl = strlen(name);
-    for (size_t i = 0; i < req->n_route; i++)
-        if (req->route[i].key.len == nl && memcmp(req->route[i].key.p, name, nl) == 0)
-            return req->route[i].value;
-    return none;
 }
 
 /* ── key/value parsing ─────────────────────────────────────────────────────────────────── */

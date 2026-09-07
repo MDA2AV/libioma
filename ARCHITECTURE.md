@@ -179,10 +179,10 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
    head then body. Then loop; leftover bytes of a pipelined next request are carried over.
 
 Everything in a request is a slice (pointer + length) into the read buffer, valid only during
-the handler. Three key/value collections hang off it: `headers` as received, `params` (the query,
-split and percent-decoded into a small per-request arena only when a value needs it, otherwise a
-zero-copy view), and `route` (the `:name` captures the router filled in). `ioma_header_get`,
-`ioma_query_get` and `ioma_route_get` look them up by key. A `scratch` arena is there for building
+the handler. Three key/value arrays hang off it, read directly: `headers` (names lower-cased once
+at parse time, so a plain compare works), `params` (the query, split and percent-decoded into a
+small per-request arena only when a value needs it, otherwise a zero-copy view), and `route` (the
+`:name` captures the router filled in, in pattern order). A `scratch` arena is there for building
 a body (`ioma_textf`).
 
 ---
