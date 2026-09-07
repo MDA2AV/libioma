@@ -29,6 +29,7 @@ profiles score.
 | Registered file table: direct accept into slots, recv/send/close by index | keep-alive not measurable; churn +3%; connections no longer consume process fds |
 | PGO (`-fprofile-generate`, train, `-fprofile-use`) on top of LTO | +1.5–2% |
 | Request model: the query split into `params` eagerly, header names lower-cased at parse (8 bytes a step) so handlers compare with plain `ioma_slice_eq` | about −1% each; the price of direct data access |
+| gcc 14 and C23 (was gcc 13 and gnu11) | neutral: 1.23M vs 1.22M req/s keep-alive and equal churn, wrk and oha, three interleaved rounds on 4 reactors. The standard changes what the compiler accepts, not the code it emits |
 
 The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
 `BUF_SIZE`/`BUF_COUNT`/`RING_ENTRIES`/`RX_QUEUE`/`STACK_SIZE`/`CORO_POOL_MAX`/`CONN_POOL_MAX` are
