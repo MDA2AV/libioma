@@ -648,126 +648,154 @@ static void drain_body(ioma_ctx *c)
 
 /* ── the connection loop ───────────────────────────────────────────────────────────────── */
 
-/* The proactor handler for every connection: parse the head, run the chain against a context,
- * drain what it left of the body, send what it wrote; repeat while kept alive. Returning closes
- * the connection. */
+/* Get a complete request head into read_buf, parsed straight into req (method, target,
+ * version, headers). What is buffered is parsed first: after a reply, a pipelined next request
+ * may already be there. More is read only when the head is incomplete. Returns the head's
+ * length, or -1 once the connection is finished (431 or 400 answered, or the peer went away). */
+static long read_head(conn_t *conn, char *read_buf, size_t *filled, ioma_request *req)
+{
+    size_t already_parsed = 0;                        /* what the previous attempt scanned */
+    for (;;) {
+        if (*filled) {
+            req->n_headers = IOMA_MAX_HEADERS;        /* in: room; out: count */
+            int parsed = phr_parse_request(read_buf, *filled,
+                                           &req->method.p, &req->method.len,
+                                           &req->target.p, &req->target.len,
+                                           &req->minor_version,
+                                           (struct phr_header *)req->headers, &req->n_headers,
+                                           already_parsed);
+            if (parsed >= 0)
+                return parsed;
+            if (parsed != -2) {                       /* malformed */
+                send_status(conn, 400);
+                return -1;
+            }
+            already_parsed = *filled;                 /* incomplete: read more */
+        }
+        if (*filled == IOMA_REQ_CAP) {
+            send_status(conn, 431);
+            return -1;
+        }
+        int n = await_recv(conn, read_buf + *filled, IOMA_REQ_CAP - *filled);
+        if (n <= 0)
+            return -1;                                /* peer closed or error */
+        *filled += (size_t)n;
+    }
+}
+
+/* The rest of the request from its head: path and query, the query split into params, the
+ * headers lower-cased and the three the engine needs picked out. The body stays on the wire;
+ * body_start is where it begins. */
+static void fill_request(ioma_request *req, char *body_start, char *params_arena, size_t arena_cap)
+{
+    const char *qmark = memchr(req->target.p, '?', req->target.len);
+    if (qmark) {
+        req->path  = (ioma_slice){ req->target.p, (size_t)(qmark - req->target.p) };
+        req->query = (ioma_slice){ qmark + 1, req->target.len - req->path.len - 1 };
+    } else {
+        req->path  = req->target;
+        req->query = (ioma_slice){ req->target.p + req->target.len, 0 };
+    }
+    req->n_params = req->query.len
+        ? ioma_kv_parse(req->query.p, req->query.len, req->params, IOMA_MAX_PARAMS, params_arena, arena_cap)
+        : 0;
+    req->n_route_params = 0;                          /* the router fills these */
+
+    struct picked_headers picked = pick_headers(req);
+    req->chunked        = picked.transfer_enc.p && token_present_ci(picked.transfer_enc.p, picked.transfer_enc.len, "chunked");
+    req->content_length = picked.content_length.p ? parse_size(picked.content_length.p, picked.content_length.len) : 0;
+    req->keep_alive     = keep_alive_from(req->minor_version, picked.connection);
+    req->body           = (ioma_slice){ body_start, 0 };
+}
+
+/* The engine's bookkeeping for reading the body on demand: where it starts, what already
+ * arrived with the head, and - for a Content-Length body that is entirely here - where the next
+ * request starts. */
+static void init_body_state(struct serve_state *state, conn_t *conn, char *read_buf, size_t filled,
+                            size_t head_len, const ioma_request *req)
+{
+    memset(state, 0, sizeof *state);
+    state->conn     = conn;
+    state->read_buf = read_buf;
+    state->read_cap = IOMA_REQ_CAP;
+    state->filled   = filled;
+    state->head_len = head_len;
+    if (req->chunked) {
+        state->decoder.consume_trailer = 1;
+        state->staged_raw = filled - head_len;
+    } else {
+        size_t total = head_len + req->content_length;
+        state->body_done = req->content_length == 0;
+        if (filled >= total) {
+            state->next_req_off = total;
+            state->next_req_len = filled - total;
+        }
+    }
+}
+
+/* A response with its defaults and an empty slab. */
+static void init_response(ioma_response *res, char *slab)
+{
+    memset(res, 0, offsetof(ioma_response, buf));
+    res->status       = 200;
+    res->content_type = (ioma_slice){ "text/plain", 10 };
+    res->buf          = slab + IOMA_LEAD;
+    res->cap          = IOMA_OUT_CAP;
+    res->len          = 0;
+    res->chunked      = false;
+    res->failed       = false;
+}
+
+/* After a kept-alive reply: move the bytes that belong to the next request to the front of the
+ * buffer and return how many there are. */
+static size_t carry_next_request(struct serve_state *state, char *read_buf)
+{
+    if (state->parked_len) {                          /* parked past a chunked terminator */
+        state->next_req_off = IOMA_REQ_CAP - state->parked_len;
+        state->next_req_len = state->parked_len;
+    }
+    if (state->next_req_len)
+        memmove(read_buf, read_buf + state->next_req_off, state->next_req_len);
+    return state->next_req_len;
+}
+
+/* The proactor handler for every connection: one request per iteration - get the head, run
+ * the chain against a context, drain what it left of the body, send what it wrote - while kept
+ * alive. Returning closes the connection. */
 void ioma__serve(conn_t *conn)
 {
-    char   read_buf[IOMA_REQ_CAP];                      /* receive buffer                       */
-    char   params[IOMA_PARAM_CAP];                  /* decoded query parameters land here   */
-    char   slab[IOMA_LEAD + IOMA_OUT_CAP + 2];      /* lead, the write slab, CRLF slack     */
-    size_t filled = 0, already_parsed = 0;             /* bytes in read_buf; bytes the last parse saw */
+    char   read_buf[IOMA_REQ_CAP];                    /* the request: head, then body bytes */
+    char   params[IOMA_PARAM_CAP];                    /* decoded query parameters           */
+    char   slab[IOMA_LEAD + IOMA_OUT_CAP + 2];        /* lead, the write slab, CRLF slack   */
+    size_t filled = 0;                                /* bytes in read_buf                  */
 
     for (;;) {
-        ioma_ctx           ctx;
-        ioma_request      *req = &ctx.req;
-        ioma_response     *res = &ctx.res;
-        struct serve_state state;
-        size_t header_count = IOMA_MAX_HEADERS;
-        const char *method = NULL, *target = NULL;
-        size_t method_len = 0, target_len = 0;
-        int minor_version = 0;
+        ioma_ctx           ctx;                       /* this request's context             */
+        struct serve_state state;                     /* and the engine's side of it        */
 
-        /* Parse straight into ctx.req.headers. With nothing buffered - the usual state right
-         * after a reply - skip the parse and just read. */
-        int parsed = filled ? phr_parse_request(read_buf, filled, &method, &method_len, &target, &target_len, &minor_version,
-                                            (struct phr_header *)req->headers, &header_count, already_parsed)
-                        : -2;
-
-        if (parsed == -2) {                                /* head not complete yet */
-            if (filled == IOMA_REQ_CAP) {
-                send_status(conn, 431);
-                return;
-            }
-            already_parsed = filled;
-            int n = await_recv(conn, read_buf + filled, IOMA_REQ_CAP - filled);
-            if (n <= 0) return;                          /* peer closed or error */
-            filled += (size_t)n;
-            continue;
-        }
-        if (parsed < 0) {                                  /* malformed */
-            send_status(conn, 400);
+        long head_len = read_head(conn, read_buf, &filled, &ctx.req);
+        if (head_len < 0)
             return;
-        }
-        size_t head_len = (size_t)parsed;
-
-        req->method        = (ioma_slice){ method, method_len };
-        req->target        = (ioma_slice){ target, target_len };
-        req->minor_version = minor_version;
-        req->n_headers     = header_count;
-
-        const char *qmark = memchr(target, '?', target_len);
-        if (qmark) {
-            req->path  = (ioma_slice){ target, (size_t)(qmark - target) };
-            req->query = (ioma_slice){ qmark + 1, target_len - req->path.len - 1 };
-        } else {
-            req->path  = (ioma_slice){ target, target_len };
-            req->query = (ioma_slice){ target + target_len, 0 };
-        }
-        req->n_params = req->query.len
-            ? ioma_kv_parse(req->query.p, req->query.len, req->params, IOMA_MAX_PARAMS, params, sizeof params)
-            : 0;
-        req->n_route_params = 0;                                 /* the router fills these */
-
-        struct picked_headers picked = pick_headers(req);
-        req->chunked        = picked.transfer_enc.p && token_present_ci(picked.transfer_enc.p, picked.transfer_enc.len, "chunked");
-        req->content_length = picked.content_length.p ? parse_size(picked.content_length.p, picked.content_length.len) : 0;
-        req->body           = (ioma_slice){ read_buf + head_len, 0 };
-        req->keep_alive     = keep_alive_from(minor_version, picked.connection);
-
-        /* The body stays on the wire until asked for. What already arrived with the head is in
-         * read_buf; a Content-Length body that is entirely there also tells where the next request
-         * starts. */
-        memset(&state, 0, sizeof state);
-        state.conn       = conn;
-        state.read_buf       = read_buf;
-        state.read_cap       = IOMA_REQ_CAP;
-        state.filled       = filled;
-        state.head_len = head_len;
-        if (req->chunked) {
-            state.decoder.consume_trailer = 1;
-            state.staged_raw = filled - head_len;
-        } else {
-            size_t total = head_len + req->content_length;
-            state.body_done = req->content_length == 0;
-            if (filled >= total) {
-                state.next_req_off = total;
-                state.next_req_len = filled - total;
-            }
-        }
-
-        /* The response: defaults, and an empty slab. */
-        memset(res, 0, offsetof(ioma_response, buf));
-        res->status       = 200;
-        res->content_type = (ioma_slice){ "text/plain", 10 };
-        res->buf          = slab + IOMA_LEAD;
-        res->cap          = IOMA_OUT_CAP;
-        res->len          = 0;
-        res->chunked      = false;
-        res->failed       = false;
+        fill_request(&ctx.req, read_buf + (size_t)head_len, params, sizeof params);
+        init_body_state(&state, conn, read_buf, filled, (size_t)head_len, &ctx.req);
+        init_response(&ctx.res, slab);
         ctx.user = NULL;
         ctx.priv = &state;
 
-        ioma__dispatch(&ctx);                            /* middleware chain + endpoint */
+        ioma__dispatch(&ctx);                         /* middleware chain + endpoint */
 
-        if (state.body_err) {                               /* too large, malformed, or gone */
-            if (state.body_err > 0 && !res->head_sent)
+        if (state.body_err) {                         /* too large, malformed, or gone */
+            if (state.body_err > 0 && !ctx.res.head_sent)
                 send_status(conn, state.body_err);
             return;
         }
-        drain_body(&ctx);                                /* what the handler left unread */
-        if (state.body_err) return;
-        if (finish(&ctx) < 0) return;                    /* sends; suspends meanwhile   */
-
-        if (!req->keep_alive || res->close) return;
-
-        /* pipelining: carry the bytes that belong to the next request */
-        if (state.parked_len) {                               /* parked past a chunked terminator */
-            state.next_req_off = IOMA_REQ_CAP - state.parked_len;
-            state.next_req_len = state.parked_len;
-        }
-        if (state.next_req_len) memmove(read_buf, read_buf + state.next_req_off, state.next_req_len);
-        filled = state.next_req_len;
-        already_parsed = 0;
+        drain_body(&ctx);                             /* what the handler left unread */
+        if (state.body_err)
+            return;
+        if (finish(&ctx) < 0)                         /* sends; suspends meanwhile */
+            return;
+        if (!ctx.req.keep_alive || ctx.res.close)
+            return;
+        filled = carry_next_request(&state, read_buf);
     }
 }
