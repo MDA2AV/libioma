@@ -32,7 +32,7 @@
 #define RX_QUEUE     64                   /* undelivered slices one connection may hold, pow 2  */
 #endif
 #ifndef STACK_SIZE
-#define STACK_SIZE   (64 * 1024)          /* per coroutine, plus a guard page                   */
+#define STACK_SIZE   (64UL * 1024)        /* per coroutine, plus a guard page                   */
 #endif
 #ifndef FIXED_FILES
 #define FIXED_FILES  16384                /* registered file slots per worker; 0 disables       */

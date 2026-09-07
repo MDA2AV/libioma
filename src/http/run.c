@@ -1,7 +1,6 @@
 /*
  * run.c - ioma_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
  */
-#define _GNU_SOURCE
 #include "http/internal.h"
 
 #include <pthread.h>
@@ -76,6 +75,8 @@ int ioma_run(int workers, int port)
     pthread_t  *th = calloc((size_t)workers, sizeof *th);
     if (!ws || !th) {
         perror("calloc");
+        free(ws);
+        free(th);
         return 1;
     }
 

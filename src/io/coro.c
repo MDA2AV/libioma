@@ -1,4 +1,3 @@
-#define _GNU_SOURCE
 #include "io/coro.h"
 
 #include <assert.h>

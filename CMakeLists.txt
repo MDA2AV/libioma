@@ -44,6 +44,7 @@ target_include_directories(ioma
         PRIVATE
             src
             third_party/picohttpparser)
+target_compile_definitions(ioma PRIVATE _GNU_SOURCE)
 target_compile_options(ioma PRIVATE -Wall -Wextra)
 # Fat LTO objects when supported: the archive stays plain-linkable, and consumers that link with
 # -flto get cross-file inlining (the demo below does).

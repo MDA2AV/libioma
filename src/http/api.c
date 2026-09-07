@@ -2,7 +2,6 @@
  * api.c - the helpers a handler calls: slices, key/value parsing, shaping the reply, reasons.
  * Nothing here touches the runtime.
  */
-#define _GNU_SOURCE
 #include "http/internal.h"
 
 #include <string.h>
@@ -37,7 +36,7 @@ long ioma_slice_int(ioma_slice s)
 static int hexval(unsigned char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
-    c |= 0x20;
+    c |= 0x20U;
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
     return -1;
 }

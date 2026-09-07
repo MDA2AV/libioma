@@ -15,8 +15,8 @@
 /* ── constants ─────────────────────────────────────────────────────────────────────────── */
 
 #define BGID     1                                /* the one provided-buffer group per worker */
-#define RX_MASK  (RX_QUEUE  - 1)
-#define BUF_MASK (BUF_COUNT - 1)
+#define RX_MASK  (RX_QUEUE  - 1U)
+#define BUF_MASK (BUF_COUNT - 1U)
 
 #ifndef CONN_POOL_MAX
 #define CONN_POOL_MAX 1024                        /* idle conn_t kept warm per worker         */
@@ -36,12 +36,11 @@ enum {
     TAG_OP = 0,
     TAG_RECV = 1,
     TAG_ACCEPT = 2,
-    TAG_IGNORE = 3
-};
+    TAG_IGNORE = 3, };
 
 #define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))
-#define UD_TAG(ud)   ((unsigned)((ud) & 7))
+#define UD_TAG(ud)   ((unsigned)((ud) & 7U))
 
 /* A one-shot operation. It lives in the awaiting coroutine's stack frame, which is frozen while
  * the coroutine is parked, so its address is valid for exactly as long as the op is in flight. */

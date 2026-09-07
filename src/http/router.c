@@ -3,7 +3,6 @@
  * and read-only after, so every worker shares them without a lock. A path is either exact or a
  * pattern with :name segments; exact routes always win.
  */
-#define _GNU_SOURCE
 #include "http/internal.h"
 
 #include <string.h>
@@ -83,8 +82,11 @@ void ioma_route(const char *method, const char *path, const ioma_handler fn)
         return;
     }
     route_t *route = &g_routes[g_nroutes++];
-    *route = (route_t){ .method = method, .method_len = strlen(method),
-                    .path = path,     .path_len = strlen(path), .fn = fn };
+    *route = (route_t){
+        .method = method, .method_len = strlen(method),
+        .path   = path,   .path_len   = strlen(path),
+        .fn     = fn,
+    };
     compile_pattern(route);
 }
 

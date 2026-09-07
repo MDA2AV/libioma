@@ -4,7 +4,6 @@
  * drain what was left, then send what was written. All of it runs on the connection's coroutine,
  * so await_recv and await_send simply suspend it and the loop resumes it.
  */
-#define _GNU_SOURCE
 #include "http/internal.h"
 #include "picohttpparser.h"
 
@@ -26,7 +25,7 @@
 #define IOMA_OUT_CAP      8192      /* the write slab: body bytes buffered before a reply streams */
 #endif
 #ifndef IOMA_DRAIN_MAX
-#define IOMA_DRAIN_MAX    (1024 * 1024)   /* unread body discarded after a handler before we close instead */
+#define IOMA_DRAIN_MAX    (1024UL * 1024)   /* unread body discarded after a handler before we close instead */
 #endif
 #define IOMA_LEAD         512       /* room in front of the slab for the reply head or a chunk size */
 
@@ -62,7 +61,7 @@ struct serve_state {
 /* Fold A-Z to a-z; every other byte unchanged. */
 static inline unsigned char lower_ascii(unsigned char a)
 {
-    return (unsigned)(a - 'A') < 26u ? (unsigned char)(a | 0x20) : a;
+    return (unsigned)(a - 'A') < 26U ? (unsigned char)(a | 0x20U) : a;
 }
 
 /* Case-insensitive equality of two slices: a length test, then a byte loop. No libc, no locale. */
@@ -124,7 +123,7 @@ static inline void lower_inplace(char *s, size_t n)
         memcpy(s + i, &w, 8);
     }
     for (; i < n; i++)
-        if ((unsigned)(s[i] - 'A') < 26u) s[i] |= 0x20;
+        if ((unsigned)(s[i] - 'A') < 26U) s[i] += 'a' - 'A';
 }
 
 /* One pass over the request headers: lower-case each name in place (the buffer is ours), so
@@ -173,7 +172,7 @@ static inline int put_uint(char *dst, size_t v)
     char tmp[20];
     int  i = 0;
     do {
-        tmp[i++] = (char)('0' + v % 10);
+        tmp[i++] = (char)('0' + (v % 10));
         v /= 10;
     } while (v);
     for (int j = 0; j < i; j++)
@@ -228,7 +227,7 @@ static void send_status(conn_t *conn, int code)
 enum framing {
     FRAME_LENGTH,
     FRAME_CHUNKED,
-    FRAME_UNTIL_CLOSE
+    FRAME_UNTIL_CLOSE,
 };
 
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
@@ -435,17 +434,18 @@ int ioma_printf(ioma_ctx *c, const char *fmt, ...)
     int    n    = vsnprintf(res->buf + res->len, room, fmt, ap);
     va_end(ap);
 
-    int rc = 0;
-    if (n < 0)
-        rc = -1;
-    else if ((size_t)n < room)                            /* it fit */
+    int rc = -1;
+    if (n < 0) {
+        /* a formatting error: nothing written */
+    } else if ((size_t)n < room) {                        /* it fit */
         res->len += (size_t)n;
-    else if ((size_t)n >= res->cap)                       /* bigger than the slab itself */
+        rc = 0;
+    } else if ((size_t)n >= res->cap) {                   /* bigger than the slab itself */
         rc = write_formatted_heap(c, fmt, again, (size_t)n);
-    else if (flush(c, false) < 0)                         /* make room, then it fits */
-        rc = -1;
-    else
+    } else if (flush(c, false) == 0) {                    /* make room, then it fits */
         res->len += (size_t)vsnprintf(res->buf, res->cap, fmt, again);
+        rc = 0;
+    }
     va_end(again);
     return rc;
 }
@@ -680,7 +680,7 @@ static long read_head(conn_t *conn, char *read_buf, size_t *filled, ioma_request
 /* The rest of the request from its head: path and query, the query split into params, the
  * headers lower-cased and the three the engine needs picked out. The body stays on the wire;
  * body_start is where it begins. */
-static void fill_request(ioma_request *req, char *body_start, char *params_arena, size_t arena_cap)
+static void fill_request(ioma_request *req, const char *body_start, char *params_arena, size_t arena_cap)
 {
     const char *qmark = memchr(req->target.p, '?', req->target.len);
     if (qmark) {

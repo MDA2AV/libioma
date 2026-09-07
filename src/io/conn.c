@@ -3,7 +3,6 @@
  * multishot recv and the queue of slices it delivers, parking on -ENOBUFS, closing, and the two
  * awaits a handler coroutine calls.
  */
-#define _GNU_SOURCE
 #include "io/internal.h"
 
 #include <errno.h>
@@ -17,7 +16,7 @@ static int await_op(struct io_uring_sqe *sqe, op_t *op)
     op->waiter     = coro_current();
     sqe->user_data = UD(op, TAG_OP);
     coro_yield();
-    return op->res;
+    return op->res;   /* NOLINT(clang-analyzer-core.uninitialized.UndefReturn): set by the loop before it resumed us */
 }
 
 /* Ask the kernel to cancel the op carrying that user_data. The acknowledgement CQE is ignored. */
@@ -119,12 +118,14 @@ static void wake_reader(conn_t *c)
 static void starved_push(proactor_t *p, conn_t *c)
 {
     if (p->nstarved == p->cap_starved) {
-        p->cap_starved = p->cap_starved ? p->cap_starved * 2 : 64;
-        p->starved = realloc(p->starved, p->cap_starved * sizeof *p->starved);
-        if (!p->starved) {
+        unsigned cap   = p->cap_starved ? p->cap_starved * 2 : 64;
+        conn_t **grown = realloc(p->starved, cap * sizeof *grown);
+        if (!grown) {
             perror("realloc");
             abort();
         }
+        p->starved     = grown;
+        p->cap_starved = cap;
     }
     p->starved[p->nstarved++] = c;
 }
@@ -146,7 +147,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 {
     bool     more    = flags & IORING_CQE_F_MORE;
     bool     has_buf = flags & IORING_CQE_F_BUFFER;
-    uint16_t buf_id  = (uint16_t)(flags >> IORING_CQE_BUFFER_SHIFT);
+    uint16_t buf_id  = (uint16_t)(flags >> (unsigned)IORING_CQE_BUFFER_SHIFT);
 
     trace("[w%d] recv fd=%d result=%d more=%d buf=%d buf_id=%u queued=%u state=%d closed=%d eof=%d\n",
           p->id, c->fd, result, more, has_buf, buf_id, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
@@ -197,9 +198,9 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (!more) {                                     /* the kernel ended the multishot: re-arm    */
-        if (!c->closed && !c->eof)
+        if (!c->closed && !c->eof) {
             ioma__arm_recv(p, c);
-        else {
+        } else {
             c->recv = RECV_DONE;
             conn_unref(c);
         }
@@ -236,7 +237,7 @@ static void conn_close(conn_t *c)
     } else if (c->recv == RECV_STARVED) {
         starved_remove(p, c);
         c->recv = RECV_DONE;
-        conn_unref(c);
+        c->refs--;                                   /* the recv side's reference; ours, dropped last, keeps c alive */
     }
     while (c->rx_head != c->rx_tail)
         ioma__return_buf(p, c->rx[c->rx_head++ & RX_MASK].buf_id);

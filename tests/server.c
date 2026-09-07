@@ -138,6 +138,17 @@ static void not_found(ioma_ctx *c)
     ioma_text(c, "{\"error\":\"not found\"}");
 }
 
+/* An environment variable as a number, or the fallback when unset or not a whole number. */
+static long env_number(const char *name, long fallback)
+{
+    const char *text = getenv(name);
+    if (!text)
+        return fallback;
+    char *end;
+    long  n = strtol(text, &end, 10);
+    return *end == '\0' && end != text ? n : fallback;
+}
+
 int main(void)
 {
     ioma_use(add_server);                        /* global middleware, runs on every request */
@@ -153,15 +164,7 @@ int main(void)
     ioma_route("POST", "/upload",                upload);
     ioma_default(not_found);
 
-    int workers = 0;                             /* 0: one per core */
-    const char *env = getenv("IOMA_WORKERS");
-    if (env && atoi(env) > 0)
-        workers = atoi(env);
-
-    int port = 8080;
-    env = getenv("IOMA_PORT");
-    if (env && atoi(env) > 0 && atoi(env) < 65536)
-        port = atoi(env);
-
-    return ioma_run(workers, port);
+    int workers = (int)env_number("IOMA_WORKERS", 0);          /* 0: one per core */
+    int port    = (int)env_number("IOMA_PORT", 8080);
+    return ioma_run(workers, port > 0 && port < 65536 ? port : 8080);
 }

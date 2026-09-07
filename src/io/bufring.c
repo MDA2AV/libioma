@@ -2,7 +2,6 @@
  * bufring.c - the provided buffer ring: a slab of BUF_COUNT x BUF_SIZE bytes that the kernel
  * picks from when a multishot recv delivers data, and how buffers go back to it.
  */
-#define _GNU_SOURCE
 #include "io/internal.h"
 
 #include <string.h>

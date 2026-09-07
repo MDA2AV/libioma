@@ -15,7 +15,7 @@ AR      ?= ar
 LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -flto -ffat-lto-objects)
 CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra -std=gnu11
-CPP     := -Iinclude -Isrc -Ithird_party/picohttpparser
+CPP     := -D_GNU_SOURCE -Iinclude -Isrc -Ithird_party/picohttpparser
 HDRS    := $(wildcard include/*.h src/*/*.h)
 PTHREAD := -pthread
 

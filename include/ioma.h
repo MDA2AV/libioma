@@ -143,7 +143,7 @@ long   ioma_slice_int(ioma_slice s);                             /* leading inte
 /* Parse "k=v&k2=v2" - a query string, a form body - into out, up to cap pairs. Keys and values
  * that need it ('+', %XX) are decoded into arena and point there; the rest are views of s.
  * Returns the pair count. A pair that does not fit the arena is skipped. */
-size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *arena, size_t arena_cap);
+size_t ioma_kv_parse(const char *text, size_t len, ioma_kv *out, size_t cap, char *arena, size_t arena_cap);
 
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 

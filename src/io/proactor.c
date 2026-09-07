@@ -3,7 +3,6 @@
  * start spawned coroutines, enter once per batch, dispatch every completion. Connections live in
  * conn.c and buffers in bufring.c; this file is the loop and what feeds it.
  */
-#define _GNU_SOURCE
 #include "io/internal.h"
 
 #include <errno.h>
@@ -148,7 +147,7 @@ static int listener_open(uint16_t port)
     addr.sin_family      = AF_INET;
     addr.sin_port        = htons(port);
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
+    if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {   /* NOLINT(readability-trailing-comma): glibc's transparent-union sockaddr argument trips the check */
         perror("bind");
         abort();
     }
@@ -228,7 +227,7 @@ void proactor_run(proactor_t *p)
             p->ring.enter_flags ? ", registered ring" : "",
             p->ring.fixed_files ? ", fixed files" : "");
 
-    struct __kernel_timespec wait_at_most = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };   /* so an idle worker notices *stop */
+    struct __kernel_timespec wait_at_most = { .tv_sec = 0, .tv_nsec = 100000000L };   /* 100 ms: so an idle worker notices *stop */
     while (!*p->stop) {
         run_ready(p);
         rearm_starved(p);
