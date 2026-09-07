@@ -28,7 +28,9 @@ with `ioma_text`, `ioma_json`, `ioma_bytes` or `ioma_textf`. Read a request head
 `ioma_header_get`, add a response header with `ioma_header_set`. Register endpoints with
 `ioma_route` (exact method and path), optional middleware with `ioma_use`, a fallback with
 `ioma_default`, then call `ioma_run` with a worker count (zero means one per core) and a port.
-`playground/hello/main.c` is a complete example.
+`playground/hello/main.c` is a complete example. Handlers can also live in another language:
+`ioma_route_ffi` takes a plain C function pointer and calls it on the worker's own thread stack, and
+`playground/kotlin` drives libioma from Kotlin/JVM through Panama that way.
 
 ## Tests and limits
 

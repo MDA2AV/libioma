@@ -92,7 +92,7 @@ static void wake_reader(conn_t *c)
     coro_t *w = c->waiter;
     if (w) {
         c->waiter = NULL;
-        coro_resume(w);
+        run_coro(c->p, w);
     }
 }
 
@@ -285,4 +285,12 @@ int await_send(conn_t *c, const void *buf, size_t len)
         left -= (size_t)n;
     }
     return (int)len;
+}
+
+/* Hand fn(arg) to the loop and park; run_coro executes it on the thread stack and resumes us. */
+void await_call(proactor_t *p, void (*fn)(void *), void *arg)
+{
+    p->call_fn  = fn;
+    p->call_arg = arg;
+    coro_yield();
 }
