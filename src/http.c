@@ -19,8 +19,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <string.h>
-#include <strings.h>
 
 #ifndef IOMA_REQ_CAP
 #define IOMA_REQ_CAP   16384        /* request line + headers + body must fit here; else 413/431 */
@@ -34,6 +34,14 @@
 
 ioma_response ioma__dispatch(ioma_request *req);   /* router.c */
 
+/* serve() hands req.headers to picohttpparser as its header array: the two structs must match. */
+_Static_assert(sizeof(ioma_header) == sizeof(struct phr_header), "ioma_header must mirror phr_header");
+_Static_assert(offsetof(ioma_header, name)      == offsetof(struct phr_header, name) &&
+               offsetof(ioma_header, name_len)  == offsetof(struct phr_header, name_len) &&
+               offsetof(ioma_header, value)     == offsetof(struct phr_header, value) &&
+               offsetof(ioma_header, value_len) == offsetof(struct phr_header, value_len),
+               "ioma_header must mirror phr_header");
+
 /* ── small parsers ─────────────────────────────────────────────────────────────────────── */
 
 static size_t parse_size(const char *s, size_t n)
@@ -44,6 +52,22 @@ static size_t parse_size(const char *s, size_t n)
         v = v * 10 + (size_t)(s[i] - '0');
     }
     return v;
+}
+
+/* Case-insensitive equality of two ASCII slices, folding only A-Z. No libc call and no locale:
+ * this runs several times per request (header lookups, Connection tokens), so it stays a length
+ * test plus a tight byte loop. */
+static inline unsigned char lower_ascii(unsigned char a)
+{
+    return (unsigned)(a - 'A') < 26u ? (unsigned char)(a | 0x20) : a;
+}
+
+static inline bool eq_ci(const char *a, size_t an, const char *b, size_t bn)
+{
+    if (an != bn) return false;
+    for (size_t i = 0; i < an; i++)
+        if (lower_ascii((unsigned char)a[i]) != lower_ascii((unsigned char)b[i])) return false;
+    return true;
 }
 
 /* Is `tok` one of the comma-separated tokens in the header value [s, s+n)? Case-insensitive. */
@@ -57,7 +81,7 @@ static bool token_present_ci(const char *s, size_t n, const char *tok)
         while (j < n && s[j] != ',') j++;
         size_t e = j;
         while (e > i && (s[e - 1] == ' ' || s[e - 1] == '\t')) e--;
-        if (e - i == tl && strncasecmp(s + i, tok, tl) == 0) return true;
+        if (eq_ci(s + i, e - i, tok, tl)) return true;
         i = j + 1;
     }
     return false;
@@ -74,8 +98,7 @@ const char *ioma_header_get(const ioma_request *req, const char *name, size_t *v
 {
     size_t nl = strlen(name);
     for (size_t i = 0; i < req->n_headers; i++) {
-        if (req->headers[i].name_len == nl &&
-            strncasecmp(req->headers[i].name, name, nl) == 0) {
+        if (eq_ci(req->headers[i].name, req->headers[i].name_len, name, nl)) {
             if (value_len) *value_len = req->headers[i].value_len;
             return req->headers[i].value;
         }
@@ -86,12 +109,15 @@ const char *ioma_header_get(const ioma_request *req, const char *name, size_t *v
 
 ioma_response ioma_bytes(int status, const char *content_type, const void *body, size_t body_len)
 {
+    /* Set the fields; don't zero the struct. extra[] is the bulk of it and is only ever read up
+     * to n_extra, so a ~500-byte memset per response would be pure waste on the hot path. */
     ioma_response r;
-    memset(&r, 0, sizeof r);
-    r.status = status;
+    r.status       = status;
     r.content_type = content_type;
-    r.body = body;
-    r.body_len = body_len;
+    r.body         = body;
+    r.body_len     = body_len;
+    r.n_extra      = 0;
+    r.close        = false;
     return r;
 }
 
@@ -151,11 +177,10 @@ const char *ioma_reason(int status)
 
 /* ── response writing (suspends on the send) ───────────────────────────────────────────── */
 
-static bool compute_keep_alive(const ioma_request *req)
+/* From the version and the Connection header value the serve loop already picked out. */
+static bool keep_alive_from(int minor_version, const char *cv, size_t vl)
 {
-    bool ka = req->minor_version >= 1;                 /* HTTP/1.1 defaults keep-alive */
-    size_t vl;
-    const char *cv = ioma_header_get(req, "connection", &vl);
+    bool ka = minor_version >= 1;                      /* HTTP/1.1 defaults keep-alive */
     if (cv) {
         if      (token_present_ci(cv, vl, "close"))      ka = false;
         else if (token_present_ci(cv, vl, "keep-alive")) ka = true;
@@ -262,10 +287,14 @@ static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
     p += put_uint(p, res->body_len);
     PUTC("\r\n");
 
-    if (req->keep_alive && !res->close)
-        PUTC("Connection: keep-alive\r\n");
-    else
+    /* Connection: only when it says something. HTTP/1.1 is persistent by default, so a kept-alive
+     * 1.1 reply carries no header (24 bytes fewer on every response); a 1.0 client that asked for
+     * keep-alive is told it got it; a closing reply always says close. */
+    bool ka = req->keep_alive && !res->close;
+    if (!ka)
         PUTC("Connection: close\r\n");
+    else if (req->minor_version == 0)
+        PUTC("Connection: keep-alive\r\n");
 
     for (int i = 0; i < res->n_extra; i++) {
         PUT(res->extra[i].name, res->extra[i].name_len);
@@ -300,14 +329,18 @@ static void serve(conn_t *c)
     size_t have = 0, last_len = 0;
 
     for (;;) {
-        struct phr_header phr[IOMA_MAX_HEADERS];
+        ioma_request req;
         size_t nphr = IOMA_MAX_HEADERS;
-        const char *method, *target;
-        size_t ml, tl;
-        int minor;
+        const char *method = NULL, *target = NULL;
+        size_t ml = 0, tl = 0;
+        int minor = 0;
 
-        int pret = phr_parse_request(buf, have, &method, &ml, &target, &tl,
-                                     &minor, phr, &nphr, last_len);
+        /* picohttpparser writes the headers straight into req.headers - same four fields in the
+         * same order, checked at compile time - so there is no copy loop and no second array.
+         * With nothing buffered (the usual state right after a reply) skip the parse and read. */
+        int pret = have ? phr_parse_request(buf, have, &method, &ml, &target, &tl, &minor,
+                                            (struct phr_header *)req.headers, &nphr, last_len)
+                        : -2;
 
         if (pret == -2) {                                  /* headers not complete yet */
             if (have == IOMA_REQ_CAP) {
@@ -327,12 +360,10 @@ static void serve(conn_t *c)
 
         size_t header_len = (size_t)pret;
 
-        /* Init the scalar fields explicitly. The 2 KB headers[] array is filled up to n_headers
-         * below and never read past it, so zeroing the whole struct per request is wasted work. */
-        ioma_request req;
         req.method = method;  req.method_len = ml;
         req.target = target;  req.target_len = tl;
         req.minor_version = minor;
+        req.n_headers = nphr;
 
         const char *q = memchr(target, '?', tl);
         if (q) {
@@ -343,18 +374,30 @@ static void serve(conn_t *c)
             req.query = NULL;      req.query_len = 0;
         }
 
+        /* One pass picks out the three headers the framework itself needs. The switch on the
+         * name length rejects nearly every header before a single byte is compared. */
+        const char *te = NULL, *cl = NULL, *cv = NULL;
+        size_t tel = 0, cll = 0, cvl = 0;
         for (size_t i = 0; i < nphr; i++) {
-            req.headers[i].name = phr[i].name;   req.headers[i].name_len = phr[i].name_len;
-            req.headers[i].value = phr[i].value; req.headers[i].value_len = phr[i].value_len;
+            const ioma_header *h = &req.headers[i];
+            switch (h->name_len) {
+            case 14:
+                if (eq_ci(h->name, 14, "content-length", 14))    { cl = h->value; cll = h->value_len; }
+                break;
+            case 17:
+                if (eq_ci(h->name, 17, "transfer-encoding", 17)) { te = h->value; tel = h->value_len; }
+                break;
+            case 10:
+                if (eq_ci(h->name, 10, "connection", 10))        { cv = h->value; cvl = h->value_len; }
+                break;
+            default:
+                break;
+            }
         }
-        req.n_headers = nphr;
 
         /* Body: chunked (decoded in place) or Content-Length. leftover_* is what to carry to the
          * next request on a kept-alive connection (pipelining). */
         size_t leftover_off = 0, leftover_len = 0;
-
-        size_t tel;
-        const char *te = ioma_header_get(&req, "transfer-encoding", &tel);
 
         if (te && token_present_ci(te, tel, "chunked")) {
             /* Decode the chunked body in place at buf+header_len, reading more as needed. phr keeps
@@ -388,8 +431,6 @@ static void serve(conn_t *c)
             /* Bytes pipelined after a chunked body are not carried (the common clients don't do
              * it); a kept-alive connection just reads the next request fresh. */
         } else {
-            size_t cll;
-            const char *cl = ioma_header_get(&req, "content-length", &cll);
             size_t content_length = cl ? parse_size(cl, cll) : 0;
 
             size_t total = header_len + content_length;
@@ -409,7 +450,7 @@ static void serve(conn_t *c)
             leftover_len = have - total;
         }
 
-        req.keep_alive = compute_keep_alive(&req);
+        req.keep_alive = keep_alive_from(minor, cv, cvl);
         req.conn = c;
         req.scratch = scratch;
         req.scratch_cap = IOMA_SCRATCH_CAP;

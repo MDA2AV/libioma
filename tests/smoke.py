@@ -94,7 +94,7 @@ good = True
 for _ in range(5):
     s.send(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
     st, hd, body = read_response(s)
-    good &= st == 200 and body == b"ok" and hd.get("connection") == "keep-alive"
+    good &= st == 200 and body == b"ok" and hd.get("connection") != "close"
 s.close()
 results.append(check("keep-alive: 5 requests, one connection", good))
 

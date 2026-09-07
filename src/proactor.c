@@ -348,9 +348,7 @@ static void on_accept(proactor_t *p, int res, unsigned flags)
 {
     trace("[w%d] accept res=%d more=%d\n", p->id, res, !!(flags & IORING_CQE_F_MORE));
     if (res >= 0) {
-        int one = 1;
-        setsockopt(res, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);   /* doesn't inherit */
-        conn_t *c = conn_new(p, res);
+        conn_t *c = conn_new(p, res);           /* TCP_NODELAY came with the listener */
         arm_recv(p, c);
         proactor_spawn(p, handler_main, c);
         p->accepted++;
@@ -481,6 +479,9 @@ static int listener_open(uint16_t port)
     int one = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof one);   /* one listener per worker */
+    /* On Linux accepted sockets inherit TCP_NODELAY from the listener, so set it once here rather
+     * than paying a setsockopt syscall on every accept. */
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);

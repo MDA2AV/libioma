@@ -13,8 +13,8 @@
 #endif
 
 typedef struct {
-    const char  *method;
-    const char  *path;
+    const char  *method; size_t method_len;     /* lengths fixed at registration, so a lookup */
+    const char  *path;   size_t path_len;       /* is length tests first, memcmp only on hits */
     ioma_handler fn;
 } route_t;
 
@@ -43,7 +43,8 @@ void ioma_route(const char *method, const char *path, const ioma_handler fn)
         fprintf(stderr, "ioma: route table full (%d), dropping %s %s\n", IOMA_MAX_ROUTES, method, path);
         return;
     }
-    g_routes[g_nroutes++] = (route_t){ .method = method, .path = path, .fn = fn };
+    g_routes[g_nroutes++] = (route_t){ .method = method, .method_len = strlen(method),
+                                       .path = path,     .path_len = strlen(path), .fn = fn };
 }
 
 void ioma_default(const ioma_handler fn)
@@ -62,9 +63,11 @@ static ioma_response not_found(ioma_request *req)
 ioma_handler ioma__match(const ioma_request *req)
 {
     for (int i = 0; i < g_nroutes; i++) {
-        if (ioma_slice_eq(req->method, req->method_len, g_routes[i].method) &&
-            ioma_slice_eq(req->path,   req->path_len,   g_routes[i].path)) {
-            return g_routes[i].fn;
+        const route_t *r = &g_routes[i];
+        if (req->path_len == r->path_len && req->method_len == r->method_len &&
+            memcmp(req->path, r->path, r->path_len) == 0 &&
+            memcmp(req->method, r->method, r->method_len) == 0) {
+            return r->fn;
         }
     }
     return g_fallback ? g_fallback : not_found;

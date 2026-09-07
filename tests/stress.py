@@ -18,7 +18,7 @@ import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 REQ = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"
-OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: keep-alive\r\nServer: ioma\r\n\r\nok"
+OK = b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nServer: ioma\r\n\r\nok"
 
 
 def connect(timeout=5):

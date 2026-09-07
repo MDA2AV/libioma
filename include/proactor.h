@@ -26,7 +26,7 @@
 #define BUF_COUNT    4096                 /* provided recv buffers per worker, power of two     */
 #endif
 #ifndef BUF_SIZE
-#define BUF_SIZE     4096                 /* bytes per recv buffer                              */
+#define BUF_SIZE     2048                 /* bytes per recv buffer (a request rarely needs more) */
 #endif
 #ifndef RX_QUEUE
 #define RX_QUEUE     64                   /* undelivered slices one connection may hold, pow 2  */
