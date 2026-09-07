@@ -8,6 +8,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t g_stop;
@@ -41,6 +42,17 @@ static int cpu_count(void)
     return n > 0 ? (int)n : 1;
 }
 
+/* Lift the soft fd limit to the hard one: open connections and the registered file table are
+ * both checked against it, and the default soft limit is often 1024. */
+static void raise_nofile(void)
+{
+    struct rlimit rl;
+    if (getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < rl.rlim_max) {
+        rl.rlim_cur = rl.rlim_max;
+        setrlimit(RLIMIT_NOFILE, &rl);
+    }
+}
+
 /* Start the workers (workers <= 0: one per available core) and block until a stop signal. */
 int ioma_run(int workers, int port)
 {
@@ -51,6 +63,7 @@ int ioma_run(int workers, int port)
         return 2;
     }
 
+    raise_nofile();
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);

@@ -12,8 +12,27 @@
 #include <stdint.h>
 #include <linux/io_uring.h>
 
+/* Names for the newer bits, in case the build box's headers predate them (the kernel decides at
+ * runtime; unsupported features fall back). */
+#ifndef IORING_REGISTER_RING_FDS
+#define IORING_REGISTER_RING_FDS      20
+#define IORING_UNREGISTER_RING_FDS    21
+#endif
+#ifndef IORING_ENTER_REGISTERED_RING
+#define IORING_ENTER_REGISTERED_RING  (1U << 4)
+#endif
+#ifndef IORING_FILE_INDEX_ALLOC
+#define IORING_FILE_INDEX_ALLOC       (~0U)
+#endif
+#ifndef IORING_RSRC_REGISTER_SPARSE
+#define IORING_RSRC_REGISTER_SPARSE   (1U << 0)
+#endif
+
 struct uring {
-    int fd;
+    int      fd;
+    int      enter_fd;                 /* fd, or the registered-ring index (see enter_flags) */
+    unsigned enter_flags;              /* 0, or IORING_ENTER_REGISTERED_RING                 */
+    bool     fixed_files;              /* a sparse registered file table exists              */
 
     /* submission side */
     unsigned *sq_head;                 /* kernel-written consumer index            */
@@ -49,6 +68,13 @@ int  uring_submit(struct uring *r);
 int  uring_submit_wait(struct uring *r, unsigned wait_nr, struct __kernel_timespec *ts);
 
 int  uring_register(struct uring *r, unsigned opcode, void *arg, unsigned nr_args);
+
+/* Register the ring's own fd so every enter skips an fd lookup. 0 or -errno (kernel 5.18+). */
+int  uring_register_ring_fd(struct uring *r);
+
+/* Create an empty registered file table of n slots, so sockets can live in slots instead of fds:
+ * accept lands them there, recv/send/close address them by index. 0 or -errno (kernel 5.19+). */
+int  uring_register_files_sparse(struct uring *r, unsigned n);
 
 /* Batched CQ drain: read the tail once, index the batch, publish the head once. */
 unsigned uring_cq_ready(struct uring *r);

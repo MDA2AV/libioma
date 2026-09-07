@@ -12,6 +12,7 @@
 #include <pthread.h>
 #include <sched.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -25,6 +26,8 @@ static void arm_accept(proactor_t *p)
     sqe->fd        = p->listen_fd;
     sqe->ioprio    = IORING_ACCEPT_MULTISHOT;
     sqe->user_data = UD(p, TAG_ACCEPT);
+    if (p->ring.fixed_files)
+        sqe->file_index = IORING_FILE_INDEX_ALLOC;   /* land each socket in a free slot, not an fd */
 }
 
 /* An accept CQE: wrap the new fd in a conn, arm its recv, spawn its handler coroutine. */
@@ -170,6 +173,17 @@ static void pin_to(int idx)
     }
 }
 
+/* How many registered file slots to ask for: FIXED_FILES, capped by the fd limit the kernel
+ * checks the table against. 0 disables the feature. */
+static unsigned fixed_slots(void)
+{
+    struct rlimit rl;
+    unsigned n = FIXED_FILES;
+    if (n && getrlimit(RLIMIT_NOFILE, &rl) == 0 && rl.rlim_cur < n)
+        n = (unsigned)rl.rlim_cur;
+    return n;
+}
+
 /* The worker's whole life: setup, the loop until *stop, teardown in dependency order. */
 void proactor_run(proactor_t *p)
 {
@@ -181,12 +195,20 @@ void proactor_run(proactor_t *p)
         fprintf(stderr, "[w%d] io_uring_setup: %s\n", p->id, strerror(-rc));
         abort();
     }
+#ifndef NO_REG_RING
+    uring_register_ring_fd(&p->ring);                /* optional: enter skips an fd lookup      */
+#endif
+    unsigned slots = fixed_slots();                  /* optional: sockets live in a file table  */
+    if (slots)
+        uring_register_files_sparse(&p->ring, slots);
     ioma__bufring_init(p);
     p->listen_fd = listener_open(p->port);
     arm_accept(p);
-    fprintf(stderr, "[w%d] listening on 0.0.0.0:%u (cpu %d, %u x %u B recv buffers, ring %u%s)\n",
+    fprintf(stderr, "[w%d] listening on 0.0.0.0:%u (cpu %d, %u x %u B recv buffers, ring %u%s%s%s)\n",
             p->id, p->port, p->cpu, BUF_COUNT, BUF_SIZE, p->ring.sq_entries,
-            p->ring.has_sq_array ? "" : ", no sqarray");
+            p->ring.has_sq_array ? "" : ", no sqarray",
+            p->ring.enter_flags ? ", registered ring" : "",
+            p->ring.fixed_files ? ", fixed files" : "");
 
     struct __kernel_timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };   /* stop check */
     while (!*p->stop) {

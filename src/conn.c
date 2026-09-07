@@ -79,7 +79,7 @@ void ioma__arm_recv(proactor_t *p, conn_t *c)
     struct io_uring_sqe *sqe = get_sqe(p);
     sqe->opcode    = IORING_OP_RECV;
     sqe->fd        = c->fd;
-    sqe->flags     = IOSQE_BUFFER_SELECT;
+    sqe->flags     = IOSQE_BUFFER_SELECT | (p->ring.fixed_files ? IOSQE_FIXED_FILE : 0);
     sqe->ioprio    = IORING_RECV_MULTISHOT;
     sqe->buf_group = BGID;
     sqe->user_data = UD(c, TAG_RECV);
@@ -189,6 +189,20 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags)
 
 /* ── close ─────────────────────────────────────────────────────────────────────────────── */
 
+/* Close the socket: a plain close, or under fixed files a CLOSE SQE on its slot, which rides the
+ * next enter with the rest of the batch instead of costing a syscall here. */
+static void close_socket(proactor_t *p, int fd)
+{
+    if (!p->ring.fixed_files) {
+        close(fd);
+        return;
+    }
+    struct io_uring_sqe *sqe = get_sqe(p);
+    sqe->opcode     = IORING_OP_CLOSE;
+    sqe->file_index = (uint32_t)fd + 1;              /* slot + 1; 0 would mean "a real fd" */
+    sqe->user_data  = TAG_IGNORE;
+}
+
 /* Runs once when the handler returns: cancel the recv, hand unread buffers back, close the fd,
  * drop the handler's ref. The recv's own ref drops on its terminal CQE. */
 static void conn_close(conn_t *c)
@@ -208,7 +222,7 @@ static void conn_close(conn_t *c)
     while (c->rx_head != c->rx_tail)
         return_buf(p, c->rx[c->rx_head++ & RX_MASK].bid);
 
-    close(c->fd);
+    close_socket(p, c->fd);
     conn_unref(c);
 }
 
@@ -258,6 +272,7 @@ int await_send(conn_t *c, const void *buf, size_t len)
         struct io_uring_sqe *sqe = get_sqe(c->p);
         sqe->opcode    = IORING_OP_SEND;
         sqe->fd        = c->fd;
+        sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
         sqe->addr      = (uint64_t)(uintptr_t)cur;
         sqe->len       = left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
         sqe->msg_flags = MSG_NOSIGNAL | MSG_WAITALL;  /* no SIGPIPE; the kernel finishes short sends */

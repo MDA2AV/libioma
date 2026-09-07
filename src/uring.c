@@ -57,6 +57,7 @@ int uring_init(struct uring *r, unsigned entries)
         return -ENOSYS;
     }
     r->fd = fd;
+    r->enter_fd = fd;
     r->sq_entries = p.sq_entries;
 
     /* one mapping holds both rings; size it for whichever ends later */
@@ -95,9 +96,44 @@ int uring_init(struct uring *r, unsigned entries)
     return 0;
 }
 
-/* Unmap and close the ring; the kernel cancels anything still in flight. */
+/* Register the ring fd in the task's ring table; enter then uses the index and skips the lookup. */
+int uring_register_ring_fd(struct uring *r)
+{
+    struct io_uring_rsrc_update up;
+    memset(&up, 0, sizeof up);
+    up.offset = (uint32_t)-1;                          /* any free index */
+    up.data   = (uint64_t)r->fd;
+    int rc = uring_register(r, IORING_REGISTER_RING_FDS, &up, 1);
+    if (rc < 0)
+        return rc;
+    r->enter_fd    = (int)up.offset;
+    r->enter_flags = IORING_ENTER_REGISTERED_RING;
+    return 0;
+}
+
+/* A sparse file table: n empty slots the kernel fills on direct accept. */
+int uring_register_files_sparse(struct uring *r, unsigned n)
+{
+    struct io_uring_rsrc_register reg;
+    memset(&reg, 0, sizeof reg);
+    reg.nr    = n;
+    reg.flags = IORING_RSRC_REGISTER_SPARSE;
+    int rc = uring_register(r, IORING_REGISTER_FILES2, &reg, sizeof reg);
+    if (rc < 0)
+        return rc;
+    r->fixed_files = true;
+    return 0;
+}
+
+/* Unmap and close the ring; the kernel cancels anything still in flight and drops the tables. */
 void uring_exit(struct uring *r)
 {
+    if (r->enter_flags & IORING_ENTER_REGISTERED_RING) {
+        struct io_uring_rsrc_update up;
+        memset(&up, 0, sizeof up);
+        up.offset = (uint32_t)r->enter_fd;
+        uring_register(r, IORING_UNREGISTER_RING_FDS, &up, 1);
+    }
     if (r->sqe_mem)  munmap(r->sqe_mem, r->sqe_bytes);
     if (r->ring_mem) munmap(r->ring_mem, r->ring_bytes);
     if (r->fd > 0)   close(r->fd);
@@ -135,7 +171,7 @@ static int flush_and_enter(struct uring *r, unsigned wait_nr, unsigned flags,
 
     if (to_submit == 0 && wait_nr == 0 && !(flags & IORING_ENTER_GETEVENTS))
         return 0;
-    return sys_enter(r->fd, to_submit, wait_nr, flags, arg, argsz);
+    return sys_enter(r->enter_fd, to_submit, wait_nr, flags | r->enter_flags, arg, argsz);
 }
 
 /* Submit everything claimed; never waits. */

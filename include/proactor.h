@@ -34,6 +34,9 @@
 #ifndef STACK_SIZE
 #define STACK_SIZE   (64 * 1024)          /* per coroutine, plus a guard page                   */
 #endif
+#ifndef FIXED_FILES
+#define FIXED_FILES  16384                /* registered file slots per worker; 0 disables       */
+#endif
 
 typedef struct proactor proactor_t;
 typedef struct conn     conn_t;
@@ -53,7 +56,7 @@ enum recv_state {
 };
 
 struct conn {
-    int             fd;
+    int             fd;                   /* the socket, or its file slot under fixed files    */
     proactor_t     *p;
     coro_t         *waiter;               /* coroutine parked in await_recv, or NULL           */
     struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
