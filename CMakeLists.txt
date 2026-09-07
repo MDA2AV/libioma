@@ -17,7 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Release, Debug, RelWithDebInfo, ..." FORCE)
 endif()
-set(CMAKE_C_FLAGS_RELEASE "-O2 -g")
+set(CMAKE_C_FLAGS_RELEASE "-O3 -g")
 
 find_package(Threads REQUIRED)
 include(GNUInstallDirs)

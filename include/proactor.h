@@ -81,6 +81,7 @@ struct proactor {
     uint8_t                  *slab;       /* BUF_COUNT x BUF_SIZE                              */
     unsigned                  buf_tail;   /* local tail, published to buf_ring->tail           */
     bool                      buffers_returned;   /* since the last starved sweep              */
+    bool                      buf_dirty;          /* staged buffer returns awaiting one publish */
     conn_t                  **starved;    /* connections parked on -ENOBUFS                    */
     unsigned                  nstarved, cap_starved;
     coro_t                   *ready_head, *ready_tail;   /* spawned, not yet started           */

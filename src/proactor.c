@@ -28,7 +28,13 @@
  * point at is at least 8-byte aligned). ioxide packs a kind byte, a generation and an fd and
  * looks the connection up in a table; here the coroutine's own stack frame, or the heap
  * connection a multishot belongs to, is the key. */
-enum { TAG_OP = 0, TAG_RECV = 1, TAG_ACCEPT = 2, TAG_IGNORE = 3 };
+enum {
+    TAG_OP = 0,
+    TAG_RECV = 1,
+    TAG_ACCEPT = 2,
+    TAG_IGNORE = 3
+};
+
 #define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))
 #define UD_TAG(ud)   ((unsigned)((ud) & 7))
@@ -125,8 +131,10 @@ static void return_buf(proactor_t *p, uint16_t bid)
     b->len  = BUF_SIZE;
     b->bid  = bid;
     p->buf_tail++;
-    __atomic_store_n(&p->buf_ring->tail, (uint16_t)p->buf_tail, __ATOMIC_RELEASE);
+    /* Stage only; the loop publishes the ring tail once per batch (one atomic release for many
+     * returns) instead of once per request - it also stops the kernel re-reading a hot tail. */
     p->buffers_returned = true;                  /* lets the loop re-arm starved recvs */
+    p->buf_dirty = true;
 }
 
 /* ── connections ───────────────────────────────────────────────────────────────────────── */
@@ -543,6 +551,11 @@ void proactor_run(proactor_t *p)
     while (!*p->stop) {
         run_ready(p);
         rearm_starved(p);
+
+        if (p->buf_dirty) {                                  /* publish staged buffer returns once, before the enter */
+            __atomic_store_n(&p->buf_ring->tail, (uint16_t)p->buf_tail, __ATOMIC_RELEASE);
+            p->buf_dirty = false;
+        }
 
         rc = uring_submit_wait(&p->ring, 1, &ts);            /* one syscall per batch */
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {

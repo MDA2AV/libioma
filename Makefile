@@ -9,7 +9,7 @@
 
 CC      ?= gcc
 AR      ?= ar
-CFLAGS  ?= -O2 -g
+CFLAGS  ?= -O3 -g
 WARN    := -Wall -Wextra -std=gnu11
 CPP     := -Iinclude -Ithird_party/picohttpparser
 PTHREAD := -pthread
