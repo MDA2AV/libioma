@@ -96,7 +96,7 @@ void ioma_default(const ioma_handler fn)
 /* The built-in fallback: a plain 404. */
 static void not_found(ioma_ctx *c)
 {
-    c->status = 404;
+    c->res.status = 404;
     ioma_text(c, "404 Not Found\n");
 }
 

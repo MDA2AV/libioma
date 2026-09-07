@@ -115,35 +115,29 @@ size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *ar
 /* Add a header to the reply. false once the head is on the wire, or when the table is full. */
 bool ioma_header(ioma_ctx *c, const char *name, const char *value)
 {
-    if (c->head_sent || c->n_headers == IOMA_MAX_RESP_HEADERS)
+    ioma_response *r = &c->res;
+    if (r->head_sent || r->n_headers == IOMA_MAX_RESP_HEADERS)
         return false;
-    c->headers[c->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
+    r->headers[r->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
     return true;
 }
 
-/* Set the content type from a C string (a slice can be assigned to c->content_type directly). */
+/* Set the content type from a C string (a slice can be assigned to res.content_type directly). */
 void ioma_content_type(ioma_ctx *c, const char *type)
 {
-    c->content_type = (ioma_slice){ type, strlen(type) };
+    c->res.content_type = (ioma_slice){ type, strlen(type) };
 }
 
-/* Declare the body length, so a body larger than the buffer streams with Content-Length. */
+/* Declare the body length, so a body larger than the slab streams with Content-Length. */
 void ioma_content_length(ioma_ctx *c, size_t n)
 {
-    c->content_length = n;
-    c->has_length     = true;
+    c->res.content_length = n;
+    c->res.has_length     = true;
 }
 
 /* Write a C string. */
 int ioma_text(ioma_ctx *c, const char *s)
 {
-    return ioma_write(c, s, strlen(s));
-}
-
-/* Set application/json and write the string. */
-int ioma_json(ioma_ctx *c, const char *s)
-{
-    ioma_content_type(c, "application/json");
     return ioma_write(c, s, strlen(s));
 }
 

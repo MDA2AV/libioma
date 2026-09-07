@@ -167,13 +167,18 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
 
 1. **Parse** with picohttpparser, straight into `req.headers` (the layouts match, so there is no
    copy). `-2` means "incomplete": read more and parse again, so a request split at any byte works.
-2. **Body**: one pass over the headers picks out `Content-Length`, `Transfer-Encoding` and
-   `Connection` (a length test rejects almost every header before a byte is compared). A chunked
-   body is decoded in place by `phr_decode_chunked`, which also survives fragmentation.
+2. **Body, on demand**: one pass over the headers picks out `Content-Length`,
+   `Transfer-Encoding` and `Connection` (a length test rejects almost every header before a byte
+   is compared), but the body stays on the wire. `ioma_body` reads it whole into the request
+   buffer (a chunked one decoded in place by `phr_decode_chunked`, which survives fragmentation);
+   `ioma_body_read` streams it, any size, staging chunked bytes after the head and decoding in
+   place. Whatever a handler leaves unread is drained after it returns, up to a limit, past which
+   the reply says close.
 3. **Keep-alive**: HTTP/1.1 unless `Connection: close`; HTTP/1.0 only with `Connection: keep-alive`.
 4. **Dispatch** a context to the middleware chain and the route (section 5). The context holds
-   the request, the reply being shaped (status, content type, headers) and a body sink: an 8 KB
-   buffer with room reserved in front of it for the head.
+   the request and the response; the response holds the reply being shaped (status, content
+   type, headers) and the write slab: an 8 KB buffer with room reserved in front of it for the
+   head.
 5. **Write**: the handler calls `ioma_write` / `ioma_printf`; bytes land in the buffer. If it
    fills, the framework sends what it has — head first, framed chunked on HTTP/1.1 or until close
    on HTTP/1.0 (or with a length the handler declared) — and the handler suspends on that send.

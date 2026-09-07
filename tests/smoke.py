@@ -187,5 +187,48 @@ for s in conns:
     s.close()
 results.append(check("200 concurrent connections answered", good))
 
+# ── the body is read on demand ──────────────────────────────────────────────────────────
+# a handler that ignores the body (here the 404 fallback) still leaves the connection in sync
+s = connect()
+s.send(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhelloGET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+st1, _, b1 = read_response(s)
+st2, _, b2 = read_response(s)
+s.close()
+results.append(check("unread body drained, pipelined next request served", st1 == 404 and st2 == 200 and b2 == b"ok"))
+
+# a 1 MB upload streamed through a 4 KB loop (the request buffer is 16 KB), then chunked
+hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+hc.request("POST", "/upload", body=b"x" * 1048576)
+r = hc.getresponse(); data = r.read()
+results.append(check("POST /upload 1 MB streamed in", r.status == 200 and data == b"1048576 bytes\n"))
+def gen():
+    for _ in range(64):
+        yield b"y" * 4096
+hc.request("POST", "/upload", body=gen(), encode_chunked=True)
+r = hc.getresponse(); data = r.read()
+results.append(check("POST /upload 256 KB chunked streamed in", r.status == 200 and data == b"262144 bytes\n"))
+hc.close()
+
+# a body too large to read whole is answered 413
+s = connect()
+s.send(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n" + b"z" * 100000)
+st, hd, body = read_response(s)
+s.close()
+results.append(check("ioma_body on a 100 KB body -> 413", st == 413))
+
+# an ignored body past the drain limit: the reply is served and says close
+s = connect()
+s.send(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 2097152\r\n\r\n")
+try:
+    s.sendall(b"w" * 2097152)
+except OSError:
+    pass
+try:
+    st, hd, body = read_response(s)
+except Exception:
+    st, hd, body = None, {}, b""
+s.close()
+results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+
 print("all passed" if all(results) else "FAILURES")
 sys.exit(0 if all(results) else 1)
