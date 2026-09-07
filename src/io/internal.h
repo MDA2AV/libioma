@@ -32,7 +32,12 @@
 /* ── completion routing ────────────────────────────────────────────────────────────────── */
 
 /* user_data is a pointer with a tag in its low three bits; everything pointed at is 8-aligned. */
-enum { TAG_OP = 0, TAG_RECV = 1, TAG_ACCEPT = 2, TAG_IGNORE = 3 };
+enum {
+    TAG_OP = 0,
+    TAG_RECV = 1,
+    TAG_ACCEPT = 2,
+    TAG_IGNORE = 3
+};
 
 #define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))
@@ -52,7 +57,7 @@ typedef struct op {
 struct io_uring_sqe *ioma__sqe(proactor_t *p);   /* claim an SQE; flushes without waiting if the SQ is full */
 
 /* bufring.c */
-void ioma__return_buf(proactor_t *p, uint16_t bid);   /* stage a buffer's return; published per batch  */
+void ioma__return_buf(proactor_t *p, uint16_t buf_id);   /* stage a buffer's return; published per batch  */
 void ioma__bufring_publish(proactor_t *p);            /* publish staged returns: one atomic release    */
 void ioma__bufring_init(proactor_t *p);           /* bufring.c: map, register, fill          */
 void ioma__bufring_unregister(proactor_t *p);     /* bufring.c: before uring_exit            */

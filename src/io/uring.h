@@ -55,31 +55,31 @@ struct uring {
 };
 
 /* Create the ring on the calling thread (DEFER_TASKRUN ties the ring to it). 0 or -errno. */
-int  uring_init(struct uring *r, unsigned entries);
-void uring_exit(struct uring *r);
+int  uring_init(struct uring *ring, unsigned entries);
+void uring_exit(struct uring *ring);
 
 /* Claim the next SQE, zeroed. NULL when the SQ is full: submit, then try again. */
-struct io_uring_sqe *uring_get_sqe(struct uring *r);
+struct io_uring_sqe *uring_get_sqe(struct uring *ring);
 
 /* Publish claimed SQEs and enter. uring_submit never waits; uring_submit_wait blocks until
  * wait_nr completions are available or ts (may be NULL) expires. Return: submitted count or
  * -errno (-ETIME on timeout). Under DEFER_TASKRUN only the waiting form reaps completions. */
-int  uring_submit(struct uring *r);
-int  uring_submit_wait(struct uring *r, unsigned wait_nr, struct __kernel_timespec *ts);
+int  uring_submit(struct uring *ring);
+int  uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts);
 
-int  uring_register(struct uring *r, unsigned opcode, void *arg, unsigned nr_args);
+int  uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_args);
 
 /* Register the ring's own fd so every enter skips an fd lookup. 0 or -errno (kernel 5.18+). */
-int  uring_register_ring_fd(struct uring *r);
+int  uring_register_ring_fd(struct uring *ring);
 
 /* Create an empty registered file table of n slots, so sockets can live in slots instead of fds:
  * accept lands them there, recv/send/close address them by index. 0 or -errno (kernel 5.19+). */
-int  uring_register_files_sparse(struct uring *r, unsigned n);
+int  uring_register_files_sparse(struct uring *ring, unsigned n);
 
 /* Batched CQ drain: read the tail once, index the batch, publish the head once. */
-unsigned uring_cq_ready(struct uring *r);
-static inline struct io_uring_cqe *uring_cqe_at(struct uring *r, unsigned i)
+unsigned uring_cq_ready(struct uring *ring);
+static inline struct io_uring_cqe *uring_cqe_at(struct uring *ring, unsigned i)
 {
-    return &r->cqes[(*r->cq_head + i) & r->cq_mask];
+    return &ring->cqes[(*ring->cq_head + i) & ring->cq_mask];
 }
-void uring_cq_advance(struct uring *r, unsigned n);
+void uring_cq_advance(struct uring *ring, unsigned n);

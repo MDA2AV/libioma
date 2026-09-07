@@ -48,16 +48,16 @@ static void arm_accept(proactor_t *p)
 }
 
 /* An accept CQE: wrap the new fd in a conn, arm its recv, spawn its handler coroutine. */
-static void on_accept(proactor_t *p, int res, unsigned flags)
+static void on_accept(proactor_t *p, int result, unsigned flags)
 {
-    trace("[w%d] accept res=%d more=%d\n", p->id, res, !!(flags & IORING_CQE_F_MORE));
-    if (res >= 0) {
-        conn_t *c = ioma__conn_new(p, res);         /* TCP_NODELAY came with the listener */
+    trace("[w%d] accept result=%d more=%d\n", p->id, result, !!(flags & IORING_CQE_F_MORE));
+    if (result >= 0) {
+        conn_t *c = ioma__conn_new(p, result);         /* TCP_NODELAY came with the listener */
         ioma__arm_recv(p, c);
         proactor_spawn(p, ioma__conn_main, c);
         p->accepted++;
     } else {
-        fprintf(stderr, "[w%d] accept: %s\n", p->id, strerror(-res));
+        fprintf(stderr, "[w%d] accept: %s\n", p->id, strerror(-result));
     }
     if (!(flags & IORING_CQE_F_MORE))
         arm_accept(p);
@@ -215,6 +215,7 @@ void proactor_run(proactor_t *p)
 #ifndef NO_REG_RING
     uring_register_ring_fd(&p->ring);                /* optional: enter skips an fd lookup      */
 #endif
+
     unsigned slots = fixed_slots();                  /* optional: sockets live in a file table  */
     if (slots)
         uring_register_files_sparse(&p->ring, slots);
@@ -227,22 +228,22 @@ void proactor_run(proactor_t *p)
             p->ring.enter_flags ? ", registered ring" : "",
             p->ring.fixed_files ? ", fixed files" : "");
 
-    struct __kernel_timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };   /* stop check */
+    struct __kernel_timespec wait_at_most = { .tv_sec = 0, .tv_nsec = 100 * 1000 * 1000 };   /* so an idle worker notices *stop */
     while (!*p->stop) {
         run_ready(p);
         rearm_starved(p);
         ioma__bufring_publish(p);
 
-        rc = uring_submit_wait(&p->ring, 1, &ts);    /* one syscall per batch */
+        rc = uring_submit_wait(&p->ring, 1, &wait_at_most);    /* one syscall per batch */
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {
             fprintf(stderr, "[w%d] io_uring_enter: %s\n", p->id, strerror(-rc));
             break;
         }
 
-        unsigned n = uring_cq_ready(&p->ring);       /* read the tail once    */
-        for (unsigned i = 0; i < n; i++)
+        unsigned ready = uring_cq_ready(&p->ring);   /* read the tail once    */
+        for (unsigned i = 0; i < ready; i++)
             dispatch(p, uring_cqe_at(&p->ring, i));  /* handlers run in here  */
-        uring_cq_advance(&p->ring, n);               /* publish the head once */
+        uring_cq_advance(&p->ring, ready);           /* publish the head once */
     }
 
     fprintf(stderr, "[w%d] stopping: %llu accepted, %u still open\n",

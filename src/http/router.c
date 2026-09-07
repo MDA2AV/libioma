@@ -51,25 +51,25 @@ static int     g_nmw;
 /* ── routes ────────────────────────────────────────────────────────────────────────────── */
 
 /* Split a path with ':' segments into literals and captures. A path without ':' stays exact. */
-static void compile_pattern(route_t *r)
+static void compile_pattern(route_t *route)
 {
-    r->nseg = 0;
-    if (!memchr(r->path, ':', r->path_len))
+    route->nseg = 0;
+    if (!memchr(route->path, ':', route->path_len))
         return;
-    const char *p = r->path, *end = r->path + r->path_len;
+    const char *p = route->path, *end = route->path + route->path_len;
     while (p < end) {
         while (p < end && *p == '/') p++;
         if (p == end) break;
         const char *e = memchr(p, '/', (size_t)(end - p));
         if (!e) e = end;
-        if (r->nseg == IOMA_MAX_SEGMENTS) {
-            fprintf(stderr, "ioma: pattern %s has more than %d segments\n", r->path, IOMA_MAX_SEGMENTS);
-            r->nseg = 0;
+        if (route->nseg == IOMA_MAX_SEGMENTS) {
+            fprintf(stderr, "ioma: pattern %s has more than %d segments\n", route->path, IOMA_MAX_SEGMENTS);
+            route->nseg = 0;
             return;
         }
-        struct seg *s = &r->seg[r->nseg++];
-        s->capture = *p == ':';
-        s->s = s->capture ? (ioma_slice){ p + 1, (size_t)(e - p - 1) } : (ioma_slice){ p, (size_t)(e - p) };
+        struct seg *segment = &route->seg[route->nseg++];
+        segment->capture = *p == ':';
+        segment->s = segment->capture ? (ioma_slice){ p + 1, (size_t)(e - p - 1) } : (ioma_slice){ p, (size_t)(e - p) };
         p = e;
     }
 }
@@ -81,10 +81,10 @@ void ioma_route(const char *method, const char *path, const ioma_handler fn)
         fprintf(stderr, "ioma: route table full (%d), dropping %s %s\n", IOMA_MAX_ROUTES, method, path);
         return;
     }
-    route_t *r = &g_routes[g_nroutes++];
-    *r = (route_t){ .method = method, .method_len = strlen(method),
+    route_t *route = &g_routes[g_nroutes++];
+    *route = (route_t){ .method = method, .method_len = strlen(method),
                     .path = path,     .path_len = strlen(path), .fn = fn };
-    compile_pattern(r);
+    compile_pattern(route);
 }
 
 /* Replace the built-in 404 fallback. */
@@ -102,21 +102,21 @@ static void not_found(ioma_ctx *c)
 
 /* Walk the request path against a pattern segment by segment, recording the captures in
  * req->route_params. A trailing slash is tolerated; extra or missing segments are not. */
-static bool match_pattern(const route_t *r, ioma_request *req)
+static bool match_pattern(const route_t *route, ioma_request *req)
 {
     const char *p = req->path.p, *end = p + req->path.len;
-    size_t n = 0;
-    for (int i = 0; i < r->nseg; i++) {
+    size_t captured = 0;
+    for (int i = 0; i < route->nseg; i++) {
         while (p < end && *p == '/') p++;
         if (p == end)
             return false;                                    /* fewer segments than the pattern */
         const char *e = memchr(p, '/', (size_t)(end - p));
         if (!e) e = end;
         ioma_slice seg = { p, (size_t)(e - p) };
-        if (r->seg[i].capture) {
-            if (n < IOMA_MAX_ROUTE_PARAMS)
-                req->route_params[n++] = (ioma_kv){ r->seg[i].s, seg };
-        } else if (seg.len != r->seg[i].s.len || memcmp(seg.p, r->seg[i].s.p, seg.len) != 0) {
+        if (route->seg[i].capture) {
+            if (captured < IOMA_MAX_ROUTE_PARAMS)
+                req->route_params[captured++] = (ioma_kv){ route->seg[i].s, seg };
+        } else if (seg.len != route->seg[i].s.len || memcmp(seg.p, route->seg[i].s.p, seg.len) != 0) {
             return false;
         }
         p = e;
@@ -124,7 +124,7 @@ static bool match_pattern(const route_t *r, ioma_request *req)
     while (p < end && *p == '/') p++;
     if (p != end)
         return false;                                        /* more segments than the pattern */
-    req->n_route_params = n;
+    req->n_route_params = captured;
     return true;
 }
 
@@ -134,17 +134,17 @@ static const route_t *match(ioma_request *req)
 {
     req->n_route_params = 0;
     for (int i = 0; i < g_nroutes; i++) {
-        const route_t *r = &g_routes[i];
-        if (r->nseg == 0 && req->path.len == r->path_len && req->method.len == r->method_len &&
-            memcmp(req->path.p, r->path, r->path_len) == 0 &&
-            memcmp(req->method.p, r->method, r->method_len) == 0)
-            return r;
+        const route_t *route = &g_routes[i];
+        if (route->nseg == 0 && req->path.len == route->path_len && req->method.len == route->method_len &&
+            memcmp(req->path.p, route->path, route->path_len) == 0 &&
+            memcmp(req->method.p, route->method, route->method_len) == 0)
+            return route;
     }
     for (int i = 0; i < g_nroutes; i++) {
-        const route_t *r = &g_routes[i];
-        if (r->nseg && req->method.len == r->method_len &&
-            memcmp(req->method.p, r->method, r->method_len) == 0 && match_pattern(r, req))
-            return r;
+        const route_t *route = &g_routes[i];
+        if (route->nseg && req->method.len == route->method_len &&
+            memcmp(req->method.p, route->method, route->method_len) == 0 && match_pattern(route, req))
+            return route;
     }
     return &g_fallback_route;
 }
@@ -178,11 +178,11 @@ void ioma_next_run(ioma_ctx *c, ioma_next *next)
  * is a direct call. */
 void ioma__dispatch(ioma_ctx *c)
 {
-    const route_t *r = match(&c->req);
+    const route_t *route = match(&c->req);
     if (g_nmw == 0) {
-        r->fn(c);
+        route->fn(c);
         return;
     }
-    ioma_next next = { g_mws, g_nmw, 0, r->fn };
+    ioma_next next = { g_mws, g_nmw, 0, route->fn };
     ioma_next_run(c, &next);
 }

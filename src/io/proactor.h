@@ -46,7 +46,7 @@ typedef void (*handler_fn)(conn_t *c);
 struct rx_item {
     uint8_t *ptr;
     uint32_t len;
-    uint16_t bid;
+    uint16_t buf_id;
 };
 
 enum recv_state {

@@ -108,10 +108,10 @@ void ioma__arm_recv(proactor_t *p, conn_t *c)
 /* Resume the coroutine parked in await_recv, if there is one. It pops the queue itself. */
 static void wake_reader(conn_t *c)
 {
-    coro_t *w = c->waiter;
-    if (w) {
+    coro_t *waiter = c->waiter;
+    if (waiter) {
         c->waiter = NULL;
-        coro_resume(w);
+        coro_resume(waiter);
     }
 }
 
@@ -142,16 +142,16 @@ static void starved_remove(proactor_t *p, conn_t *c)
 
 /* A recv CQE: queue the data and wake the reader, or record the end of input and drop the recv's
  * ref. -ENOBUFS is not an error: the buffer group ran dry, so park and re-arm later. */
-void ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags)
+void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 {
     bool     more    = flags & IORING_CQE_F_MORE;
     bool     has_buf = flags & IORING_CQE_F_BUFFER;
-    uint16_t bid     = (uint16_t)(flags >> IORING_CQE_BUFFER_SHIFT);
+    uint16_t buf_id     = (uint16_t)(flags >> IORING_CQE_BUFFER_SHIFT);
 
-    trace("[w%d] recv fd=%d res=%d more=%d buf=%d bid=%u queued=%u state=%d closed=%d eof=%d\n",
-          p->id, c->fd, res, more, has_buf, bid, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
+    trace("[w%d] recv fd=%d result=%d more=%d buf=%d buf_id=%u queued=%u state=%d closed=%d eof=%d\n",
+          p->id, c->fd, result, more, has_buf, buf_id, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
 
-    if (res == -ENOBUFS) {
+    if (result == -ENOBUFS) {
         if (c->closed) {
             c->recv = RECV_DONE;
             conn_unref(c);
@@ -162,12 +162,12 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags)
         return;
     }
 
-    if (res <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
+    if (result <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
         if (has_buf)
-            ioma__return_buf(p, bid);
+            ioma__return_buf(p, buf_id);
         if (!c->eof) {
             c->eof = true;
-            c->err = res;
+            c->err = result;
         }
         c->recv = RECV_DONE;
         wake_reader(c);                              /* a parked await_recv returns 0 / -errno   */
@@ -176,11 +176,11 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags)
     }
 
     if (c->closed) {
-        ioma__return_buf(p, bid);                          /* the handler is gone; nobody will read it */
+        ioma__return_buf(p, buf_id);                          /* the handler is gone; nobody will read item */
     } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
         /* The handler is not draining. Rather than let one peer hoard the buffer group, end its
          * input: the next read sees -ENOBUFS. */
-        ioma__return_buf(p, bid);
+        ioma__return_buf(p, buf_id);
         if (!c->eof) {
             c->eof = true;
             c->err = -ENOBUFS;
@@ -189,10 +189,10 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags)
             submit_cancel(p, UD(c, TAG_RECV));
         wake_reader(c);
     } else {
-        struct rx_item *it = &c->rx[c->rx_tail++ & RX_MASK];
-        it->ptr = p->slab + (size_t)bid * BUF_SIZE;
-        it->len = (uint32_t)res;
-        it->bid = bid;
+        struct rx_item *item = &c->rx[c->rx_tail++ & RX_MASK];
+        item->ptr = p->slab + (size_t)buf_id * BUF_SIZE;
+        item->len = (uint32_t)result;
+        item->buf_id = buf_id;
         wake_reader(c);
     }
 
@@ -239,7 +239,7 @@ static void conn_close(conn_t *c)
         conn_unref(c);
     }
     while (c->rx_head != c->rx_tail)
-        ioma__return_buf(p, c->rx[c->rx_head++ & RX_MASK].bid);
+        ioma__return_buf(p, c->rx[c->rx_head++ & RX_MASK].buf_id);
 
     close_socket(p, c->fd);
     conn_unref(c);
@@ -263,13 +263,13 @@ int await_recv(conn_t *c, void *buf, size_t len)
         return -EINVAL;
     for (;;) {
         if (c->rx_head != c->rx_tail) {
-            struct rx_item *it = &c->rx[c->rx_head & RX_MASK];
-            size_t n = it->len < len ? it->len : len;
-            memcpy(buf, it->ptr, n);
-            it->ptr += n;
-            it->len -= (uint32_t)n;
-            if (it->len == 0) {
-                ioma__return_buf(c->p, it->bid);
+            struct rx_item *item = &c->rx[c->rx_head & RX_MASK];
+            size_t n = item->len < len ? item->len : len;
+            memcpy(buf, item->ptr, n);
+            item->ptr += n;
+            item->len -= (uint32_t)n;
+            if (item->len == 0) {
+                ioma__return_buf(c->p, item->buf_id);
                 c->rx_head++;
             }
             return (int)n;
@@ -284,7 +284,7 @@ int await_recv(conn_t *c, void *buf, size_t len)
 /* Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno. */
 int await_send(conn_t *c, const void *buf, size_t len)
 {
-    const uint8_t *cur  = buf;
+    const uint8_t *src  = buf;
     size_t         left = len;
     while (left > 0) {
         op_t op;
@@ -292,7 +292,7 @@ int await_send(conn_t *c, const void *buf, size_t len)
         sqe->opcode    = IORING_OP_SEND;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
-        sqe->addr      = (uint64_t)(uintptr_t)cur;
+        sqe->addr      = (uint64_t)(uintptr_t)src;
         sqe->len       = left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
         sqe->msg_flags = MSG_NOSIGNAL | MSG_WAITALL;  /* no SIGPIPE; the kernel finishes short sends */
         int n = await_op(sqe, &op);
@@ -300,7 +300,7 @@ int await_send(conn_t *c, const void *buf, size_t len)
             return n;
         if (n == 0)
             return -EPIPE;
-        cur  += n;
+        src  += n;
         left -= (size_t)n;
     }
     return (int)len;

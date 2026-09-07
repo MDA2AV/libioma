@@ -44,68 +44,68 @@ static int hexval(unsigned char c)
 
 /* Percent-decode [s, s+n) into dst ('+' becomes a space, a malformed %XX is kept as is).
  * Never longer than the input; returns the decoded length. */
-static size_t decode(const char *s, size_t n, char *dst)
+static size_t decode(const char *src, size_t len, char *dst)
 {
-    size_t o = 0;
-    for (size_t i = 0; i < n; i++) {
-        if (s[i] == '+') {
-            dst[o++] = ' ';
-        } else if (s[i] == '%' && i + 2 < n) {
-            int hi = hexval((unsigned char)s[i + 1]), lo = hexval((unsigned char)s[i + 2]);
+    size_t out = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (src[i] == '+') {
+            dst[out++] = ' ';
+        } else if (src[i] == '%' && i + 2 < len) {
+            int hi = hexval((unsigned char)src[i + 1]), lo = hexval((unsigned char)src[i + 2]);
             if (hi >= 0 && lo >= 0) {
-                dst[o++] = (char)(hi * 16 + lo);
+                dst[out++] = (char)(hi * 16 + lo);
                 i += 2;
             } else {
-                dst[o++] = '%';
+                dst[out++] = '%';
             }
         } else {
-            dst[o++] = s[i];
+            dst[out++] = src[i];
         }
     }
-    return o;
+    return out;
 }
 
 /* Decode a slice into the arena and point it there; false when it would not fit. */
-static bool decode_into(ioma_slice *v, char *arena, size_t arena_cap, size_t *used)
+static bool decode_into(ioma_slice *slice, char *arena, size_t arena_cap, size_t *used)
 {
-    if (*used + v->len > arena_cap)
+    if (*used + slice->len > arena_cap)
         return false;
-    size_t n = decode(v->p, v->len, arena + *used);
-    v->p    = arena + *used;
-    v->len  = n;
-    *used  += n;
+    size_t decoded = decode(slice->p, slice->len, arena + *used);
+    slice->p    = arena + *used;
+    slice->len  = decoded;
+    *used      += decoded;
     return true;
 }
 
 /* "k=v&k2=v2" into pairs; see http.h. One pass per pair finds '=' and '&' and notes whether
  * either side needs decoding, so the common undecoded pair is a view and costs a short scan. */
-size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *arena, size_t arena_cap)
+size_t ioma_kv_parse(const char *text, size_t len, ioma_kv *out, size_t cap, char *arena, size_t arena_cap)
 {
-    size_t used = 0, count = 0, i = 0;
-    while (i < n && count < cap) {
-        size_t j = i, eq = n;
-        bool   kdec = false, vdec = false;
-        for (; j < n && s[j] != '&'; j++) {
-            char c = s[j];
-            if (c == '=') {
-                if (eq == n) eq = j;
-            } else if (c == '%' || c == '+') {
-                if (eq == n) kdec = true; else vdec = true;
+    size_t used = 0, count = 0, start = 0;
+    while (start < len && count < cap) {
+        size_t end = start, eq_at = len;
+        bool   key_needs_decode = false, value_needs_decode = false;
+        for (; end < len && text[end] != '&'; end++) {
+            char ch = text[end];
+            if (ch == '=') {
+                if (eq_at == len) eq_at = end;
+            } else if (ch == '%' || ch == '+') {
+                if (eq_at == len) key_needs_decode = true; else value_needs_decode = true;
             }
         }
-        if (j > i) {                                       /* skip empty pairs ("&&") */
-            bool has_eq = eq < j;
-            ioma_slice k = { s + i, (has_eq ? eq : j) - i };
-            ioma_slice v = { has_eq ? s + eq + 1 : s + j, has_eq ? j - eq - 1 : 0 };
+        if (end > start) {                                 /* skip empty pairs ("&&") */
+            bool has_eq = eq_at < end;
+            ioma_slice key   = { text + start, (has_eq ? eq_at : end) - start };
+            ioma_slice value = { has_eq ? text + eq_at + 1 : text + end, has_eq ? end - eq_at - 1 : 0 };
             size_t mark = used;
-            bool   ok   = (!kdec || decode_into(&k, arena, arena_cap, &used)) &&
-                          (!vdec || decode_into(&v, arena, arena_cap, &used));
+            bool   ok   = (!key_needs_decode   || decode_into(&key,   arena, arena_cap, &used)) &&
+                          (!value_needs_decode || decode_into(&value, arena, arena_cap, &used));
             if (ok)
-                out[count++] = (ioma_kv){ k, v };
+                out[count++] = (ioma_kv){ key, value };
             else
                 used = mark;                               /* skip the pair, give its arena back */
         }
-        i = j + 1;
+        start = end + 1;
     }
     return count;
 }
