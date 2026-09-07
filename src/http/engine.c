@@ -388,9 +388,9 @@ static int finish(ioma_ctx *c)
     ioma_response *res = &c->res;
     if (res->failed)
         return -1;
-    if (!res->head_sent || res->len)
-        if (flush(c, true) < 0)
-            return -1;
+    bool pending = !res->head_sent || res->len;       /* nothing sent yet, or bytes still in the slab */
+    if (pending && flush(c, true) < 0)
+        return -1;
     if (res->chunked && await_send(STATE(c)->conn, "0\r\n\r\n", 5) < 0)
         return -1;
     return 0;
