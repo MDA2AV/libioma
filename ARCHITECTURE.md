@@ -194,7 +194,7 @@ and `head_sent` tells a handler when that moment has passed.
 Everything in a request is a slice (pointer + length) into the read buffer, valid only during
 the handler. Three key/value arrays hang off it, read directly: `headers` (names lower-cased once
 at parse time, so a plain compare works), `params` (the query, split and percent-decoded into a
-small per-request arena only when a value needs it, otherwise a zero-copy view), and `route` (the
+small per-request arena only when a value needs it, otherwise a zero-copy view), and `route_params` (the
 `:name` captures the router filled in, in pattern order). A `scratch` arena is there for building
 a body (`ioma_textf`).
 
@@ -205,7 +205,7 @@ a body (`ioma_textf`).
 `ioma_route(method, path, fn)` fills a table that is read-only once the workers start, so all
 workers share it with no lock. A path is exact (lengths first, `memcmp` only on a hit) or a
 pattern with `:name` segments (`/users/:id`), matched segment by segment with the captures written
-to `req->route`. Exact routes are tried first, so a static path beats a pattern. `ioma_default`
+to `req->route_params`. Exact routes are tried first, so a static path beats a pattern. `ioma_default`
 replaces the built-in 404.
 
 Middleware (`ioma_use`) is an onion: each layer receives the request and a `next`; it does work,

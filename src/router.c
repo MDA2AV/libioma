@@ -101,7 +101,7 @@ static void not_found(ioma_ctx *c)
 }
 
 /* Walk the request path against a pattern segment by segment, recording the captures in
- * req->route. A trailing slash is tolerated; extra or missing segments are not. */
+ * req->route_params. A trailing slash is tolerated; extra or missing segments are not. */
 static bool match_pattern(const route_t *r, ioma_request *req)
 {
     const char *p = req->path.p, *end = p + req->path.len;
@@ -115,7 +115,7 @@ static bool match_pattern(const route_t *r, ioma_request *req)
         ioma_slice seg = { p, (size_t)(e - p) };
         if (r->seg[i].capture) {
             if (n < IOMA_MAX_ROUTE_PARAMS)
-                req->route[n++] = (ioma_kv){ r->seg[i].s, seg };
+                req->route_params[n++] = (ioma_kv){ r->seg[i].s, seg };
         } else if (seg.len != r->seg[i].s.len || memcmp(seg.p, r->seg[i].s.p, seg.len) != 0) {
             return false;
         }
@@ -124,7 +124,7 @@ static bool match_pattern(const route_t *r, ioma_request *req)
     while (p < end && *p == '/') p++;
     if (p != end)
         return false;                                        /* more segments than the pattern */
-    req->n_route = n;
+    req->n_route_params = n;
     return true;
 }
 
@@ -132,7 +132,7 @@ static bool match_pattern(const route_t *r, ioma_request *req)
  * path beats a pattern that would also match it. Never NULL: unmatched requests get the fallback. */
 static const route_t *match(ioma_request *req)
 {
-    req->n_route = 0;
+    req->n_route_params = 0;
     for (int i = 0; i < g_nroutes; i++) {
         const route_t *r = &g_routes[i];
         if (r->nseg == 0 && req->path.len == r->path_len && req->method.len == r->method_len &&

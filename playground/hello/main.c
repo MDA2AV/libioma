@@ -11,7 +11,7 @@
 /* GET /hello/:name - the capture is the first route parameter; the reply goes into the slab. */
 static void hello(ioma_ctx *c)
 {
-    ioma_slice name = c->req.route[0].value;
+    ioma_slice name = c->req.route_params[0].value;
     ioma_printf(c, "hello %.*s\n", (int)name.len, name.p);
 }
 

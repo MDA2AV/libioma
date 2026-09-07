@@ -43,11 +43,11 @@ static void whoami(ioma_ctx *c)
     ioma_header(c, "X-Powered-By", "ioma");             /* fine: nothing has gone out yet */
 }
 
-/* GET /users/:id?fields=... - the :id capture is req.route[0]. A query parameter is found by
+/* GET /users/:id?fields=... - the :id capture is req.route_params[0]. A query parameter is found by
  * walking req.params: there are few, so the loop is the lookup. */
 static void user(ioma_ctx *c)
 {
-    ioma_slice id     = c->req.route[0].value;
+    ioma_slice id     = c->req.route_params[0].value;
     ioma_slice fields = { "", 0 };
     for (size_t i = 0; i < c->req.n_params; i++)
         if (ioma_slice_eq(c->req.params[i].key, "fields"))
@@ -58,8 +58,8 @@ static void user(ioma_ctx *c)
 /* GET /users/:id/posts/:post - captures come in pattern order; ioma_slice_int reads a number. */
 static void post(ioma_ctx *c)
 {
-    long user_id = ioma_slice_int(c->req.route[0].value);
-    long post_id = ioma_slice_int(c->req.route[1].value);
+    long user_id = ioma_slice_int(c->req.route_params[0].value);
+    long post_id = ioma_slice_int(c->req.route_params[1].value);
     ioma_printf(c, "post %ld of user %ld\n", post_id, user_id);
 }
 

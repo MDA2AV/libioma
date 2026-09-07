@@ -11,7 +11,7 @@
  * wire simply suspends it until the I/O completes.
  *
  *     static void user(ioma_ctx *c) {
- *         ioma_slice id = c->req.route[0].value;              // the :id of "/users/:id"
+ *         ioma_slice id = c->req.route_params[0].value;              // the :id of "/users/:id"
  *         ioma_printf(c, "user %.*s\n", (int)id.len, id.p);
  *     }
  *     int main(void) {
@@ -60,8 +60,8 @@ typedef struct ioma_request {
     size_t      n_headers;
     ioma_kv     params[IOMA_MAX_PARAMS];        /* query parameters, percent-decoded         */
     size_t      n_params;
-    ioma_kv     route[IOMA_MAX_ROUTE_PARAMS];   /* the :name captures, in pattern order      */
-    size_t      n_route;
+    ioma_kv     route_params[IOMA_MAX_ROUTE_PARAMS];   /* the :name captures, in pattern order      */
+    size_t      n_route_params;
 
     size_t      content_length;                 /* what the head declared; 0 if nothing      */
     bool        chunked;                        /* the body is chunked: length unknown       */
@@ -148,7 +148,7 @@ size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *ar
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 
 /* Register an endpoint. method is matched exactly; path is matched by segment and may contain
- * :name captures ("/users/:id") that land in req.route. An exact path always beats a pattern.
+ * :name captures ("/users/:id") that land in req.route_params. An exact path always beats a pattern.
  * Call before ioma_run, from the main thread; the table is then read-only and shared. */
 void ioma_route(const char *method, const char *path, ioma_handler fn);
 /* Fallback handler when nothing matches (default is a built-in 404). */
