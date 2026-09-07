@@ -112,8 +112,9 @@ void ioma_next_run(ioma_ctx *c, ioma_next *next);
 /* ── the body ──────────────────────────────────────────────────────────────────────────── */
 
 /* Read the whole body into the request buffer, once, and return it (also in req.body). It must
- * fit the buffer (16 KB by default): otherwise the reply becomes a 413 and the slice is empty.
- * Not for a body you already started streaming. */
+ * fit the buffer (16 KB by default): otherwise the slice is empty and res.status is 413, which
+ * becomes the reply - a handler that streams should check and stop. Not for a body you already
+ * started streaming. */
 ioma_slice ioma_body(ioma_ctx *c);
 
 /* Stream the body: the next bytes into dst, at most cap. Returns the count, 0 at the end, -1 on

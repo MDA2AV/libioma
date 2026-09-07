@@ -12,8 +12,8 @@ Run `make` in the repo root. It produces `libioma.a`, `libioma.so` and the demo 
 
 ## Run
 
-`./ioma-hello` is the smallest server: one route, `GET /hello/:name`, one worker per core on
-port 8080. Ctrl-C stops it. A server exercising every feature of the request and response model
+`./ioma-hello` is the smallest server: two routes, `GET /hello/:name` and a `POST /repeat/:times`
+that reads the body and streams it back, one worker per core on port 8080. Ctrl-C stops it. A server exercising every feature of the request and response model
 is `tests/server.c`, the fixture the test suites run against.
 
 ## Use it in your project

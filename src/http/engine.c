@@ -458,6 +458,14 @@ int ioma_flush(ioma_ctx *c)
 
 /* ── the body: read on demand ──────────────────────────────────────────────────────────── */
 
+/* A body failure with a status: the engine answers with it after the handler unless a reply is
+ * already streaming, and res.status shows it so a handler can stop before it writes anything. */
+static void body_fail(ioma_ctx *c, int status)
+{
+    STATE(c)->body_err = status;
+    c->res.status      = status;
+}
+
 /* The whole body, into the request buffer right after the head. Content-Length: read until it is
  * all there. Chunked: decode in place, reading more as needed - phr keeps state across calls, so a
  * split anywhere works - and remember what follows the terminator (a pipelined next request). */
@@ -482,7 +490,7 @@ ioma_slice ioma_body(ioma_ctx *c)
         while (rc == -2) {                               /* needs more: append after the decoded prefix */
             size_t off = state->head_len + decoded;
             if (off == IOMA_REQ_CAP) {
-                state->body_err = 413;
+                body_fail(c, 413);
                 return none;
             }
             int n = await_recv(state->conn, state->read_buf + off, IOMA_REQ_CAP - off);
@@ -495,7 +503,7 @@ ioma_slice ioma_body(ioma_ctx *c)
             decoded += chunk;
         }
         if (rc < 0) {
-            state->body_err = 400;
+            body_fail(c, 400);
             return none;
         }
         req->body         = (ioma_slice){ body, decoded };
@@ -504,7 +512,7 @@ ioma_slice ioma_body(ioma_ctx *c)
     } else {
         size_t total = state->head_len + req->content_length;
         if (total > IOMA_REQ_CAP) {
-            state->body_err = 413;
+            body_fail(c, 413);
             return none;
         }
         while (state->filled < total) {
@@ -557,7 +565,7 @@ static int body_read_fixed(ioma_ctx *c, struct serve_state *state, char *dst, si
 /* Stream a chunked body. Raw bytes are staged after the head and decoded in place; decoded bytes
  * are handed out, then the stage is reused. Bytes past the terminator are parked at the end of the
  * buffer for the next request. */
-static int body_read_chunked(struct serve_state *state, char *dst, size_t cap)
+static int body_read_chunked(ioma_ctx *c, struct serve_state *state, char *dst, size_t cap)
 {
     char  *stage = state->read_buf + state->head_len;
     size_t stage_cap = IOMA_REQ_CAP - state->head_len;
@@ -586,7 +594,7 @@ static int body_read_chunked(struct serve_state *state, char *dst, size_t cap)
         state->decoded_pos = 0;
         state->decoded_len = decoded;
         if (rc == -1) {
-            state->body_err = 400;
+            body_fail(c, 400);
             return -1;
         }
         if (rc >= 0) {
@@ -618,7 +626,7 @@ int ioma_body_read(ioma_ctx *c, void *dst, size_t cap)
     }
     if (state->body_done)
         return 0;
-    return c->req.chunked ? body_read_chunked(state, dst, cap) : body_read_fixed(c, state, dst, cap);
+    return c->req.chunked ? body_read_chunked(c, state, dst, cap) : body_read_fixed(c, state, dst, cap);
 }
 
 /* After the chain: take an unread body off the wire so the connection stays in sync, up to a
