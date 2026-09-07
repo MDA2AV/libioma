@@ -1,5 +1,5 @@
 #define _GNU_SOURCE
-#include "coro.h"
+#include "io/coro.h"
 
 #include <assert.h>
 #include <stdint.h>

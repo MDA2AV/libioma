@@ -24,16 +24,16 @@ include(GNUInstallDirs)
 
 # --- the library (static by default; -DBUILD_SHARED_LIBS=ON for a .so) ---
 add_library(ioma
-        src/uring.c
-        src/coro.c
-        src/switch_x86_64.S
-        src/bufring.c
-        src/conn.c
-        src/proactor.c
-        src/http.c
-        src/api.c
-        src/router.c
-        src/run.c
+        src/io/uring.c
+        src/io/coro.c
+        src/io/switch_x86_64.S
+        src/io/bufring.c
+        src/io/conn.c
+        src/io/proactor.c
+        src/http/engine.c
+        src/http/api.c
+        src/http/router.c
+        src/http/run.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioma::ioma ALIAS ioma)
 
@@ -42,6 +42,7 @@ target_include_directories(ioma
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ioma>
         PRIVATE
+            src
             third_party/picohttpparser)
 target_compile_options(ioma PRIVATE -Wall -Wextra)
 # Fat LTO objects when supported: the archive stays plain-linkable, and consumers that link with
@@ -78,9 +79,7 @@ endif()
 install(TARGETS ioma EXPORT iomaTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES
-            include/ioma.h include/http.h include/proactor.h include/coro.h include/uring.h
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ioma)
+install(FILES include/ioma.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ioma)
 install(EXPORT iomaTargets
         NAMESPACE ioma::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ioma

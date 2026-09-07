@@ -15,8 +15,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "coro.h"
-#include "uring.h"
+#include "io/coro.h"
+#include "io/uring.h"
 
 /* tunables (override with -D) */
 #ifndef RING_ENTRIES

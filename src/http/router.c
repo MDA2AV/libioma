@@ -4,7 +4,7 @@
  * pattern with :name segments; exact routes always win.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "http/internal.h"
 
 #include <string.h>
 

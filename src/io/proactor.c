@@ -4,7 +4,7 @@
  * conn.c and buffers in bufring.c; this file is the loop and what feeds it.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "io/internal.h"
 
 #include <errno.h>
 #include <netinet/in.h>

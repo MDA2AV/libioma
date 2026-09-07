@@ -1,11 +1,11 @@
 /*
- * http.c - the HTTP/1.1 engine: parse a request head with picohttpparser, run the middleware
+ * engine.c - the HTTP/1.1 engine: parse a request head with picohttpparser, run the middleware
  * chain and the endpoint against a context, read the body on demand (whole or streamed) and
  * drain what was left, then send what was written. All of it runs on the connection's coroutine,
  * so await_recv and await_send simply suspend it and the loop resumes it.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "http/internal.h"
 #include "picohttpparser.h"
 
 #include <stdarg.h>

@@ -14,10 +14,12 @@ process
  │   └─ pools: conn objects, coroutine stacks
 ```
 
-Everything below is in `src/`, one concern per file: `uring.c` (the ring), `coro.c` +
-`switch_x86_64.S` (coroutines), `bufring.c` (the buffer ring), `conn.c` (a connection and its
-awaits), `proactor.c` (the worker loop), `http.c` (the HTTP engine), `api.c` (handler helpers),
-`router.c` (routes and middleware), `run.c` (`ioma_run`). `internal.h` is what they share.
+`include/ioma.h` is the whole public API. Under `src/` there are two planes, one concern per file:
+`io/` is the I/O plane - `uring.c` (the ring), `coro.c` + `switch_x86_64.S` (coroutines),
+`bufring.c` (the buffer ring), `conn.c` (a connection and its awaits), `proactor.c` (the worker
+loop), with `proactor.h` as the interface the other plane uses - and `http/` is the HTTP plane -
+`engine.c` (parse, body, reply, the serve loop), `router.c` (routes and middleware), `api.c`
+(handler helpers), `run.c` (`ioma_run`). Each plane has an `internal.h` for what its files share.
 
 ---
 

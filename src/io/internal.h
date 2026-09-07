@@ -1,13 +1,12 @@
 /*
- * internal.h - what libioma's source files share with each other. Private; not installed.
+ * io/internal.h - what the I/O plane's files share with each other. Private; not installed.
  *
  * Exported internals carry an ioma__ prefix so they cannot collide with a user's symbols. The
  * small hot-path helpers are static inline here so every file still gets them inlined.
  */
 #pragma once
 
-#include "proactor.h"
-#include "http.h"
+#include "io/proactor.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -117,29 +116,3 @@ void    ioma__conn_main(void *arg);               /* the connection's coroutine 
 void    ioma__arm_recv(proactor_t *p, conn_t *c);
 void    ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);
 void    ioma__conn_pool_drain(proactor_t *p);
-
-/* ── HTTP (http.c, router.c) ───────────────────────────────────────────────────────────── */
-
-void          ioma__serve(conn_t *c);             /* the per-connection HTTP loop            */
-ioma_handler  ioma__match(const ioma_request *req);
-void          ioma__dispatch(ioma_ctx *c);
-
-/* ── ASCII helpers ─────────────────────────────────────────────────────────────────────── */
-
-/* Fold A-Z to a-z; every other byte unchanged. */
-static inline unsigned char lower_ascii(unsigned char a)
-{
-    return (unsigned)(a - 'A') < 26u ? (unsigned char)(a | 0x20) : a;
-}
-
-/* Case-insensitive equality of two slices: a length test, then a tight byte loop. No libc, no
- * locale - it runs several times per request. */
-static inline bool eq_ci(const char *a, size_t an, const char *b, size_t bn)
-{
-    if (an != bn)
-        return false;
-    for (size_t i = 0; i < an; i++)
-        if (lower_ascii((unsigned char)a[i]) != lower_ascii((unsigned char)b[i]))
-            return false;
-    return true;
-}

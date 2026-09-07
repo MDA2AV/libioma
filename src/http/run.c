@@ -2,7 +2,7 @@
  * run.c - ioma_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "http/internal.h"
 
 #include <pthread.h>
 #include <sched.h>

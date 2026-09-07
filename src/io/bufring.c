@@ -3,7 +3,7 @@
  * picks from when a multishot recv delivers data. Returning a buffer is inline in internal.h.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "io/internal.h"
 
 #include <string.h>
 #include <sys/mman.h>

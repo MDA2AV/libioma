@@ -4,7 +4,7 @@
  * awaits a handler coroutine calls.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "io/internal.h"
 
 #include <errno.h>
 #include <string.h>

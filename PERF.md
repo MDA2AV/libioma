@@ -32,7 +32,7 @@ profiles score.
 
 The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
 `BUF_SIZE`/`BUF_COUNT`/`RING_ENTRIES`/`RX_QUEUE`/`STACK_SIZE`/`CORO_POOL_MAX`/`CONN_POOL_MAX` are
-in `proactor.h`. Both ring features fall back at runtime on kernels that lack them.
+in `src/io/proactor.h`. Both ring features fall back at runtime on kernels that lack them.
 
 ### How to do PGO
 

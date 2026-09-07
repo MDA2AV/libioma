@@ -3,7 +3,7 @@
  * Nothing here touches the runtime.
  */
 #define _GNU_SOURCE
-#include "internal.h"
+#include "http/internal.h"
 
 #include <string.h>
 
