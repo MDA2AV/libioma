@@ -178,16 +178,22 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
 6. **Send** once when the body fits behind the head in the 4 KB head buffer (the usual case), else
    head then body. Then loop; leftover bytes of a pipelined next request are carried over.
 
-Requests are zero-copy views into the read buffer, valid only during the handler. A per-request
-`scratch` arena is there for building a body (`ioma_textf`).
+Everything in a request is a slice (pointer + length) into the read buffer, valid only during
+the handler. Three key/value collections hang off it: `headers` as received, `params` (the query,
+split and percent-decoded into a small per-request arena only when a value needs it, otherwise a
+zero-copy view), and `route` (the `:name` captures the router filled in). `ioma_header_get`,
+`ioma_query_get` and `ioma_route_get` look them up by key. A `scratch` arena is there for building
+a body (`ioma_textf`).
 
 ---
 
 ## 5. Router and middleware
 
 `ioma_route(method, path, fn)` fills a table that is read-only once the workers start, so all
-workers share it with no lock. Lookup is an exact match: lengths first, `memcmp` only on a hit.
-`ioma_default` replaces the built-in 404.
+workers share it with no lock. A path is exact (lengths first, `memcmp` only on a hit) or a
+pattern with `:name` segments (`/users/:id`), matched segment by segment with the captures written
+to `req->route`. Exact routes are tried first, so a static path beats a pattern. `ioma_default`
+replaces the built-in 404.
 
 Middleware (`ioma_use`) is an onion: each layer receives the request and a `next`; it does work,
 calls `ioma_next_run` to run the rest of the chain and the endpoint, then may inspect or replace the

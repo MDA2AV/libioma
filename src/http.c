@@ -19,14 +19,17 @@
 #ifndef IOMA_HEAD_CAP
 #define IOMA_HEAD_CAP    4096       /* serialized status line + headers (+ a small inlined body) */
 #endif
+#ifndef IOMA_PARAM_CAP
+#define IOMA_PARAM_CAP   2048       /* per-request arena for percent-decoded query parameters    */
+#endif
 
-/* serve() hands req.headers to picohttpparser as its header array: the two structs must match. */
-_Static_assert(sizeof(ioma_header) == sizeof(struct phr_header), "ioma_header must mirror phr_header");
-_Static_assert(offsetof(ioma_header, name)      == offsetof(struct phr_header, name) &&
-               offsetof(ioma_header, name_len)  == offsetof(struct phr_header, name_len) &&
-               offsetof(ioma_header, value)     == offsetof(struct phr_header, value) &&
-               offsetof(ioma_header, value_len) == offsetof(struct phr_header, value_len),
-               "ioma_header must mirror phr_header");
+/* serve() hands req.headers to picohttpparser as its header array: a kv (two slices) must lay
+ * out exactly like a phr_header (name, name_len, value, value_len). */
+_Static_assert(sizeof(ioma_kv) == sizeof(struct phr_header), "ioma_kv must mirror phr_header");
+_Static_assert(offsetof(ioma_kv, key)   == offsetof(struct phr_header, name) &&
+               offsetof(ioma_slice, len) == offsetof(struct phr_header, name_len) &&
+               offsetof(ioma_kv, value) == offsetof(struct phr_header, value),
+               "ioma_kv must mirror phr_header");
 
 /* ── request headers ───────────────────────────────────────────────────────────────────── */
 
@@ -60,27 +63,25 @@ static bool token_present_ci(const char *s, size_t n, const char *tok)
 
 /* The three headers the engine itself needs; NULL when absent. */
 struct hdrs {
-    const char *content_length; size_t content_length_len;
-    const char *transfer_enc;   size_t transfer_enc_len;
-    const char *connection;     size_t connection_len;
+    ioma_slice content_length, transfer_enc, connection;   /* p == NULL when absent */
 };
 
 /* One pass over the request headers. The switch on the name length rejects nearly every header
  * before a single byte is compared. */
 static struct hdrs pick_headers(const ioma_request *req)
 {
-    struct hdrs h = { 0 };
+    struct hdrs h = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
     for (size_t i = 0; i < req->n_headers; i++) {
-        const ioma_header *x = &req->headers[i];
-        switch (x->name_len) {
+        const ioma_kv *x = &req->headers[i];
+        switch (x->key.len) {
         case 14:
-            if (eq_ci(x->name, 14, "content-length", 14))    { h.content_length = x->value; h.content_length_len = x->value_len; }
+            if (eq_ci(x->key.p, 14, "content-length", 14))    h.content_length = x->value;
             break;
         case 17:
-            if (eq_ci(x->name, 17, "transfer-encoding", 17)) { h.transfer_enc = x->value;   h.transfer_enc_len = x->value_len; }
+            if (eq_ci(x->key.p, 17, "transfer-encoding", 17)) h.transfer_enc = x->value;
             break;
         case 10:
-            if (eq_ci(x->name, 10, "connection", 10))        { h.connection = x->value;     h.connection_len = x->value_len; }
+            if (eq_ci(x->key.p, 10, "connection", 10))        h.connection = x->value;
             break;
         default:
             break;
@@ -90,12 +91,12 @@ static struct hdrs pick_headers(const ioma_request *req)
 }
 
 /* HTTP/1.1 keeps alive unless "close"; HTTP/1.0 only with "keep-alive". */
-static bool keep_alive_from(int minor_version, const char *cv, size_t vl)
+static bool keep_alive_from(int minor_version, ioma_slice cv)
 {
     bool ka = minor_version >= 1;
-    if (cv) {
-        if      (token_present_ci(cv, vl, "close"))      ka = false;
-        else if (token_present_ci(cv, vl, "keep-alive")) ka = true;
+    if (cv.p) {
+        if      (token_present_ci(cv.p, cv.len, "close"))      ka = false;
+        else if (token_present_ci(cv.p, cv.len, "keep-alive")) ka = true;
     }
     return ka;
 }
@@ -207,9 +208,9 @@ static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
         PUTC("Connection: keep-alive\r\n");
 
     for (int i = 0; i < res->n_extra; i++) {
-        PUT(res->extra[i].name, res->extra[i].name_len);
+        PUT(res->extra[i].key.p, res->extra[i].key.len);
         PUTC(": ");
-        PUT(res->extra[i].value, res->extra[i].value_len);
+        PUT(res->extra[i].value.p, res->extra[i].value.len);
         PUTC("\r\n");
     }
 
@@ -285,6 +286,7 @@ void ioma__serve(conn_t *c)
 {
     char   buf[IOMA_REQ_CAP];
     char   scratch[IOMA_SCRATCH_CAP];
+    char   params[IOMA_PARAM_CAP];                    /* decoded query parameters land here */
     size_t have = 0, last_len = 0;
 
     for (;;) {
@@ -317,41 +319,43 @@ void ioma__serve(conn_t *c)
         }
         size_t header_len = (size_t)pret;
 
-        req.method = method;  req.method_len = ml;
-        req.target = target;  req.target_len = tl;
+        req.method        = (ioma_slice){ method, ml };
+        req.target        = (ioma_slice){ target, tl };
         req.minor_version = minor;
-        req.n_headers = nphr;
+        req.n_headers     = nphr;
 
         const char *q = memchr(target, '?', tl);
         if (q) {
-            req.path = target;     req.path_len = (size_t)(q - target);
-            req.query = q + 1;     req.query_len = tl - req.path_len - 1;
+            req.path  = (ioma_slice){ target, (size_t)(q - target) };
+            req.query = (ioma_slice){ q + 1, tl - req.path.len - 1 };
         } else {
-            req.path = target;     req.path_len = tl;
-            req.query = NULL;      req.query_len = 0;
+            req.path  = (ioma_slice){ target, tl };
+            req.query = (ioma_slice){ target + tl, 0 };
         }
+        req.n_params = req.query.len
+            ? ioma_kv_parse(req.query.p, req.query.len, req.params, IOMA_MAX_PARAMS, params, sizeof params)
+            : 0;
+        req.n_route = 0;                                 /* the router fills these */
 
         struct hdrs h = pick_headers(&req);
 
         /* Body. leftover_* is what belongs to the next request on a kept-alive connection. */
         size_t leftover_off = 0, leftover_len = 0;
-        if (h.transfer_enc && token_present_ci(h.transfer_enc, h.transfer_enc_len, "chunked")) {
+        if (h.transfer_enc.p && token_present_ci(h.transfer_enc.p, h.transfer_enc.len, "chunked")) {
             long n = read_chunked_body(c, buf, header_len, have);
             if (n < 0) return;
-            req.body     = buf + header_len;
-            req.body_len = (size_t)n;
+            req.body = (ioma_slice){ buf + header_len, (size_t)n };
             /* bytes pipelined after a chunked body are not carried; the next request reads fresh */
         } else {
-            size_t content_length = h.content_length ? parse_size(h.content_length, h.content_length_len) : 0;
+            size_t content_length = h.content_length.p ? parse_size(h.content_length.p, h.content_length.len) : 0;
             size_t total = header_len + content_length;
             if (read_fixed_body(c, buf, total, &have) < 0) return;
-            req.body     = buf + header_len;
-            req.body_len = content_length;
+            req.body = (ioma_slice){ buf + header_len, content_length };
             leftover_off = total;
             leftover_len = have - total;
         }
 
-        req.keep_alive  = keep_alive_from(minor, h.connection, h.connection_len);
+        req.keep_alive  = keep_alive_from(minor, h.connection);
         req.conn        = c;
         req.scratch     = scratch;
         req.scratch_cap = IOMA_SCRATCH_CAP;

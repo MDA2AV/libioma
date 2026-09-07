@@ -24,10 +24,12 @@ compiler inlines your handlers into the engine (the library ships fat LTO object
 about two percent.
 
 An endpoint is a function that receives an `ioma_request` and returns an `ioma_response`, built
-with `ioma_text`, `ioma_json`, `ioma_bytes` or `ioma_textf`. Read a request header with
-`ioma_header_get`, add a response header with `ioma_header_set`. Register endpoints with
-`ioma_route` (exact method and path), optional middleware with `ioma_use`, a fallback with
-`ioma_default`, then call `ioma_run` with a worker count (zero means one per core) and a port.
+with `ioma_text`, `ioma_json`, `ioma_bytes` or `ioma_textf`. Everything in the request is a slice
+(pointer and length); headers, query parameters and route parameters are key/value collections on
+it, read with `ioma_header_get`, `ioma_query_get` and `ioma_route_get`. Add a response header with
+`ioma_header_set`. Register endpoints with `ioma_route` (an exact path, or a pattern such as
+`/users/:id`), optional middleware with `ioma_use`, a fallback with `ioma_default`, then call
+`ioma_run` with a worker count (zero means one per core) and a port.
 `playground/hello/main.c` is a complete example.
 
 ## Tests and limits

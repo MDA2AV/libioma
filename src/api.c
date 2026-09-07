@@ -1,6 +1,6 @@
 /*
- * api.c - the helpers a handler calls: build a response, read a request header, add a response
- * header, reason phrases. Nothing here touches the runtime.
+ * api.c - the helpers a handler calls: slices, lookups by key, response builders, reasons.
+ * Nothing here touches the runtime.
  */
 #define _GNU_SOURCE
 #include "internal.h"
@@ -8,26 +8,141 @@
 #include <stdarg.h>
 #include <string.h>
 
-/* ── request ───────────────────────────────────────────────────────────────────────────── */
+/* ── slices ────────────────────────────────────────────────────────────────────────────── */
 
-/* Is the slice [s, s+n) exactly the C string? */
-bool ioma_slice_eq(const char *s, size_t n, const char *cstr)
+/* Is the slice exactly this C string? */
+bool ioma_slice_eq(ioma_slice s, const char *cstr)
 {
-    return strlen(cstr) == n && memcmp(s, cstr, n) == 0;
+    size_t n = strlen(cstr);
+    return n == s.len && memcmp(s.p, cstr, n) == 0;
 }
 
-/* Case-insensitive header lookup. Returns the value slice (not NUL-terminated), or NULL. */
-const char *ioma_header_get(const ioma_request *req, const char *name, size_t *value_len)
+/* The integer a slice starts with (optional sign), 0 if it starts with none. */
+long ioma_slice_int(ioma_slice s)
+{
+    size_t i = 0;
+    bool neg = false;
+    if (i < s.len && (s.p[i] == '-' || s.p[i] == '+')) {
+        neg = s.p[i] == '-';
+        i++;
+    }
+    long v = 0;
+    for (; i < s.len && s.p[i] >= '0' && s.p[i] <= '9'; i++)
+        v = v * 10 + (s.p[i] - '0');
+    return neg ? -v : v;
+}
+
+static const ioma_slice none = { NULL, 0 };
+
+/* ── lookups ───────────────────────────────────────────────────────────────────────────── */
+
+/* Case-insensitive header lookup; p == NULL when absent. */
+ioma_slice ioma_header_get(const ioma_request *req, const char *name)
 {
     size_t nl = strlen(name);
-    for (size_t i = 0; i < req->n_headers; i++) {
-        if (eq_ci(req->headers[i].name, req->headers[i].name_len, name, nl)) {
-            if (value_len) *value_len = req->headers[i].value_len;
+    for (size_t i = 0; i < req->n_headers; i++)
+        if (eq_ci(req->headers[i].key.p, req->headers[i].key.len, name, nl))
             return req->headers[i].value;
+    return none;
+}
+
+/* First query parameter with this key (case-sensitive), decoded; p == NULL when absent. */
+ioma_slice ioma_query_get(const ioma_request *req, const char *key)
+{
+    size_t kl = strlen(key);
+    for (size_t i = 0; i < req->n_params; i++)
+        if (req->params[i].key.len == kl && memcmp(req->params[i].key.p, key, kl) == 0)
+            return req->params[i].value;
+    return none;
+}
+
+/* The :name capture of the matched route; p == NULL when the pattern has no such name. */
+ioma_slice ioma_route_get(const ioma_request *req, const char *name)
+{
+    size_t nl = strlen(name);
+    for (size_t i = 0; i < req->n_route; i++)
+        if (req->route[i].key.len == nl && memcmp(req->route[i].key.p, name, nl) == 0)
+            return req->route[i].value;
+    return none;
+}
+
+/* ── key/value parsing ─────────────────────────────────────────────────────────────────── */
+
+/* Value of a hex digit, or -1. */
+static int hexval(unsigned char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    c |= 0x20;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+/* Percent-decode [s, s+n) into dst ('+' becomes a space, a malformed %XX is kept as is).
+ * Never longer than the input; returns the decoded length. */
+static size_t decode(const char *s, size_t n, char *dst)
+{
+    size_t o = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (s[i] == '+') {
+            dst[o++] = ' ';
+        } else if (s[i] == '%' && i + 2 < n) {
+            int hi = hexval((unsigned char)s[i + 1]), lo = hexval((unsigned char)s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                dst[o++] = (char)(hi * 16 + lo);
+                i += 2;
+            } else {
+                dst[o++] = '%';
+            }
+        } else {
+            dst[o++] = s[i];
         }
     }
-    if (value_len) *value_len = 0;
-    return NULL;
+    return o;
+}
+
+/* Decode a slice into the arena and point it there; false when it would not fit. */
+static bool decode_into(ioma_slice *v, char *arena, size_t arena_cap, size_t *used)
+{
+    if (*used + v->len > arena_cap)
+        return false;
+    size_t n = decode(v->p, v->len, arena + *used);
+    v->p    = arena + *used;
+    v->len  = n;
+    *used  += n;
+    return true;
+}
+
+/* "k=v&k2=v2" into pairs; see http.h. One pass per pair finds '=' and '&' and notes whether
+ * either side needs decoding, so the common undecoded pair is a view and costs a short scan. */
+size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *arena, size_t arena_cap)
+{
+    size_t used = 0, count = 0, i = 0;
+    while (i < n && count < cap) {
+        size_t j = i, eq = n;
+        bool   kdec = false, vdec = false;
+        for (; j < n && s[j] != '&'; j++) {
+            char c = s[j];
+            if (c == '=') {
+                if (eq == n) eq = j;
+            } else if (c == '%' || c == '+') {
+                if (eq == n) kdec = true; else vdec = true;
+            }
+        }
+        if (j > i) {                                       /* skip empty pairs ("&&") */
+            bool has_eq = eq < j;
+            ioma_slice k = { s + i, (has_eq ? eq : j) - i };
+            ioma_slice v = { has_eq ? s + eq + 1 : s + j, has_eq ? j - eq - 1 : 0 };
+            size_t mark = used;
+            bool   ok   = (!kdec || decode_into(&k, arena, arena_cap, &used)) &&
+                          (!vdec || decode_into(&v, arena, arena_cap, &used));
+            if (ok)
+                out[count++] = (ioma_kv){ k, v };
+            else
+                used = mark;                               /* skip the pair, give its arena back */
+        }
+        i = j + 1;
+    }
+    return count;
 }
 
 /* ── response builders ─────────────────────────────────────────────────────────────────── */
@@ -74,9 +189,7 @@ ioma_response ioma_textf(ioma_request *req, int status, const char *fmt, ...)
 void ioma_header_set(ioma_response *res, const char *name, const char *value)
 {
     if (res->n_extra >= IOMA_MAX_RESP_HEADERS) return;
-    ioma_header *h = &res->extra[res->n_extra++];
-    h->name = name;   h->name_len = strlen(name);
-    h->value = value; h->value_len = strlen(value);
+    res->extra[res->n_extra++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
 }
 
 /* The reason phrase for a status code; "Unknown" if unlisted. */

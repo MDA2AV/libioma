@@ -70,6 +70,12 @@ results.append(check("GET /whoami -> 200", st == 200))
 results.append(check("  parsed path/query in body", b"path   = /whoami" in body and b"query  = x=1&y=2" in body))
 results.append(check("  custom header X-Powered-By: ioma", hd.get("x-powered-by") == "ioma"))
 
+# route parameter + percent-decoded query parameter
+st, hd, body = get("/users/42?fields=a%20b+c&x=1")
+results.append(check("GET /users/:id -> route param + decoded query param", st == 200 and body == b"user 42 fields=a b c\n"))
+st, hd, body = get("/users/42/extra")
+results.append(check("  extra segment does not match the pattern", st == 404))
+
 # POST /echo reflects the body
 s = connect()
 s.send(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world")

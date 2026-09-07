@@ -6,6 +6,7 @@
  *     make && ./ioma-hello              # 4 workers on :8080
  *     curl http://127.0.0.1:8080/
  *     curl http://127.0.0.1:8080/whoami?x=1
+ *     curl 'http://127.0.0.1:8080/users/42?fields=a%20b'
  *     curl -d 'hello' http://127.0.0.1:8080/echo
  *
  * Building against an installed libioma instead:
@@ -35,9 +36,9 @@ static ioma_response whoami(ioma_request *req)
 {
     ioma_response res = ioma_textf(req, 200,
         "method = %.*s\npath   = %.*s\nquery  = %.*s\nkeep-alive = %s\n",
-        (int)req->method_len, req->method,
-        (int)req->path_len,   req->path,
-        (int)req->query_len,  req->query ? req->query : "",
+        (int)req->method.len, req->method.p,
+        (int)req->path.len,   req->path.p,
+        (int)req->query.len,  req->query.p,
         req->keep_alive ? "yes" : "no");
     ioma_header_set(&res, "X-Powered-By", "ioma");
     return res;
@@ -47,7 +48,16 @@ static ioma_response whoami(ioma_request *req)
  * still alive when the framework serializes the reply, so pointing at it is safe. */
 static ioma_response echo(ioma_request *req)
 {
-    return ioma_bytes(200, "application/octet-stream", req->body, req->body_len);
+    return ioma_bytes(200, "application/octet-stream", req->body.p, req->body.len);
+}
+
+/* GET /users/:id?fields=... - a route parameter and a (percent-decoded) query parameter. */
+static ioma_response user(ioma_request *req)
+{
+    ioma_slice id     = ioma_route_get(req, "id");
+    ioma_slice fields = ioma_query_get(req, "fields");
+    return ioma_textf(req, 200, "user %.*s fields=%.*s\n",
+                      (int)id.len, id.p, (int)fields.len, fields.p ? fields.p : "");
 }
 
 /* Middleware: runs the handler, then stamps a Server header on whatever it returned. A middleware
@@ -68,6 +78,7 @@ int main(void)
     ioma_route("GET",  "/health", health);
     ioma_route("GET",  "/whoami", whoami);
     ioma_route("POST", "/echo",   echo);
+    ioma_route("GET",  "/users/:id", user);
     /* anything else falls through to the built-in 404 (override with ioma_default) */
 
     int workers = 4;

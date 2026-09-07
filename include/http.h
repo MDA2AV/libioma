@@ -3,13 +3,16 @@
  *
  * An endpoint takes a parsed request and returns a response by value; the framework serializes it
  * and flushes it to the wire on the connection's coroutine (the flush suspends until the send
- * completes). Requests and their slices are zero-copy views into the read buffer, valid only for
- * the duration of the handler call.
+ * completes). Everything in a request is a slice - pointer plus length, the C span - into the
+ * connection's read buffer, valid only for the duration of the handler call.
  *
- *     static ioma_response home(ioma_request *req) { return ioma_text(200, "hi\n"); }
+ *     static ioma_response user(ioma_request *req) {
+ *         ioma_slice id = ioma_route_get(req, "id");          // from "/users/:id"
+ *         return ioma_textf(req, 200, "user %.*s\n", (int)id.len, id.p);
+ *     }
  *     int main(void) {
- *         ioma_route("GET", "/", home);
- *         return ioma_run(4, 8080);          // 4 workers, one per core
+ *         ioma_route("GET", "/users/:id", user);
+ *         return ioma_run(0, 8080);                            // one worker per core
  *     }
  */
 #pragma once
@@ -20,32 +23,42 @@
 typedef struct conn conn_t;                 /* opaque here; only advanced handlers touch it */
 
 #ifndef IOMA_MAX_HEADERS
-#define IOMA_MAX_HEADERS      64            /* request headers parsed                        */
+#define IOMA_MAX_HEADERS      64            /* request headers kept                          */
+#endif
+#ifndef IOMA_MAX_PARAMS
+#define IOMA_MAX_PARAMS       32            /* query parameters kept                         */
+#endif
+#ifndef IOMA_MAX_ROUTE_PARAMS
+#define IOMA_MAX_ROUTE_PARAMS 8             /* :name captures a route pattern may have       */
 #endif
 #ifndef IOMA_MAX_RESP_HEADERS
 #define IOMA_MAX_RESP_HEADERS 16            /* extra headers a handler may add               */
 #endif
 
-/* One header, as name/value slices. On a request these point into the read buffer; on a response
- * they point at whatever the handler passed (a literal, or its request scratch). */
-typedef struct {
-    const char *name;  size_t name_len;
-    const char *value; size_t value_len;
-} ioma_header;
+/* A slice: pointer + length, the C span. Not NUL-terminated. */
+typedef struct { const char *p; size_t len; } ioma_slice;
 
-/* A parsed request. Every pointer is a view into the connection's read buffer and is valid only
- * until the handler returns - copy anything you need to keep. */
+/* One key/value pair of slices: a header, a query parameter, a route parameter. */
+typedef struct { ioma_slice key, value; } ioma_kv;
+
+/* A parsed request. Every slice points into the connection's read buffer (decoded parameters
+ * into a per-request arena) and is valid only until the handler returns. The request's own
+ * slices are never NULL, only possibly empty; a lookup returns p == NULL when the key is absent. */
 typedef struct ioma_request {
-    const char *method; size_t method_len;      /* "GET", "POST", ...                        */
-    const char *target; size_t target_len;      /* raw request target: path plus any query   */
-    const char *path;   size_t path_len;        /* the path, query stripped                  */
-    const char *query;  size_t query_len;       /* after '?', or NULL/0 if none              */
+    ioma_slice  method;                         /* "GET", "POST", ...                        */
+    ioma_slice  target;                         /* raw request target: path plus any query   */
+    ioma_slice  path;                           /* the path, query stripped                  */
+    ioma_slice  query;                          /* raw text after '?', undecoded             */
     int         minor_version;                  /* 0 or 1 for HTTP/1.0 or 1.1                */
 
-    ioma_header headers[IOMA_MAX_HEADERS];
+    ioma_kv     headers[IOMA_MAX_HEADERS];      /* as received                               */
     size_t      n_headers;
+    ioma_kv     params[IOMA_MAX_PARAMS];        /* query parameters, percent-decoded         */
+    size_t      n_params;
+    ioma_kv     route[IOMA_MAX_ROUTE_PARAMS];   /* the :name captures of the matched route   */
+    size_t      n_route;
 
-    const char *body;   size_t body_len;        /* Content-Length body (may be empty)        */
+    ioma_slice  body;                           /* Content-Length body, or a chunked one decoded */
     bool        keep_alive;                     /* computed from version + Connection         */
 
     conn_t     *conn;                           /* advanced: await_recv/await_send in a handler */
@@ -58,7 +71,7 @@ typedef struct ioma_response {
     int          status;                        /* 200, 404, ...                             */
     const char  *content_type;                  /* NULL -> "text/plain"                      */
     const void  *body; size_t body_len;
-    ioma_header  extra[IOMA_MAX_RESP_HEADERS];  /* headers added with ioma_header_set        */
+    ioma_kv      extra[IOMA_MAX_RESP_HEADERS];  /* headers added with ioma_header_set        */
     int          n_extra;
     bool         close;                         /* force Connection: close after this reply  */
 } ioma_response;
@@ -72,6 +85,20 @@ typedef struct ioma_next ioma_next;
 typedef ioma_response (*ioma_mw)(ioma_request *req, ioma_next *next);
 ioma_response ioma_next_run(ioma_request *req, ioma_next *next);
 
+/* ── slices and lookups ────────────────────────────────────────────────────────────────── */
+
+bool       ioma_slice_eq (ioma_slice s, const char *cstr);       /* exact compare with a C string */
+long       ioma_slice_int(ioma_slice s);                         /* leading integer, else 0        */
+
+ioma_slice ioma_header_get(const ioma_request *req, const char *name);   /* case-insensitive     */
+ioma_slice ioma_query_get (const ioma_request *req, const char *key);    /* first match, decoded */
+ioma_slice ioma_route_get (const ioma_request *req, const char *name);   /* a :name capture      */
+
+/* Parse "k=v&k2=v2" - a query string, a form body - into out, up to cap pairs. Keys and values
+ * that need it ('+', %XX) are decoded into arena and point there; the rest are views of s.
+ * Returns the pair count. A pair that does not fit the arena is skipped. */
+size_t     ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *arena, size_t arena_cap);
+
 /* ── response builders ─────────────────────────────────────────────────────────────────── */
 
 ioma_response ioma_text (int status, const char *s);                      /* text/plain, strlen(s)   */
@@ -84,17 +111,11 @@ ioma_response ioma_textf(ioma_request *req, int status, const char *fmt, ...)
 /* Add a response header. name/value must stay valid until the reply is sent. */
 void ioma_header_set(ioma_response *res, const char *name, const char *value);
 
-/* ── request helpers ───────────────────────────────────────────────────────────────────── */
-
-/* Case-insensitive header lookup. Returns the value slice (not NUL-terminated) or NULL. */
-const char *ioma_header_get(const ioma_request *req, const char *name, size_t *value_len);
-/* strcmp-style compare of a slice against a C string (path/method matching). */
-bool ioma_slice_eq(const char *s, size_t n, const char *cstr);
-
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 
-/* Register an endpoint. method and path are matched exactly (path, query ignored). Call these
- * before ioma_run, from the main thread; the table is then read-only and shared by all workers. */
+/* Register an endpoint. method is matched exactly; path is matched by segment and may contain
+ * :name captures ("/users/:id"), read with ioma_route_get. An exact path always beats a pattern.
+ * Call before ioma_run, from the main thread; the table is then read-only and shared. */
 void ioma_route(const char *method, const char *path, ioma_handler fn);
 /* Fallback handler when nothing matches (default is a built-in 404). */
 void ioma_default(ioma_handler fn);
@@ -104,7 +125,7 @@ void ioma_use(ioma_mw mw);
 
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
-/* Start `workers` proactor threads (one per core) serving HTTP on `port`, and block until
+/* Start `workers` proactor threads (<= 0: one per core) serving HTTP on `port`, and block until
  * SIGINT/SIGTERM. Returns 0 on clean shutdown. */
 int ioma_run(int workers, int port);
 
