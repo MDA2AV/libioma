@@ -10,12 +10,14 @@
 #define load_acquire(p)     __atomic_load_n((p), __ATOMIC_ACQUIRE)
 #define store_release(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
 
+/* io_uring_setup; -errno on failure. */
 static int sys_setup(unsigned entries, struct io_uring_params *p)
 {
     long r = syscall(SYS_io_uring_setup, entries, p);
     return r < 0 ? -errno : (int)r;
 }
 
+/* io_uring_enter; -errno on failure. */
 static int sys_enter(int fd, unsigned to_submit, unsigned min_complete, unsigned flags,
                      const void *arg, size_t argsz)
 {
@@ -23,12 +25,14 @@ static int sys_enter(int fd, unsigned to_submit, unsigned min_complete, unsigned
     return r < 0 ? -errno : (int)r;
 }
 
+/* io_uring_register (buffer rings, files, ...); the result, or -errno. */
 int uring_register(struct uring *r, unsigned opcode, void *arg, unsigned nr_args)
 {
     long ret = syscall(SYS_io_uring_register, r->fd, opcode, arg, nr_args);
     return ret < 0 ? -errno : (int)ret;
 }
 
+/* Create the ring and mmap both rings plus the SQE array. 0, or -errno. */
 int uring_init(struct uring *r, unsigned entries)
 {
     memset(r, 0, sizeof *r);
@@ -91,6 +95,7 @@ int uring_init(struct uring *r, unsigned entries)
     return 0;
 }
 
+/* Unmap and close the ring; the kernel cancels anything still in flight. */
 void uring_exit(struct uring *r)
 {
     if (r->sqe_mem)  munmap(r->sqe_mem, r->sqe_bytes);
@@ -99,6 +104,7 @@ void uring_exit(struct uring *r)
     memset(r, 0, sizeof *r);
 }
 
+/* Claim the next SQE against the local tail, zeroed. NULL when the SQ is full. */
 struct io_uring_sqe *uring_get_sqe(struct uring *r)
 {
     unsigned head = load_acquire(r->sq_head);
@@ -115,6 +121,7 @@ struct io_uring_sqe *uring_get_sqe(struct uring *r)
     return sqe;
 }
 
+/* Publish the local tail and enter. */
 static int flush_and_enter(struct uring *r, unsigned wait_nr, unsigned flags,
                            const void *arg, size_t argsz)
 {
@@ -131,11 +138,13 @@ static int flush_and_enter(struct uring *r, unsigned wait_nr, unsigned flags,
     return sys_enter(r->fd, to_submit, wait_nr, flags, arg, argsz);
 }
 
+/* Submit everything claimed; never waits. */
 int uring_submit(struct uring *r)
 {
     return flush_and_enter(r, 0, 0, NULL, 0);
 }
 
+/* Submit, then wait for wait_nr completions or until ts expires (NULL: no timeout). */
 int uring_submit_wait(struct uring *r, unsigned wait_nr, struct __kernel_timespec *ts)
 {
     if (!ts)
@@ -148,11 +157,13 @@ int uring_submit_wait(struct uring *r, unsigned wait_nr, struct __kernel_timespe
                            &arg, sizeof arg);
 }
 
+/* How many CQEs are waiting; reads the kernel's tail once. */
 unsigned uring_cq_ready(struct uring *r)
 {
     return load_acquire(r->cq_tail) - *r->cq_head;
 }
 
+/* Release n consumed CQEs; publishes the head once. */
 void uring_cq_advance(struct uring *r, unsigned n)
 {
     store_release(r->cq_head, *r->cq_head + n);

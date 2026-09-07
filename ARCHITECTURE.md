@@ -14,8 +14,10 @@ process
  │   └─ pools: conn objects, coroutine stacks
 ```
 
-Everything below is in `src/`: `uring.c` (the ring), `coro.c` + `switch_x86_64.S` (coroutines),
-`proactor.c` (the worker loop), `http.c` (the HTTP engine), `router.c` (routes and middleware).
+Everything below is in `src/`, one concern per file: `uring.c` (the ring), `coro.c` +
+`switch_x86_64.S` (coroutines), `bufring.c` (the buffer ring), `conn.c` (a connection and its
+awaits), `proactor.c` (the worker loop), `http.c` (the HTTP engine), `api.c` (handler helpers),
+`router.c` (routes and middleware), `run.c` (`ioma_run`). `internal.h` is what they share.
 
 ---
 

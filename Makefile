@@ -22,7 +22,7 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include/ioma
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := uring coro proactor http router
+UNITS  := uring coro bufring conn proactor http api router run
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/switch_x86_64.o obj/pic/picohttpparser.o
 
@@ -40,7 +40,7 @@ libioma.so: $(PICOBJ)
 	$(CC) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD)
 
 # --- static objects (used by libioma.a and the examples) ---
-obj/%.o: src/%.c include/*.h | obj
+obj/%.o: src/%.c include/*.h src/internal.h | obj
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -c $< -o $@
 obj/switch_x86_64.o: src/switch_x86_64.S | obj
 	$(CC) $(CFLAGS) $(CPP) -c $< -o $@
@@ -48,7 +48,7 @@ obj/picohttpparser.o: third_party/picohttpparser/picohttpparser.c | obj
 	$(CC) $(CFLAGS) -w -Ithird_party/picohttpparser -c $< -o $@
 
 # --- position-independent objects (used by libioma.so) ---
-obj/pic/%.o: src/%.c include/*.h | obj/pic
+obj/pic/%.o: src/%.c include/*.h src/internal.h | obj/pic
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -fPIC -c $< -o $@
 obj/pic/switch_x86_64.o: src/switch_x86_64.S | obj/pic
 	$(CC) $(CFLAGS) $(CPP) -fPIC -c $< -o $@

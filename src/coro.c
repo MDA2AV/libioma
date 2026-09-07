@@ -19,6 +19,7 @@ static __thread void   *loop_sp;    /* the loop's stack pointer while a coroutin
 static __thread coro_t *pool_head;  /* free list of whole stack blocks, linked via ->next */
 static __thread int     pool_count;
 
+/* The running coroutine, or NULL on the loop stack. */
 coro_t *coro_current(void)
 {
     return cur;
@@ -34,6 +35,8 @@ static void coro_entry(void)
     abort();                        /* a finished coroutine must never be resumed */
 }
 
+/* Get a stack - pooled, or freshly mapped with a guard page - and forge its first frame so the
+ * first switch into it 'returns' into coro_entry. */
 coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
@@ -42,8 +45,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 
     coro_t *c;
     if (pool_head && pool_head->size == total) {
-        /* Reuse a warm stack: its guard page is still armed, so no mmap and no mprotect. This is
-         * what makes connection churn cheap - the whole block, descriptor included, is recycled. */
+        /* a warm stack: guard page still armed, no mmap, no mprotect */
         c = pool_head;
         pool_head = c->next;
         pool_count--;
@@ -83,10 +85,9 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
     return c;
 }
 
-/* A finished coroutine's stack goes on the free list for the next one, up to a cap. Not unmapping
- * it avoids the mmap/mprotect on the next create AND the cross-core TLB-shootdown a munmap costs in
- * a many-worker process - the dominant price of high connection churn. The cap bounds *idle*
- * stacks retained, not how many connections may be open: past it, extra stacks are unmapped. */
+/* Pool a finished coroutine's stack for the next one (guard page still armed), or unmap it past
+ * the cap. Not unmapping avoids a cross-core TLB shootdown per closed connection. The cap bounds
+ * idle stacks kept, not how many coroutines may run. */
 static void coro_destroy(coro_t *c)
 {
     if (pool_count < CORO_POOL_MAX) {
@@ -109,6 +110,7 @@ void coro_pool_drain(void)
     pool_count = 0;
 }
 
+/* Loop only: switch into c until it yields; if it finished, recycle its stack. */
 void coro_resume(coro_t *c)
 {
     assert(cur == NULL && "coro_resume is loop-only; a coroutine spawns, it never resumes");
@@ -119,6 +121,7 @@ void coro_resume(coro_t *c)
         coro_destroy(c);
 }
 
+/* Coroutine only: switch back to the loop; returns when the loop resumes this coroutine. */
 void coro_yield(void)
 {
     assert(cur != NULL && "coro_yield needs a running coroutine");

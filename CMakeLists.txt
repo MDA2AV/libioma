@@ -26,10 +26,14 @@ include(GNUInstallDirs)
 add_library(ioma
         src/uring.c
         src/coro.c
+        src/switch_x86_64.S
+        src/bufring.c
+        src/conn.c
         src/proactor.c
         src/http.c
+        src/api.c
         src/router.c
-        src/switch_x86_64.S
+        src/run.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioma::ioma ALIAS ioma)
 
