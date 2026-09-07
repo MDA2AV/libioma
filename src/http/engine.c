@@ -248,7 +248,7 @@ enum framing { FRAME_LENGTH, FRAME_CHUNKED, FRAME_UNTIL_CLOSE };
 
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
  * snprintf. Returns the length, or -1 if it does not fit. */
-static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing framing, size_t length)
+static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing framing, size_t body_len)
 {
     const ioma_response *res = &c->res;
     char *p   = dst;
@@ -339,9 +339,9 @@ static int flush(ioma_ctx *c, bool final)
 
     if (!res->head_sent) {
         enum framing framing      = FRAME_LENGTH;
-        size_t       length = n;
+        size_t       body_len = len;
         if (res->has_length) {
-            length = res->content_length;
+            body_len = res->content_length;
         } else if (!final) {
             if (c->req.minor_version >= 1) {
                 framing = FRAME_CHUNKED;
