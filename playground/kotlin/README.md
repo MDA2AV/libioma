@@ -1,10 +1,15 @@
 # Kotlin on libioma
 
-A spike: libioma does the I/O in C, the endpoints are Kotlin. `Server.kt` loads `libioma.so`
-through Panama (`java.lang.foreign`, final since JDK 22), turns two Kotlin functions into C function
-pointers with upcall stubs, registers them with `ioma_route_ffi`, and hands the main thread to
-`ioma_run`. libioma calls the handlers on each worker's own thread stack, never on a coroutine
-stack, which is what makes calling a JVM from it safe.
+A spike: libioma does the I/O in C, the endpoints are Kotlin.
+
+`App.kt` is the program: a few routes with lambdas, then hand the main thread to libioma.
+`Ioma.kt` is the binding that keeps Panama out of the app: it loads `libioma.so` through
+`java.lang.foreign` (final since JDK 22), registers one C-callable dispatcher for every route with
+`ioma_route_ffi`, and gives each handler a `Request` (zero-copy views of the query, body and so on)
+and a `Reply` (writes the body into libioma's scratch buffer). One `Request` and one `Reply` are
+reused per worker thread, so a request allocates nothing. libioma calls the dispatcher on each
+worker's own thread stack, never on a coroutine stack, which is what makes calling a JVM from it
+safe.
 
 Run `./run.sh` with `kotlinc` and a JDK 22+ on PATH (tested on JDK 26.0.2.1). It serves `/` and `GET`/`POST /baseline11`
 on port 8080. The handlers read the request and write the reply body straight in C memory, so the

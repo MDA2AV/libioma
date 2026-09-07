@@ -4,5 +4,5 @@
 set -e
 cd "$(dirname "$0")"
 make -s -C ../.. lib
-kotlinc Server.kt -include-runtime -d server.jar
+kotlinc Ioma.kt App.kt -include-runtime -d server.jar
 exec java --enable-native-access=ALL-UNNAMED -jar server.jar ../../libioma.so
