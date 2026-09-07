@@ -216,8 +216,10 @@ void ioma_default(ioma_handler fn);
 
 /* Registration as a block-structured script: a current group, which the block after IOMA_GROUP
  * sets (the root outside any block), endpoints registered into it, with their own middleware
- * listed after the handler, and IOMA_USE adding middleware to it. Plain functions underneath, so
- * everything is type-checked; a group's block runs exactly once (do not break out of it).
+ * listed after the handler, and IOMA_USE adding middleware to it - so a group's middleware is
+ * either listed after its prefix or added with IOMA_USE inside its block. Plain functions
+ * underneath, so everything is type-checked; a group's block runs exactly once (do not break out
+ * of it).
  *
  *     IOMA_USE(log);
  *     IOMA_GET("/", home);

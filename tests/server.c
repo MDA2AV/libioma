@@ -273,9 +273,11 @@ int main(void)
     IOMA_POST("/chunks",                chunks);
     IOMA_DEFAULT(not_found);
 
-    /* groups: /api with middleware of its own, /api/admin below it gated by a token, and one
-     * endpoint with middleware for itself only, listed after its handler */
-    IOMA_GROUP("/api", api_header) {
+    /* groups: /api with middleware of its own (IOMA_USE inside a block adds to that group; listing
+     * it after the prefix, as /admin does, is the same), /api/admin below it gated by a token, and
+     * one endpoint with middleware for itself only, listed after its handler */
+    IOMA_GROUP("/api") {
+        IOMA_USE(api_header);
         IOMA_GET("/ping", ping);
         IOMA_GROUP("/admin", require_token) {
             IOMA_GET("/stats", stats, endpoint_header);
