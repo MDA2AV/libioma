@@ -118,8 +118,9 @@ void ioma_next_run(ioma_ctx *c, ioma_next *next);
  * started streaming. */
 ioma_slice ioma_body(ioma_ctx *c);
 
-/* Stream the body: the next bytes into dst, at most cap. Returns the count, 0 at the end, -1 on
- * error (the connection then closes after the reply). Any size of body, nothing buffered. */
+/* Stream the body: the next bytes into dst, at most cap. Returns the count, 0 at the end (at once
+ * after ioma_body: the body was consumed whole), -1 on error (the connection then closes after
+ * the reply). Any size of body, nothing buffered. */
 int        ioma_body_read(ioma_ctx *c, void *dst, size_t cap);
 
 /* ── the reply ─────────────────────────────────────────────────────────────────────────── */

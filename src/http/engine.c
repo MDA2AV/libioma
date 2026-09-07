@@ -608,21 +608,12 @@ static int body_read_chunked(ioma_ctx *c, struct serve_state *state, char *dst, 
     }
 }
 
-/* The next bytes of the body into dst. */
+/* The next bytes of the body into dst; 0 once it is all consumed, which a whole read did at once. */
 int ioma_body_read(ioma_ctx *c, void *dst, size_t cap)
 {
     struct serve_state *state = STATE(c);
     if (state->body_err || cap == 0)
         return -1;
-    if (state->body_whole) {                                    /* hand out what ioma_body read */
-        size_t rem = c->req.body.len - state->body_read;
-        if (rem == 0)
-            return 0;
-        size_t n = rem < cap ? rem : cap;
-        memcpy(dst, c->req.body.p + state->body_read, n);
-        state->body_read += n;
-        return (int)n;
-    }
     if (state->body_done)
         return 0;
     return c->req.chunked ? body_read_chunked(c, state, dst, cap) : body_read_fixed(c, state, dst, cap);
