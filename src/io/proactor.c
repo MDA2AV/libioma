@@ -16,12 +16,29 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+/* ── submission ────────────────────────────────────────────────────────────────────────── */
+
+/* Claim an SQE. If the SQ is full mid-batch, flush without waiting and retry. */
+struct io_uring_sqe *ioma__sqe(proactor_t *p)
+{
+    struct io_uring_sqe *sqe = uring_get_sqe(&p->ring);
+    for (int i = 0; !sqe && i < 16; i++) {
+        uring_submit(&p->ring);
+        sqe = uring_get_sqe(&p->ring);
+    }
+    if (!sqe) {
+        fprintf(stderr, "[w%d] SQ still full after flushing\n", p->id);
+        abort();
+    }
+    return sqe;
+}
+
 /* ── accept ────────────────────────────────────────────────────────────────────────────── */
 
 /* Arm the multishot accept: one SQE, then a CQE per new connection. */
 static void arm_accept(proactor_t *p)
 {
-    struct io_uring_sqe *sqe = get_sqe(p);
+    struct io_uring_sqe *sqe = ioma__sqe(p);
     sqe->opcode    = IORING_OP_ACCEPT;
     sqe->fd        = p->listen_fd;
     sqe->ioprio    = IORING_ACCEPT_MULTISHOT;
@@ -214,7 +231,7 @@ void proactor_run(proactor_t *p)
     while (!*p->stop) {
         run_ready(p);
         rearm_starved(p);
-        bufring_publish(p);
+        ioma__bufring_publish(p);
 
         rc = uring_submit_wait(&p->ring, 1, &ts);    /* one syscall per batch */
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {

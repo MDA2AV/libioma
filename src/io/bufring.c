@@ -48,6 +48,28 @@ void ioma__bufring_init(proactor_t *p)
     __atomic_store_n(&p->buf_ring->tail, (uint16_t)p->buf_tail, __ATOMIC_RELEASE);
 }
 
+/* Stage a buffer's return to the ring. The loop publishes the tail once per batch: one atomic
+ * release for many returns, and the kernel is not re-reading a hot tail per request. */
+void ioma__return_buf(proactor_t *p, uint16_t bid)
+{
+    struct io_uring_buf *b = &p->buf_ring->bufs[p->buf_tail & BUF_MASK];
+    b->addr = (uint64_t)(uintptr_t)(p->slab + (size_t)bid * BUF_SIZE);
+    b->len  = BUF_SIZE;
+    b->bid  = bid;
+    p->buf_tail++;
+    p->buffers_returned = true;                   /* lets the loop re-arm starved recvs     */
+    p->buf_dirty        = true;                   /* tail needs publishing before the enter */
+}
+
+/* Publish staged returns to the kernel. */
+void ioma__bufring_publish(proactor_t *p)
+{
+    if (!p->buf_dirty)
+        return;
+    __atomic_store_n(&p->buf_ring->tail, (uint16_t)p->buf_tail, __ATOMIC_RELEASE);
+    p->buf_dirty = false;
+}
+
 /* Unregister the group. Call before uring_exit. */
 void ioma__bufring_unregister(proactor_t *p)
 {

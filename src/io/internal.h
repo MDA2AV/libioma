@@ -1,8 +1,8 @@
 /*
  * io/internal.h - what the I/O plane's files share with each other. Private; not installed.
  *
- * Exported internals carry an ioma__ prefix so they cannot collide with a user's symbols. The
- * small hot-path helpers are static inline here so every file still gets them inlined.
+ * Exported internals carry an ioma__ prefix so they cannot collide with a user's symbols. Only
+ * declarations, types and macros live here; LTO inlines the small hot ones across files.
  */
 #pragma once
 
@@ -46,65 +46,14 @@ typedef struct op {
     unsigned flags;
 } op_t;
 
-/* ── SQE helpers ───────────────────────────────────────────────────────────────────────── */
+/* ── shared between the plane's files ──────────────────────────────────────────────────── */
 
-/* Claim an SQE. If the SQ is full mid-batch, flush without waiting and retry. */
-static inline struct io_uring_sqe *get_sqe(proactor_t *p)
-{
-    struct io_uring_sqe *sqe = uring_get_sqe(&p->ring);
-    for (int i = 0; !sqe && i < 16; i++) {
-        uring_submit(&p->ring);
-        sqe = uring_get_sqe(&p->ring);
-    }
-    if (!sqe) {
-        fprintf(stderr, "[w%d] SQ still full after flushing\n", p->id);
-        abort();
-    }
-    return sqe;
-}
+/* proactor.c */
+struct io_uring_sqe *ioma__sqe(proactor_t *p);   /* claim an SQE; flushes without waiting if the SQ is full */
 
-/* Stage a one-shot op and park until its CQE. The loop fills op->res and resumes us. */
-static inline int await_op(struct io_uring_sqe *sqe, op_t *op)
-{
-    op->waiter     = coro_current();
-    sqe->user_data = UD(op, TAG_OP);
-    coro_yield();
-    return op->res;
-}
-
-/* Ask the kernel to cancel the op carrying that user_data. The acknowledgement CQE is ignored. */
-static inline void submit_cancel(proactor_t *p, uint64_t target_user_data)
-{
-    struct io_uring_sqe *sqe = get_sqe(p);
-    sqe->opcode    = IORING_OP_ASYNC_CANCEL;
-    sqe->fd        = -1;
-    sqe->addr      = target_user_data;
-    sqe->user_data = TAG_IGNORE;
-}
-
-/* ── provided buffers ──────────────────────────────────────────────────────────────────── */
-
-/* Stage a buffer's return to the ring. The loop publishes the tail once per batch. */
-static inline void return_buf(proactor_t *p, uint16_t bid)
-{
-    struct io_uring_buf *b = &p->buf_ring->bufs[p->buf_tail & BUF_MASK];
-    b->addr = (uint64_t)(uintptr_t)(p->slab + (size_t)bid * BUF_SIZE);
-    b->len  = BUF_SIZE;
-    b->bid  = bid;
-    p->buf_tail++;
-    p->buffers_returned = true;                   /* lets the loop re-arm starved recvs     */
-    p->buf_dirty        = true;                   /* tail needs publishing before the enter */
-}
-
-/* Publish staged returns to the kernel: one atomic release for the whole batch. */
-static inline void bufring_publish(proactor_t *p)
-{
-    if (!p->buf_dirty)
-        return;
-    __atomic_store_n(&p->buf_ring->tail, (uint16_t)p->buf_tail, __ATOMIC_RELEASE);
-    p->buf_dirty = false;
-}
-
+/* bufring.c */
+void ioma__return_buf(proactor_t *p, uint16_t bid);   /* stage a buffer's return; published per batch  */
+void ioma__bufring_publish(proactor_t *p);            /* publish staged returns: one atomic release    */
 void ioma__bufring_init(proactor_t *p);           /* bufring.c: map, register, fill          */
 void ioma__bufring_unregister(proactor_t *p);     /* bufring.c: before uring_exit            */
 void ioma__bufring_unmap(proactor_t *p);          /* bufring.c: after uring_exit             */

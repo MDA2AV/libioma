@@ -60,6 +60,23 @@ struct serve_state {
 
 /* ── request headers ───────────────────────────────────────────────────────────────────── */
 
+/* Fold A-Z to a-z; every other byte unchanged. */
+static inline unsigned char lower_ascii(unsigned char a)
+{
+    return (unsigned)(a - 'A') < 26u ? (unsigned char)(a | 0x20) : a;
+}
+
+/* Case-insensitive equality of two slices: a length test, then a byte loop. No libc, no locale. */
+static bool eq_ci(const char *a, size_t an, const char *b, size_t bn)
+{
+    if (an != bn)
+        return false;
+    for (size_t i = 0; i < an; i++)
+        if (lower_ascii((unsigned char)a[i]) != lower_ascii((unsigned char)b[i]))
+            return false;
+    return true;
+}
+
 /* Parse a decimal size; stops at the first non-digit. */
 static size_t parse_size(const char *s, size_t n)
 {
