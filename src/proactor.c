@@ -58,7 +58,7 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
         op->res   = cqe->res;
         op->flags = cqe->flags;
         trace("[w%d] op res=%d flags=%#x\n", p->id, cqe->res, cqe->flags);
-        coro_resume(op->waiter);                     /* to its next await; op may be gone after */
+        run_coro(p, op->waiter);                     /* to its next await; op may be gone after */
         break;
     }
     case TAG_RECV:
@@ -94,7 +94,7 @@ static void run_ready(proactor_t *p)
         if (!p->ready_head)
             p->ready_tail = NULL;
         c->next = NULL;
-        coro_resume(c);
+        run_coro(p, c);
     }
 }
 

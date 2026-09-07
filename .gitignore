@@ -25,3 +25,5 @@ compile_commands.json
 
 # IDE
 .idea/
+playground/kotlin/server.jar
+*.jar

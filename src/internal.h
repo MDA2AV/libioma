@@ -121,8 +121,24 @@ void    ioma__conn_pool_drain(proactor_t *p);
 /* ── HTTP (http.c, router.c) ───────────────────────────────────────────────────────────── */
 
 void          ioma__serve(conn_t *c);             /* the per-connection HTTP loop            */
-ioma_handler  ioma__match(const ioma_request *req);
 ioma_response ioma__dispatch(ioma_request *req);
+
+/* ── running coroutines ────────────────────────────────────────────────────────────────── */
+
+/* Resume a coroutine and service any await_call it makes: the call runs right here, on the
+ * thread's own stack, and the coroutine is resumed again with the result. Every resume of a
+ * connection coroutine goes through this. */
+static inline void run_coro(proactor_t *p, coro_t *c)
+{
+    coro_resume(c);
+    while (p->call_fn) {
+        void (*fn)(void *) = p->call_fn;
+        void  *arg         = p->call_arg;
+        p->call_fn = NULL;
+        fn(arg);
+        coro_resume(c);
+    }
+}
 
 /* ── ASCII helpers ─────────────────────────────────────────────────────────────────────── */
 

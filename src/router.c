@@ -17,12 +17,16 @@
 typedef struct {
     const char  *method; size_t method_len;     /* lengths fixed at registration: a lookup is  */
     const char  *path;   size_t path_len;       /* length tests first, memcmp only on a hit    */
-    ioma_handler fn;
+    ioma_handler fn;                            /* the endpoint (ffi_endpoint for a foreign one) */
+    ioma_ffi_handler ffi;                       /* set on a foreign route                      */
+    void        *ud;
 } route_t;
 
-static route_t      g_routes[IOMA_MAX_ROUTES];
-static int          g_nroutes;
-static ioma_handler g_fallback;
+static ioma_response not_found(ioma_request *req);
+
+static route_t g_routes[IOMA_MAX_ROUTES];
+static int     g_nroutes;
+static route_t g_fallback_route = { .fn = not_found };   /* what an unmatched request gets */
 
 /* The chain cursor handed to each middleware; ioma_next_run advances it. */
 struct ioma_next {
@@ -51,7 +55,7 @@ void ioma_route(const char *method, const char *path, const ioma_handler fn)
 /* Replace the built-in 404 fallback. */
 void ioma_default(const ioma_handler fn)
 {
-    g_fallback = fn;
+    g_fallback_route.fn = fn;
 }
 
 /* The built-in fallback: a plain 404. */
@@ -61,18 +65,65 @@ static ioma_response not_found(ioma_request *req)
     return ioma_text(404, "404 Not Found\n");
 }
 
-/* Find the handler for a request. Never NULL: unmatched requests get the fallback. */
-ioma_handler ioma__match(const ioma_request *req)
+/* Find the route for a request. Never NULL: unmatched requests get the fallback route. */
+static const route_t *match(const ioma_request *req)
 {
     for (int i = 0; i < g_nroutes; i++) {
         const route_t *r = &g_routes[i];
         if (req->path_len == r->path_len && req->method_len == r->method_len &&
             memcmp(req->path, r->path, r->path_len) == 0 &&
             memcmp(req->method, r->method, r->method_len) == 0) {
-            return r->fn;
+            return r;
         }
     }
-    return g_fallback ? g_fallback : not_found;
+    return &g_fallback_route;
+}
+
+/* ── foreign handlers ──────────────────────────────────────────────────────────────────── */
+
+static __thread const route_t *t_ffi_route;    /* the foreign route being dispatched on this thread */
+
+struct ffi_call {
+    ioma_ffi_handler        fn;
+    const ioma_ffi_request *req;
+    ioma_ffi_response      *res;
+    void                   *ud;
+};
+
+/* What the loop runs on the thread stack: the foreign handler itself. */
+static void ffi_call_run(void *arg)
+{
+    struct ffi_call *k = arg;
+    k->fn(k->req, k->res, k->ud);
+}
+
+/* The endpoint every foreign route uses: flatten the request, hop to the thread stack for the
+ * call, and turn the filled-in reply into an ioma_response. */
+static ioma_response ffi_endpoint(ioma_request *req)
+{
+    const route_t *r = t_ffi_route;
+    ioma_ffi_request fr = {
+        req->method, req->method_len, req->path, req->path_len, req->query, req->query_len,
+        req->body, req->body_len, req->scratch, req->scratch_cap, req,
+    };
+    ioma_ffi_response out = { .status = 200 };
+    struct ffi_call k = { r->ffi, &fr, &out, r->ud };
+    await_call(req->conn->p, ffi_call_run, &k);
+    ioma_response res = ioma_bytes(out.status, out.content_type, out.body, out.body_len);
+    res.close = out.close != 0;
+    return res;
+}
+
+/* Register a foreign handler for an exact (method, path). */
+void ioma_route_ffi(const char *method, const char *path, ioma_ffi_handler fn, void *userdata)
+{
+    if (g_nroutes == IOMA_MAX_ROUTES) {
+        fprintf(stderr, "ioma: route table full (%d), dropping %s %s\n", IOMA_MAX_ROUTES, method, path);
+        return;
+    }
+    g_routes[g_nroutes++] = (route_t){ .method = method, .method_len = strlen(method),
+                                       .path = path,     .path_len = strlen(path),
+                                       .fn = ffi_endpoint, .ffi = fn, .ud = userdata };
 }
 
 /* ── middleware ────────────────────────────────────────────────────────────────────────── */
@@ -103,9 +154,11 @@ ioma_response ioma_next_run(ioma_request *req, ioma_next *next)
  * is a direct call. */
 ioma_response ioma__dispatch(ioma_request *req)
 {
-    ioma_handler h = ioma__match(req);
+    const route_t *r = match(req);
+    if (r->ffi)
+        t_ffi_route = r;                        /* ffi_endpoint reads it, on this same thread */
     if (g_nmw == 0)
-        return h(req);
-    ioma_next next = { g_mws, g_nmw, 0, h };
+        return r->fn(req);
+    ioma_next next = { g_mws, g_nmw, 0, r->fn };
     return ioma_next_run(req, &next);
 }

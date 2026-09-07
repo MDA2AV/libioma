@@ -92,6 +92,8 @@ struct proactor {
     uint64_t                  accepted;
     conn_t                   *conn_free;         /* recycled conn_t objects, reused on accept   */
     unsigned                  conn_free_count;
+    void                    (*call_fn)(void *);  /* a coroutine's pending await_call, or NULL   */
+    void                     *call_arg;
 };
 
 /* The worker thread's whole life: ring, buffers, listener, loop until *stop, teardown. */
@@ -104,3 +106,8 @@ void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
  * when the completion arrives. */
 int await_recv(conn_t *c, void *buf, size_t len);        /* >0 bytes, 0 peer closed, <0 -errno */
 int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, else -errno     */
+
+/* Run fn(arg) on the worker's own thread stack and return once it has. For code that must not run
+ * on a coroutine stack: a managed runtime's upcall, anything that bounds-checks the stack. Two
+ * extra switches, nothing else. */
+void await_call(proactor_t *p, void (*fn)(void *arg), void *arg);

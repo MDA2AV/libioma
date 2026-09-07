@@ -194,6 +194,17 @@ calls `ioma_next_run` to run the rest of the chain and the endpoint, then may in
 response on the way out. Not calling `next` short-circuits (auth, cache). With no middleware
 registered the dispatch is a direct function call.
 
+### Foreign handlers
+
+`ioma_route_ffi` registers a plain C function pointer instead of an `ioma_handler`, for handlers
+that live in another runtime; the Kotlin example in `playground/kotlin` hands it a Panama upcall
+stub. A managed runtime cannot run on a coroutine's 64 KB stack (the JVM bounds-checks and walks
+the thread's real stack), so these handlers do not run there. The coroutine flattens the request
+into a small fixed-layout struct and calls `await_call`: it parks, the loop runs the handler right
+where it resumed the coroutine, on the worker's own thread stack, then resumes the coroutine with
+the filled-in reply. Two extra switches per request; a Kotlin handler measures within a few percent
+of a native one.
+
 ---
 
 ## 6. One keep-alive request, end to end

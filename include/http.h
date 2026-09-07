@@ -102,6 +102,39 @@ void ioma_default(ioma_handler fn);
 /* Register global middleware; it runs on every request in the order added, wrapping the handler. */
 void ioma_use(ioma_mw mw);
 
+/* ── foreign handlers ──────────────────────────────────────────────────────────────────── */
+
+/* A request as a foreign handler sees it: ten 8-byte fields, no padding, so a binding reads it
+ * with fixed offsets (see playground/kotlin). Strings are not NUL-terminated. `req` is the full
+ * request, for ioma_header_get through a call back into the library. */
+typedef struct ioma_ffi_request {
+    const char *method;  size_t method_len;
+    const char *path;    size_t path_len;
+    const char *query;   size_t query_len;
+    const char *body;    size_t body_len;
+    char       *scratch; size_t scratch_cap;    /* write the reply body here                 */
+    const ioma_request *req;
+} ioma_ffi_request;
+
+/* The reply a foreign handler fills in: 32 bytes, no padding. body must stay valid until the
+ * reply is sent - the scratch buffer above, or memory the binding keeps for the program's life.
+ * Preset before the call: status 200, everything else zero. */
+typedef struct ioma_ffi_response {
+    int         status;
+    int         close;                          /* nonzero: close after this reply           */
+    const char *content_type;                   /* NUL-terminated; NULL means text/plain     */
+    const void *body;
+    size_t      body_len;
+} ioma_ffi_response;
+
+typedef void (*ioma_ffi_handler)(const ioma_ffi_request *req, ioma_ffi_response *res, void *userdata);
+
+/* Register a foreign handler. Unlike an ioma_handler it runs on the worker's own thread stack,
+ * not on the connection's coroutine, so a managed runtime (a JVM through Panama, ...) may be
+ * called from it. It must not block: every connection on that worker waits while it runs.
+ * Middleware applies to it like to any endpoint. */
+void ioma_route_ffi(const char *method, const char *path, ioma_ffi_handler fn, void *userdata);
+
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
 /* Start `workers` proactor threads (one per core) serving HTTP on `port`, and block until
