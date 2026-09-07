@@ -187,7 +187,9 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
 6. **Finish**: after the chain returns, whatever is buffered goes out. The usual case is that
    everything fit: the head (with `Content-Length`, serialized by `memcpy` of precomposed pieces
    plus a small integer writer, no `snprintf`) is copied into the reserve right before the body
-   and the reply is one send. A streamed reply gets its terminating chunk. Then loop; leftover
+   and the reply is one send. Every header name goes out lower-cased, the engine's and the
+   handler's alike; HTTP/1.1 treats names case-insensitively and HTTP/2 requires lowercase, so
+   one spelling is the only one there is. A streamed reply gets its terminating chunk. Then loop; leftover
    bytes of a pipelined next request are carried over.
 
 Because the head is built at the first send, middleware can shape headers and status until then,

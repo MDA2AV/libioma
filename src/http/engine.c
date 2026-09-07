@@ -237,7 +237,7 @@ static void send_status(conn_t *conn, int code)
         memcpy(p, "\r\n", 2);
         p += 2;
     }
-    memcpy(p, "Content-Length: 0\r\nConnection: close\r\n\r\n", 40);
+    memcpy(p, "content-length: 0\r\nconnection: close\r\n\r\n", 40);
     p += 40;
 
     await_send(conn, head, (size_t)(p - head));
@@ -247,7 +247,8 @@ static void send_status(conn_t *conn, int code)
 enum framing { FRAME_LENGTH, FRAME_CHUNKED, FRAME_UNTIL_CLOSE };
 
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
- * snprintf. Returns the length, or -1 if it does not fit. */
+ * snprintf. Every field name goes out lower-cased: the engine's own are lowercase literals, a
+ * handler's are folded as they are copied. Returns the length, or -1 if it does not fit. */
 static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing framing, size_t body_len)
 {
     const ioma_response *res = &c->res;
@@ -271,30 +272,32 @@ static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing fra
         PUTC("\r\n");
     }
 
-    PUTC("Content-Type: ");
+    PUTC("content-type: ");
     PUT(res->content_type.p, res->content_type.len);
     PUTC("\r\n");
 
     if (framing == FRAME_LENGTH) {
-        PUTC("Content-Length: ");
+        PUTC("content-length: ");
         NEED(20);
         p += put_uint(p, body_len);
         PUTC("\r\n");
     } else if (framing == FRAME_CHUNKED) {
-        PUTC("Transfer-Encoding: chunked\r\n");
+        PUTC("transfer-encoding: chunked\r\n");
     }
 
     /* Connection: only when it says something. HTTP/1.1 is persistent by default, so a kept-alive
      * 1.1 reply carries none; a 1.0 client that asked for keep-alive is told it got it; a closing
      * reply always says close. */
-    bool ka = c->req.keep_alive && !res->close;
-    if (!ka)
-        PUTC("Connection: close\r\n");
+    bool keep = c->req.keep_alive && !res->close;
+    if (!keep)
+        PUTC("connection: close\r\n");
     else if (c->req.minor_version == 0)
-        PUTC("Connection: keep-alive\r\n");
+        PUTC("connection: keep-alive\r\n");
 
-    for (size_t i = 0; i < res->n_headers; i++) {
-        PUT(res->headers[i].key.p, res->headers[i].key.len);
+    for (size_t i = 0; i < res->n_headers; i++) {                 /* names go out lower-cased */
+        NEED(res->headers[i].key.len);
+        for (size_t j = 0; j < res->headers[i].key.len; j++)
+            *p++ = (char)lower_ascii((unsigned char)res->headers[i].key.p[j]);
         PUTC(": ");
         PUT(res->headers[i].value.p, res->headers[i].value.len);
         PUTC("\r\n");

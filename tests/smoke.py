@@ -104,7 +104,7 @@ while True:
 s.close()
 head, _, body = raw.partition(b"\r\n\r\n")
 results.append(check("GET /stream on HTTP/1.0 -> until close, no length, all lines",
-                     b"Connection: close" in head and b"Content-Length" not in head
+                     b"connection: close" in head and b"content-length" not in head
                      and b"chunked" not in head and body.count(b"\n") == 3000))
 
 # POST /echo reflects the body

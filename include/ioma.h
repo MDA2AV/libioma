@@ -130,7 +130,7 @@ int  ioma_text  (ioma_ctx *c, const char *s);                          /* a C st
 int  ioma_printf(ioma_ctx *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));   /* formatted, into the slab */
 
 /* Shape the head. Only before it is sent: ioma_header returns false afterwards. */
-bool ioma_header        (ioma_ctx *c, const char *name, const char *value);   /* both stay valid until sent */
+bool ioma_header        (ioma_ctx *c, const char *name, const char *value);   /* both stay valid until sent; the name is sent lower-cased */
 void ioma_content_type  (ioma_ctx *c, const char *type);
 void ioma_content_length(ioma_ctx *c, size_t n);       /* stream a large body with a known length */
 int  ioma_flush         (ioma_ctx *c);                 /* send what is in the slab now (starts streaming) */
