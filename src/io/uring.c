@@ -63,7 +63,7 @@ int uring_init(struct uring *ring, unsigned entries)
     size_t sq_bytes = params.sq_off.array + (size_t)params.sq_entries * sizeof(unsigned);
     size_t cq_bytes = params.cq_off.cqes  + (size_t)params.cq_entries * sizeof(struct io_uring_cqe);
     ring->ring_bytes = sq_bytes > cq_bytes ? sq_bytes : cq_bytes;
-    ring->ring_mem = mmap(NULL, ring->ring_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+    ring->ring_mem = mmap(nullptr, ring->ring_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
                        fd, IORING_OFF_SQ_RING);
     if (ring->ring_mem == MAP_FAILED) {
         int e = -errno;
@@ -72,7 +72,7 @@ int uring_init(struct uring *ring, unsigned entries)
     }
 
     ring->sqe_bytes = (size_t)params.sq_entries * sizeof(struct io_uring_sqe);
-    ring->sqe_mem = mmap(NULL, ring->sqe_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+    ring->sqe_mem = mmap(nullptr, ring->sqe_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
                       fd, IORING_OFF_SQES);
     if (ring->sqe_mem == MAP_FAILED) {
         int e = -errno;
@@ -139,12 +139,12 @@ void uring_exit(struct uring *ring)
     memset(ring, 0, sizeof *ring);
 }
 
-/* Claim the next SQE against the local tail, zeroed. NULL when the SQ is full. */
+/* Claim the next SQE against the local tail, zeroed. nullptr when the SQ is full. */
 struct io_uring_sqe *uring_get_sqe(struct uring *ring)
 {
     unsigned head = load_acquire(ring->sq_head);
     if (ring->sqe_tail - head >= ring->sq_entries)
-        return NULL;                                   /* full: the caller flushes and retries */
+        return nullptr;                                   /* full: the caller flushes and retries */
 
     unsigned slot = ring->sqe_tail & ring->sq_mask;
     if (ring->has_sq_array)
@@ -176,14 +176,14 @@ static int flush_and_enter(struct uring *ring, unsigned wait_nr, unsigned flags,
 /* Submit everything claimed; never waits. */
 int uring_submit(struct uring *ring)
 {
-    return flush_and_enter(ring, 0, 0, NULL, 0);
+    return flush_and_enter(ring, 0, 0, nullptr, 0);
 }
 
-/* Submit, then wait for wait_nr completions or until ts expires (NULL: no timeout). */
+/* Submit, then wait for wait_nr completions or until ts expires (nullptr: no timeout). */
 int uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts)
 {
     if (!ts)
-        return flush_and_enter(ring, wait_nr, IORING_ENTER_GETEVENTS, NULL, 0);
+        return flush_and_enter(ring, wait_nr, IORING_ENTER_GETEVENTS, nullptr, 0);
 
     struct io_uring_getevents_arg arg;
     memset(&arg, 0, sizeof arg);

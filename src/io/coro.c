@@ -9,16 +9,16 @@
 
 extern void swap_ctx(void **save_sp, void *load_sp);     /* switch_x86_64.S */
 
-static __thread coro_t *cur;        /* the running coroutine; NULL on the loop stack   */
-static __thread void   *loop_sp;    /* the loop's stack pointer while a coroutine runs */
+static thread_local coro_t *cur;        /* the running coroutine; nullptr on the loop stack   */
+static thread_local void   *loop_sp;    /* the loop's stack pointer while a coroutine runs */
 
 #ifndef CORO_POOL_MAX
 #define CORO_POOL_MAX 512           /* warm stacks kept per worker, reused instead of munmap/mmap */
 #endif
-static __thread coro_t *pool_head;  /* free list of whole stack blocks, linked via ->next */
-static __thread int     pool_count;
+static thread_local coro_t *pool_head;  /* free list of whole stack blocks, linked via ->next */
+static thread_local int     pool_count;
 
-/* The running coroutine, or NULL on the loop stack. */
+/* The running coroutine, or nullptr on the loop stack. */
 coro_t *coro_current(void)
 {
     return cur;
@@ -49,7 +49,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
         pool_head = c->next;
         pool_count--;
     } else {
-        void *mem = mmap(NULL, total, PROT_READ | PROT_WRITE,
+        void *mem = mmap(nullptr, total, PROT_READ | PROT_WRITE,
                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
         if (mem == MAP_FAILED) {
             perror("mmap(stack)");
@@ -69,7 +69,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
     c->fn   = fn;
     c->arg  = arg;
     c->done = false;
-    c->next = NULL;
+    c->next = nullptr;
 
     /* Forge the frame swap_ctx expects: six callee-saved slots below a 16-aligned return slot that
      * holds coro_entry. The first swap_ctx pops the six zeros and rets into coro_entry with
@@ -112,10 +112,10 @@ void coro_pool_drain(void)
 /* Loop only: switch into c until it yields; if it finished, recycle its stack. */
 void coro_resume(coro_t *c)
 {
-    assert(cur == NULL && "coro_resume is loop-only; a coroutine spawns, it never resumes");
+    assert(cur == nullptr && "coro_resume is loop-only; a coroutine spawns, it never resumes");
     cur = c;
     swap_ctx(&loop_sp, c->sp);
-    cur = NULL;
+    cur = nullptr;
     if (c->done)
         coro_destroy(c);
 }
@@ -123,6 +123,6 @@ void coro_resume(coro_t *c)
 /* Coroutine only: switch back to the loop; returns when the loop resumes this coroutine. */
 void coro_yield(void)
 {
-    assert(cur != NULL && "coro_yield needs a running coroutine");
+    assert(cur != nullptr && "coro_yield needs a running coroutine");
     swap_ctx(&cur->sp, loop_sp);
 }

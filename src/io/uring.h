@@ -7,7 +7,6 @@
  */
 #pragma once
 
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <linux/io_uring.h>
@@ -58,11 +57,11 @@ struct uring {
 int  uring_init(struct uring *ring, unsigned entries);
 void uring_exit(struct uring *ring);
 
-/* Claim the next SQE, zeroed. NULL when the SQ is full: submit, then try again. */
+/* Claim the next SQE, zeroed. nullptr when the SQ is full: submit, then try again. */
 struct io_uring_sqe *uring_get_sqe(struct uring *ring);
 
 /* Publish claimed SQEs and enter. uring_submit never waits; uring_submit_wait blocks until
- * wait_nr completions are available or ts (may be NULL) expires. Return: submitted count or
+ * wait_nr completions are available or ts (may be nullptr) expires. Return: submitted count or
  * -errno (-ETIME on timeout). Under DEFER_TASKRUN only the waiting form reaps completions. */
 int  uring_submit(struct uring *ring);
 int  uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts);

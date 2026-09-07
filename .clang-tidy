@@ -1,7 +1,7 @@
 # clang-tidy configuration for libioma. CLion picks this file up (it prefers a project .clang-tidy
 # over its own settings); from the shell, with the compile flags the Makefile uses:
 #
-#   clang-tidy src/io/*.c src/http/*.c tests/server.c -- -std=gnu11 -D_GNU_SOURCE -Iinclude -Isrc -Ithird_party/picohttpparser
+#   clang-tidy src/io/*.c src/http/*.c tests/server.c -- -std=gnu23 -D_GNU_SOURCE -Iinclude -Isrc -Ithird_party/picohttpparser
 #
 # (CLion's bundled clang-tidy ships without clang's builtin headers; give it gcc's with
 #  --extra-arg=-isystem/usr/lib/gcc/x86_64-linux-gnu/13/include, or it cascades phantom warnings.)

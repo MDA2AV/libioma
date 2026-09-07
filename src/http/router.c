@@ -144,7 +144,7 @@ static bool same_path(const route_t *route, const ioma_request *req)
 }
 
 /* Find the route for a request and fill its route parameters. Exact routes first, so a static
- * path beats a pattern that would also match it. Never NULL: unmatched requests get the fallback. */
+ * path beats a pattern that would also match it. Never nullptr: unmatched requests get the fallback. */
 static const route_t *match(ioma_request *req)
 {
     req->n_route_params = 0;

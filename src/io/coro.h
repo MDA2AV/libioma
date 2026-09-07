@@ -12,7 +12,6 @@
  */
 #pragma once
 
-#include <stdbool.h>
 #include <stddef.h>
 
 typedef struct coro {
@@ -34,7 +33,7 @@ void coro_resume(coro_t *c);
 /* Coroutine only. Back to the loop; returns when the loop resumes this coroutine again. */
 void coro_yield(void);
 
-/* The running coroutine, NULL on the loop stack. */
+/* The running coroutine, nullptr on the loop stack. */
 coro_t *coro_current(void);
 
 /* Unmap the per-thread free list of pooled stacks. Call at worker teardown, on the worker thread. */

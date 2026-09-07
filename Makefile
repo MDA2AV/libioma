@@ -7,14 +7,23 @@
 #
 # Downstream then builds with:  cc app.c $(pkg-config --cflags --libs ioma) -o app
 
-CC      ?= gcc
+# The compiler: unless CC is given, the newest gcc on the PATH (a distro's `gcc` is often older
+# than a `gcc-NN` installed beside it). The code is C23, which needs gcc 14 or newer.
+ifeq ($(origin CC),default)
+CC := $(shell for c in gcc gcc-14 gcc-15 gcc-16; do command -v $$c >/dev/null 2>&1 && echo "$$($$c -dumpfullversion) $$c"; done | sort -V | tail -1 | cut -d' ' -f2)
+CC := $(if $(CC),$(CC),gcc)
+endif
+STD     := $(shell $(CC) -std=gnu23 -x c -c /dev/null -o /dev/null 2>/dev/null && echo -std=gnu23)
+ifeq ($(STD),)
+$(error $(CC) does not know -std=gnu23: libioma is C23 and needs gcc 14 or newer (make CC=gcc-14))
+endif
 AR      ?= ar
 # Fat LTO objects when the compiler supports them: the archive stays linkable by anyone (it also
 # carries plain machine code), and a consumer that links with -flto gets cross-file inlining -
 # including its own handlers into the engine. Measured ~+2% on saturated throughput.
 LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -flto -ffat-lto-objects)
 CFLAGS  ?= -O3 -g $(LTO)
-WARN    := -Wall -Wextra -std=gnu11
+WARN    := -Wall -Wextra $(STD)
 CPP     := -D_GNU_SOURCE -Iinclude -Isrc -Ithird_party/picohttpparser
 HDRS    := $(wildcard include/*.h src/*/*.h)
 PTHREAD := -pthread

@@ -9,9 +9,13 @@
 cmake_minimum_required(VERSION 3.21)   # PROJECT_IS_TOP_LEVEL
 project(ioma VERSION 0.1.0 LANGUAGES C ASM)
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS ON)                 # gnu11: _GNU_SOURCE, typeof, statement exprs
+set(CMAKE_C_EXTENSIONS ON)                 # gnu23: _GNU_SOURCE, statement exprs
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND CMAKE_C_COMPILER_VERSION VERSION_LESS 14)
+    message(FATAL_ERROR "libioma is C23 and needs gcc 14 or newer; this is gcc ${CMAKE_C_COMPILER_VERSION}. "
+                        "Configure with -DCMAKE_C_COMPILER=gcc-14 (in CLion: Settings > Build > Toolchains).")
+endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)

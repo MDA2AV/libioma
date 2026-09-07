@@ -10,7 +10,7 @@
 /* Map anonymous read/write pages, or abort. */
 static void *map_pages(size_t bytes)
 {
-    void *m = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *m = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (m == MAP_FAILED) {
         perror("mmap");
         abort();

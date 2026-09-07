@@ -11,7 +11,6 @@
 #pragma once
 
 #include <signal.h>
-#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -58,7 +57,7 @@ enum recv_state {
 struct conn {
     int             fd;                   /* the socket, or its file slot under fixed files    */
     proactor_t     *p;
-    coro_t         *waiter;               /* coroutine parked in await_recv, or NULL           */
+    coro_t         *waiter;               /* coroutine parked in await_recv, or nullptr           */
     struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
     unsigned        rx_head, rx_tail;
     enum recv_state recv;

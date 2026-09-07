@@ -23,7 +23,7 @@ static void on_signal(int sig)
 static void *worker_thread(void *arg)
 {
     proactor_run(arg);
-    return NULL;
+    return nullptr;
 }
 
 /* CPUs this process may run on (its cpuset), so the default is one worker per available core -
@@ -68,8 +68,8 @@ int ioma_run(int workers, int port)
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_signal;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGINT, &sa, NULL);
-    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
 
     proactor_t *ws = calloc((size_t)workers, sizeof *ws);
     pthread_t  *th = calloc((size_t)workers, sizeof *th);
@@ -86,7 +86,7 @@ int ioma_run(int workers, int port)
         ws[i].port    = (uint16_t)port;
         ws[i].handler = ioma__serve;
         ws[i].stop    = &g_stop;
-        if (pthread_create(&th[i], NULL, worker_thread, &ws[i]) != 0) {
+        if (pthread_create(&th[i], nullptr, worker_thread, &ws[i]) != 0) {
             perror("pthread_create");
             return 1;
         }
@@ -94,7 +94,7 @@ int ioma_run(int workers, int port)
     fprintf(stderr, "ioma: %d workers on :%d\n", workers, port);
 
     for (int i = 0; i < workers; i++)
-        pthread_join(th[i], NULL);
+        pthread_join(th[i], nullptr);
     free(th);
     free(ws);
     return 0;

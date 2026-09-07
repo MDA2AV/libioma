@@ -48,7 +48,7 @@ conn_t *ioma__conn_new(proactor_t *p, int fd)
     }
     c->fd        = fd;
     c->p         = p;
-    c->waiter    = NULL;
+    c->waiter    = nullptr;
     c->rx_head   = 0;
     c->rx_tail   = 0;
     c->recv      = RECV_ARMED;
@@ -56,7 +56,7 @@ conn_t *ioma__conn_new(proactor_t *p, int fd)
     c->closed    = false;
     c->eof       = false;
     c->err       = 0;
-    c->pool_next = NULL;
+    c->pool_next = nullptr;
     p->live++;
     return c;
 }
@@ -109,7 +109,7 @@ static void wake_reader(conn_t *c)
 {
     coro_t *waiter = c->waiter;
     if (waiter) {
-        c->waiter = NULL;
+        c->waiter = nullptr;
         coro_resume(waiter);
     }
 }

@@ -108,8 +108,8 @@ static void run_ready(proactor_t *p)
         coro_t *c = p->ready_head;
         p->ready_head = c->next;
         if (!p->ready_head)
-            p->ready_tail = NULL;
-        c->next = NULL;
+            p->ready_tail = nullptr;
+        c->next = nullptr;
         coro_resume(c);
     }
 }

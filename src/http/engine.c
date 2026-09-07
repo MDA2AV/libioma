@@ -31,8 +31,8 @@
 
 /* serve() hands req.headers to picohttpparser as its header array: a kv (two slices) must lay
  * out exactly like a phr_header (name, name_len, value, value_len). */
-_Static_assert(sizeof(ioma_kv) == sizeof(struct phr_header), "ioma_kv must mirror phr_header");
-_Static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
+static_assert(sizeof(ioma_kv) == sizeof(struct phr_header), "ioma_kv must mirror phr_header");
+static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
                offsetof(ioma_slice, len) == offsetof(struct phr_header, name_len) &&
                offsetof(ioma_kv, value)  == offsetof(struct phr_header, value),
                "ioma_kv must mirror phr_header");
@@ -103,7 +103,7 @@ static bool token_present_ci(const char *value, size_t len, const char *tok)
     return false;
 }
 
-/* The three headers the engine itself needs; p == NULL when absent. */
+/* The three headers the engine itself needs; p == nullptr when absent. */
 struct picked_headers {
     ioma_slice content_length, transfer_enc, connection;
 };
@@ -131,7 +131,7 @@ static inline void lower_inplace(char *s, size_t n)
  * nearly every header before a byte is compared. */
 static struct picked_headers pick_headers(ioma_request *req)
 {
-    struct picked_headers picked = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
+    struct picked_headers picked = { { nullptr, 0 }, { nullptr, 0 }, { nullptr, 0 } };
     for (size_t i = 0; i < req->n_headers; i++) {
         ioma_kv *hdr  = &req->headers[i];
         char    *name = (char *)hdr->key.p;
@@ -199,7 +199,7 @@ static inline int put_hex(char *dst, size_t v)
 struct cslice { const char *p; int len; };
 #define CSLICE(lit) (struct cslice){ (lit), (int)(sizeof(lit) - 1) }
 
-/* The precomposed status line for the common codes; NULL for the rest (built on the spot). */
+/* The precomposed status line for the common codes; nullptr for the rest (built on the spot). */
 static struct cslice status_line(int code)
 {
     switch (code) {
@@ -209,7 +209,7 @@ static struct cslice status_line(int code)
     case 404: return CSLICE("HTTP/1.1 404 Not Found\r\n");
     case 405: return CSLICE("HTTP/1.1 405 Method Not Allowed\r\n");
     case 500: return CSLICE("HTTP/1.1 500 Internal Server Error\r\n");
-    default:  return (struct cslice){ NULL, 0 };
+    default:  return (struct cslice){ nullptr, 0 };
     }
 }
 
@@ -482,8 +482,7 @@ ioma_slice ioma_body(ioma_ctx *c)
 
     char *body = state->read_buf + state->head_len;
     if (req->chunked) {
-        struct phr_chunked_decoder decoder;
-        memset(&decoder, 0, sizeof decoder);
+        struct phr_chunked_decoder decoder = {};
         decoder.consume_trailer = 1;
         size_t  decoded = state->filled - state->head_len;       /* raw bytes already here */
         ssize_t rc      = phr_decode_chunked(&decoder, body, &decoded);
@@ -784,7 +783,7 @@ void ioma__serve(conn_t *conn)
         fill_request(&ctx.req, read_buf + (size_t)head_len, params, sizeof params);
         init_body_state(&state, conn, read_buf, filled, (size_t)head_len, &ctx.req);
         init_response(&ctx.res, slab);
-        ctx.user = NULL;
+        ctx.user = nullptr;
         ctx.priv = &state;
 
         ioma__dispatch(&ctx);                         /* middleware chain + endpoint */
