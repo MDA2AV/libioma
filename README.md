@@ -13,9 +13,10 @@ Run `make` in the repo root. It produces `libioma.a`, `libioma.so` and the demo 
 ## Run
 
 `./ioma-hello` serves on port 8080 with one worker per core; `IOMA_WORKERS` and `IOMA_PORT`
-override that. Ctrl-C stops it. Its handlers cover the whole request model: `/whoami` dumps the
-request, `/users/:id` and `/users/:id/posts/:post` read route captures and a query parameter,
-`POST /echo` reflects the body with its content type, `POST /greet` parses a form body.
+override that. Ctrl-C stops it. Its handlers cover the whole request model: `/whoami` dumps the request, `/users/:id` and
+`/users/:id/posts/:post` read route captures and a query parameter, `POST /echo` reflects the body
+with its content type, `POST /greet` parses a form body, and `/stream` writes far more than the
+buffer holds and streams.
 
 ## Use it in your project
 
@@ -25,12 +26,14 @@ subdirectory works as well. Include `ioma.h`. Compile and link your program with
 compiler inlines your handlers into the engine (the library ships fat LTO objects); it is worth
 about two percent.
 
-An endpoint is a function that receives an `ioma_request` and returns an `ioma_response`, built
-with `ioma_text`, `ioma_json`, `ioma_bytes` or `ioma_textf`. Everything in the request is a slice
-(pointer and length); headers, query parameters and route parameters are key/value arrays on it
-that you read directly. Add a response header with `ioma_header_set`. Register endpoints with `ioma_route` (an exact path, or a pattern such as
-`/users/:id`), optional middleware with `ioma_use`, a fallback with `ioma_default`, then call
-`ioma_run` with a worker count (zero means one per core) and a port.
+An endpoint is a function that receives a context: the parsed request, the reply to shape, and a
+sink to write the body into. Everything in the request is a slice (pointer and length); headers,
+query parameters and route parameters are key/value arrays on it that you read directly. Set the
+status and content type on the context, add headers with `ioma_header`, and write the body with
+`ioma_write`, `ioma_text`, `ioma_printf` or `ioma_json`; the framework sends the head in front of
+it, in one send when it fits and streamed when it does not. Register endpoints with `ioma_route`
+(an exact path, or a pattern such as `/users/:id`), optional middleware with `ioma_use`, a fallback
+with `ioma_default`, then call `ioma_run` with a worker count (zero means one per core) and a port.
 `playground/hello/main.c` is a complete example.
 
 ## Tests and limits

@@ -1,35 +1,38 @@
 /*
- * http.c - the HTTP/1.1 engine: parse a request with picohttpparser, read its body, dispatch it
- * to the routed endpoint, serialize the response, flush it. All of it runs on the connection's
- * coroutine, so await_recv and await_send simply suspend it and the loop resumes it.
+ * http.c - the HTTP/1.1 engine: parse a request with picohttpparser, read its body, run the
+ * middleware chain and the endpoint against a context, then send what they wrote. All of it runs
+ * on the connection's coroutine, so await_recv and await_send simply suspend it and the loop
+ * resumes it - a body that outgrows the buffer streams to the wire from inside the handler.
  */
 #define _GNU_SOURCE
 #include "internal.h"
 #include "picohttpparser.h"
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
 #ifndef IOMA_REQ_CAP
-#define IOMA_REQ_CAP     16384      /* request line + headers + body must fit here; else 413/431 */
-#endif
-#ifndef IOMA_SCRATCH_CAP
-#define IOMA_SCRATCH_CAP 4096       /* per-request arena for ioma_textf                          */
-#endif
-#ifndef IOMA_HEAD_CAP
-#define IOMA_HEAD_CAP    4096       /* serialized status line + headers (+ a small inlined body) */
+#define IOMA_REQ_CAP      16384     /* request line + headers + body must fit here; else 413/431 */
 #endif
 #ifndef IOMA_PARAM_CAP
-#define IOMA_PARAM_CAP   2048       /* per-request arena for percent-decoded query parameters    */
+#define IOMA_PARAM_CAP    2048      /* per-request arena for percent-decoded query parameters    */
 #endif
+#ifndef IOMA_HEAD_CAP
+#define IOMA_HEAD_CAP     4096      /* a serialized head must fit here                           */
+#endif
+#ifndef IOMA_OUT_CAP
+#define IOMA_OUT_CAP      8192      /* body bytes buffered before the reply streams              */
+#endif
+#define IOMA_HEAD_RESERVE 512       /* room in front of the body buffer for the head or a chunk size */
 
 /* serve() hands req.headers to picohttpparser as its header array: a kv (two slices) must lay
  * out exactly like a phr_header (name, name_len, value, value_len). */
 _Static_assert(sizeof(ioma_kv) == sizeof(struct phr_header), "ioma_kv must mirror phr_header");
-_Static_assert(offsetof(ioma_kv, key)   == offsetof(struct phr_header, name) &&
+_Static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
                offsetof(ioma_slice, len) == offsetof(struct phr_header, name_len) &&
-               offsetof(ioma_kv, value) == offsetof(struct phr_header, value),
+               offsetof(ioma_kv, value)  == offsetof(struct phr_header, value),
                "ioma_kv must mirror phr_header");
 
 /* ── request headers ───────────────────────────────────────────────────────────────────── */
@@ -62,9 +65,9 @@ static bool token_present_ci(const char *s, size_t n, const char *tok)
     return false;
 }
 
-/* The three headers the engine itself needs; NULL when absent. */
+/* The three headers the engine itself needs; p == NULL when absent. */
 struct hdrs {
-    ioma_slice content_length, transfer_enc, connection;   /* p == NULL when absent */
+    ioma_slice content_length, transfer_enc, connection;
 };
 
 /* Lower-case ASCII in place, eight bytes per step. The bytes must all be below 0x80 - true for
@@ -123,7 +126,7 @@ static bool keep_alive_from(int minor_version, ioma_slice cv)
     return ka;
 }
 
-/* ── response writing (suspends on the send) ───────────────────────────────────────────── */
+/* ── the reply: head serialization and the body sink ───────────────────────────────────── */
 
 /* Write v in decimal at dst; return the digit count. A digit loop, no printf. */
 static inline int put_uint(char *dst, size_t v)
@@ -133,6 +136,21 @@ static inline int put_uint(char *dst, size_t v)
     do {
         tmp[i++] = (char)('0' + v % 10);
         v /= 10;
+    } while (v);
+    for (int j = 0; j < i; j++)
+        dst[j] = tmp[i - 1 - j];
+    return i;
+}
+
+/* The same in hex, for chunk sizes. */
+static inline int put_hex(char *dst, size_t v)
+{
+    static const char digits[] = "0123456789abcdef";
+    char tmp[16];
+    int  i = 0;
+    do {
+        tmp[i++] = digits[v & 15];
+        v >>= 4;
     } while (v);
     for (int j = 0; j < i; j++)
         dst[j] = tmp[i - 1 - j];
@@ -185,54 +203,59 @@ static void send_status(conn_t *c, int code)
     await_send(c, head, (size_t)(p - head));
 }
 
-/* Serialize the head (and inline a small body) by memcpy of precomposed pieces plus put_uint -
- * no snprintf - then one send when the body fits, else head then body. 0, or -1 after a 500. */
-static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
-{
-    char  head[IOMA_HEAD_CAP];
-    char *p   = head;
-    char *end = head + sizeof head;
+/* How the body is delimited on the wire. */
+enum framing { FRAME_LENGTH, FRAME_CHUNKED, FRAME_UNTIL_CLOSE };
 
-#define NEED(n)     do { if ((size_t)(end - p) < (size_t)(n)) { send_status(c, 500); return -1; } } while (0)
+/* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
+ * snprintf. Returns the length, or -1 if it does not fit. */
+static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing f, size_t length)
+{
+    char *p   = dst;
+    char *end = dst + cap;
+
+#define NEED(n)     do { if ((size_t)(end - p) < (size_t)(n)) return -1; } while (0)
 #define PUT(src, n) do { NEED(n); memcpy(p, (src), (size_t)(n)); p += (n); } while (0)
 #define PUTC(lit)   PUT((lit), sizeof(lit) - 1)
 
-    struct cslice sl = status_line(res->status);
+    struct cslice sl = status_line(c->status);
     if (sl.p) {
         PUT(sl.p, sl.len);
     } else {
         PUTC("HTTP/1.1 ");
         NEED(3);
-        p += put_uint(p, (size_t)res->status);
+        p += put_uint(p, (size_t)c->status);
         PUTC(" ");
-        const char *reason = ioma_reason(res->status);
+        const char *reason = ioma_reason(c->status);
         PUT(reason, strlen(reason));
         PUTC("\r\n");
     }
 
     PUTC("Content-Type: ");
-    const char *ct = res->content_type ? res->content_type : "text/plain";
-    PUT(ct, strlen(ct));
+    PUT(c->content_type.p, c->content_type.len);
     PUTC("\r\n");
 
-    PUTC("Content-Length: ");
-    NEED(20);
-    p += put_uint(p, res->body_len);
-    PUTC("\r\n");
+    if (f == FRAME_LENGTH) {
+        PUTC("Content-Length: ");
+        NEED(20);
+        p += put_uint(p, length);
+        PUTC("\r\n");
+    } else if (f == FRAME_CHUNKED) {
+        PUTC("Transfer-Encoding: chunked\r\n");
+    }
 
     /* Connection: only when it says something. HTTP/1.1 is persistent by default, so a kept-alive
      * 1.1 reply carries none; a 1.0 client that asked for keep-alive is told it got it; a closing
      * reply always says close. */
-    bool ka = req->keep_alive && !res->close;
+    bool ka = c->req.keep_alive && !c->close;
     if (!ka)
         PUTC("Connection: close\r\n");
-    else if (req->minor_version == 0)
+    else if (c->req.minor_version == 0)
         PUTC("Connection: keep-alive\r\n");
 
-    for (int i = 0; i < res->n_extra; i++) {
-        PUT(res->extra[i].key.p, res->extra[i].key.len);
+    for (size_t i = 0; i < c->n_headers; i++) {
+        PUT(c->headers[i].key.p, c->headers[i].key.len);
         PUTC(": ");
-        PUT(res->extra[i].value.p, res->extra[i].value.len);
+        PUT(c->headers[i].value.p, c->headers[i].value.len);
         PUTC("\r\n");
     }
 
@@ -240,16 +263,157 @@ static int write_response(conn_t *c, ioma_request *req, ioma_response *res)
 #undef PUTC
 #undef PUT
 #undef NEED
+    return (int)(p - dst);
+}
 
-    size_t hl = (size_t)(p - head);
+/* Wrap the buffered body as one chunk: the size line goes just before it (into the reserve), the
+ * CRLF just after it (into the slack). start/total describe the framed span. */
+static void frame_chunk(char *body, size_t n, char **start, size_t *total)
+{
+    char sz[16];
+    int  l = put_hex(sz, n);
+    char *s = body - (l + 2);
+    memcpy(s, sz, (size_t)l);
+    s[l]     = '\r';
+    s[l + 1] = '\n';
+    body[n]     = '\r';
+    body[n + 1] = '\n';
+    *start = s;
+    *total = n + (size_t)l + 4;
+}
 
-    if (res->body_len && hl + res->body_len <= sizeof head) {   /* the common small reply */
-        memcpy(head + hl, res->body, res->body_len);
-        return await_send(c, head, hl + res->body_len) < 0 ? -1 : 0;
+/* Send the buffered body, with the head in front of it the first time. That first time decides
+ * the framing: a final flush with the head unsent means the whole body is here (Content-Length,
+ * one send); an early flush means the body outgrew the buffer, so it streams - with the declared
+ * length if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. */
+static int flush(ioma_ctx *c, bool final)
+{
+    if (c->failed)
+        return -1;
+    char  *body  = c->out;
+    size_t n     = c->out_len;
+    char  *start = body;
+    size_t total = n;
+
+    if (!c->head_sent) {
+        enum framing f      = FRAME_LENGTH;
+        size_t       length = n;
+        if (c->has_length) {
+            length = c->content_length;
+        } else if (!final) {
+            if (c->req.minor_version >= 1) {
+                f = FRAME_CHUNKED;
+                c->chunked = true;
+            } else {
+                f = FRAME_UNTIL_CLOSE;
+                c->close = true;
+            }
+        }
+        c->head_sent = true;
+
+        char head[IOMA_HEAD_CAP];
+        int  hl = build_head(c, head, sizeof head, f, length);
+        if (hl < 0) {
+            c->failed = true;
+            return -1;
+        }
+        if (c->chunked && n)
+            frame_chunk(body, n, &start, &total);
+        if ((size_t)hl <= (size_t)(start - c->buf)) {          /* the head fits in the reserve */
+            start -= hl;
+            memcpy(start, head, (size_t)hl);
+            total += (size_t)hl;
+        } else if (await_send(c->conn, head, (size_t)hl) < 0) {
+            c->failed = true;
+            return -1;
+        }
+    } else if (c->chunked && n) {
+        frame_chunk(body, n, &start, &total);
     }
-    if (await_send(c, head, hl) < 0) return -1;
-    if (res->body_len && await_send(c, res->body, res->body_len) < 0) return -1;
+
+    c->out_len = 0;
+    if (total && await_send(c->conn, start, total) < 0) {
+        c->failed = true;
+        return -1;
+    }
     return 0;
+}
+
+/* After the chain: send what is left - the whole reply if nothing went out yet - and close a
+ * chunked stream. */
+static int finish(ioma_ctx *c)
+{
+    if (c->failed)
+        return -1;
+    if (!c->head_sent || c->out_len)
+        if (flush(c, true) < 0)
+            return -1;
+    if (c->chunked && await_send(c->conn, "0\r\n\r\n", 5) < 0)
+        return -1;
+    return 0;
+}
+
+/* Buffer body bytes; send the buffer, head first, whenever it fills. */
+int ioma_write(ioma_ctx *c, const void *data, size_t len)
+{
+    if (c->failed)
+        return -1;
+    const char *p = data;
+    while (len) {
+        size_t room = c->out_cap - c->out_len;
+        if (room == 0) {
+            if (flush(c, false) < 0)
+                return -1;
+            continue;
+        }
+        size_t n = len < room ? len : room;
+        memcpy(c->out + c->out_len, p, n);
+        c->out_len += n;
+        p   += n;
+        len -= n;
+    }
+    return 0;
+}
+
+/* Format straight into the buffer. If it does not fit the room left, flush and format again;
+ * something bigger than the whole buffer is formatted on the heap and written in pieces. */
+int ioma_printf(ioma_ctx *c, const char *fmt, ...)
+{
+    if (c->failed)
+        return -1;
+    for (int attempt = 0; attempt < 2; attempt++) {
+        size_t  room = c->out_cap - c->out_len;
+        va_list ap;
+        va_start(ap, fmt);
+        int n = vsnprintf(c->out + c->out_len, room, fmt, ap);
+        va_end(ap);
+        if (n < 0)
+            return -1;
+        if ((size_t)n < room) {
+            c->out_len += (size_t)n;
+            return 0;
+        }
+        if ((size_t)n >= c->out_cap) {                        /* larger than the buffer itself */
+            char *tmp = malloc((size_t)n + 1);
+            if (!tmp)
+                return -1;
+            va_start(ap, fmt);
+            vsnprintf(tmp, (size_t)n + 1, fmt, ap);
+            va_end(ap);
+            int rc = ioma_write(c, tmp, (size_t)n);
+            free(tmp);
+            return rc;
+        }
+        if (flush(c, false) < 0)
+            return -1;
+    }
+    return -1;
+}
+
+/* Send what is buffered now. Starts streaming: the head goes out with it. */
+int ioma_flush(ioma_ctx *c)
+{
+    return flush(c, false);
 }
 
 /* ── request bodies (suspend on the recv) ──────────────────────────────────────────────── */
@@ -302,26 +466,27 @@ static int read_fixed_body(conn_t *c, char *buf, size_t total, size_t *have)
 
 /* ── the connection loop ───────────────────────────────────────────────────────────────── */
 
-/* The proactor handler for every connection: parse, read the body, dispatch, reply; repeat while
- * kept alive. Returning closes the connection. */
+/* The proactor handler for every connection: parse, read the body, run the chain against a
+ * context, send what it wrote; repeat while kept alive. Returning closes the connection. */
 void ioma__serve(conn_t *c)
 {
     char   buf[IOMA_REQ_CAP];
-    char   scratch[IOMA_SCRATCH_CAP];
-    char   params[IOMA_PARAM_CAP];                    /* decoded query parameters land here */
+    char   params[IOMA_PARAM_CAP];                    /* decoded query parameters land here   */
+    char   out[IOMA_HEAD_RESERVE + IOMA_OUT_CAP + 2]; /* head reserve, body buffer, CRLF slack */
     size_t have = 0, last_len = 0;
 
     for (;;) {
-        ioma_request req;
+        ioma_ctx      ctx;
+        ioma_request *rq = &ctx.req;
         size_t nphr = IOMA_MAX_HEADERS;
         const char *method = NULL, *target = NULL;
         size_t ml = 0, tl = 0;
         int minor = 0;
 
-        /* Parse straight into req.headers. With nothing buffered - the usual state right after a
-         * reply - skip the parse and just read. */
+        /* Parse straight into ctx.req.headers. With nothing buffered - the usual state right
+         * after a reply - skip the parse and just read. */
         int pret = have ? phr_parse_request(buf, have, &method, &ml, &target, &tl, &minor,
-                                            (struct phr_header *)req.headers, &nphr, last_len)
+                                            (struct phr_header *)rq->headers, &nphr, last_len)
                         : -2;
 
         if (pret == -2) {                                /* headers not complete yet */
@@ -341,51 +506,64 @@ void ioma__serve(conn_t *c)
         }
         size_t header_len = (size_t)pret;
 
-        req.method        = (ioma_slice){ method, ml };
-        req.target        = (ioma_slice){ target, tl };
-        req.minor_version = minor;
-        req.n_headers     = nphr;
+        rq->method        = (ioma_slice){ method, ml };
+        rq->target        = (ioma_slice){ target, tl };
+        rq->minor_version = minor;
+        rq->n_headers     = nphr;
 
         const char *q = memchr(target, '?', tl);
         if (q) {
-            req.path  = (ioma_slice){ target, (size_t)(q - target) };
-            req.query = (ioma_slice){ q + 1, tl - req.path.len - 1 };
+            rq->path  = (ioma_slice){ target, (size_t)(q - target) };
+            rq->query = (ioma_slice){ q + 1, tl - rq->path.len - 1 };
         } else {
-            req.path  = (ioma_slice){ target, tl };
-            req.query = (ioma_slice){ target + tl, 0 };
+            rq->path  = (ioma_slice){ target, tl };
+            rq->query = (ioma_slice){ target + tl, 0 };
         }
-        req.n_params = req.query.len
-            ? ioma_kv_parse(req.query.p, req.query.len, req.params, IOMA_MAX_PARAMS, params, sizeof params)
+        rq->n_params = rq->query.len
+            ? ioma_kv_parse(rq->query.p, rq->query.len, rq->params, IOMA_MAX_PARAMS, params, sizeof params)
             : 0;
-        req.n_route = 0;                                 /* the router fills these */
+        rq->n_route = 0;                                 /* the router fills these */
 
-        struct hdrs h = pick_headers(&req);
+        struct hdrs h = pick_headers(rq);
 
         /* Body. leftover_* is what belongs to the next request on a kept-alive connection. */
         size_t leftover_off = 0, leftover_len = 0;
         if (h.transfer_enc.p && token_present_ci(h.transfer_enc.p, h.transfer_enc.len, "chunked")) {
             long n = read_chunked_body(c, buf, header_len, have);
             if (n < 0) return;
-            req.body = (ioma_slice){ buf + header_len, (size_t)n };
+            rq->body = (ioma_slice){ buf + header_len, (size_t)n };
             /* bytes pipelined after a chunked body are not carried; the next request reads fresh */
         } else {
             size_t content_length = h.content_length.p ? parse_size(h.content_length.p, h.content_length.len) : 0;
             size_t total = header_len + content_length;
             if (read_fixed_body(c, buf, total, &have) < 0) return;
-            req.body = (ioma_slice){ buf + header_len, content_length };
+            rq->body = (ioma_slice){ buf + header_len, content_length };
             leftover_off = total;
             leftover_len = have - total;
         }
+        rq->keep_alive = keep_alive_from(minor, h.connection);
 
-        req.keep_alive  = keep_alive_from(minor, h.connection);
-        req.conn        = c;
-        req.scratch     = scratch;
-        req.scratch_cap = IOMA_SCRATCH_CAP;
+        /* the reply side of the context: defaults, and an empty sink over the out buffer */
+        ctx.status         = 200;
+        ctx.content_type   = (ioma_slice){ "text/plain", 10 };
+        ctx.n_headers      = 0;
+        ctx.close          = false;
+        ctx.head_sent      = false;
+        ctx.user           = NULL;
+        ctx.conn           = c;
+        ctx.buf            = out;
+        ctx.out            = out + IOMA_HEAD_RESERVE;
+        ctx.out_cap        = IOMA_OUT_CAP;
+        ctx.out_len        = 0;
+        ctx.content_length = 0;
+        ctx.has_length     = false;
+        ctx.chunked        = false;
+        ctx.failed         = false;
 
-        ioma_response res = ioma__dispatch(&req);        /* middleware chain + endpoint */
-        if (write_response(c, &req, &res) < 0) return;  /* suspends on the send        */
+        ioma__dispatch(&ctx);                            /* middleware chain + endpoint */
+        if (finish(&ctx) < 0) return;                   /* sends; suspends meanwhile   */
 
-        if (!req.keep_alive || res.close) return;
+        if (!rq->keep_alive || ctx.close) return;
 
         if (leftover_len) memmove(buf, buf + leftover_off, leftover_len);   /* pipelining */
         have = leftover_len;

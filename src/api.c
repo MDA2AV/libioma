@@ -1,11 +1,10 @@
 /*
- * api.c - the helpers a handler calls: slices, key/value parsing, response builders, reasons.
+ * api.c - the helpers a handler calls: slices, key/value parsing, shaping the reply, reasons.
  * Nothing here touches the runtime.
  */
 #define _GNU_SOURCE
 #include "internal.h"
 
-#include <stdarg.h>
 #include <string.h>
 
 /* ── slices ────────────────────────────────────────────────────────────────────────────── */
@@ -111,51 +110,41 @@ size_t ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *ar
     return count;
 }
 
-/* ── response builders ─────────────────────────────────────────────────────────────────── */
+/* ── shaping the reply ─────────────────────────────────────────────────────────────────── */
 
-/* A response with the given status, content type and body. Sets the fields; does not zero the
- * struct, because extra[] (most of it) is only ever read up to n_extra. */
-ioma_response ioma_bytes(int status, const char *content_type, const void *body, size_t body_len)
+/* Add a header to the reply. false once the head is on the wire, or when the table is full. */
+bool ioma_header(ioma_ctx *c, const char *name, const char *value)
 {
-    ioma_response r;
-    r.status       = status;
-    r.content_type = content_type;
-    r.body         = body;
-    r.body_len     = body_len;
-    r.n_extra      = 0;
-    r.close        = false;
-    return r;
+    if (c->head_sent || c->n_headers == IOMA_MAX_RESP_HEADERS)
+        return false;
+    c->headers[c->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
+    return true;
 }
 
-/* text/plain, body length by strlen. */
-ioma_response ioma_text(int status, const char *s)
+/* Set the content type from a C string (a slice can be assigned to c->content_type directly). */
+void ioma_content_type(ioma_ctx *c, const char *type)
 {
-    return ioma_bytes(status, "text/plain", s, strlen(s));
+    c->content_type = (ioma_slice){ type, strlen(type) };
 }
 
-/* application/json, body length by strlen. */
-ioma_response ioma_json(int status, const char *s)
+/* Declare the body length, so a body larger than the buffer streams with Content-Length. */
+void ioma_content_length(ioma_ctx *c, size_t n)
 {
-    return ioma_bytes(status, "application/json", s, strlen(s));
+    c->content_length = n;
+    c->has_length     = true;
 }
 
-/* printf a text/plain body into req->scratch (truncated to scratch_cap). */
-ioma_response ioma_textf(ioma_request *req, int status, const char *fmt, ...)
+/* Write a C string. */
+int ioma_text(ioma_ctx *c, const char *s)
 {
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(req->scratch, req->scratch_cap, fmt, ap);
-    va_end(ap);
-    size_t len = 0;
-    if (n > 0) len = (size_t)n < req->scratch_cap ? (size_t)n : (req->scratch_cap ? req->scratch_cap - 1 : 0);
-    return ioma_bytes(status, "text/plain", req->scratch, len);
+    return ioma_write(c, s, strlen(s));
 }
 
-/* Add a header to a response. name/value must stay valid until the reply is sent. */
-void ioma_header_set(ioma_response *res, const char *name, const char *value)
+/* Set application/json and write the string. */
+int ioma_json(ioma_ctx *c, const char *s)
 {
-    if (res->n_extra >= IOMA_MAX_RESP_HEADERS) return;
-    res->extra[res->n_extra++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
+    ioma_content_type(c, "application/json");
+    return ioma_write(c, s, strlen(s));
 }
 
 /* The reason phrase for a status code; "Unknown" if unlisted. */

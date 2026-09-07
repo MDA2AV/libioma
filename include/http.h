@@ -1,14 +1,16 @@
 /*
  * http.h - the ioma HTTP/1.1 layer: what you write endpoints against.
  *
- * An endpoint takes a parsed request and returns a response by value; the framework serializes it
- * and flushes it to the wire on the connection's coroutine (the flush suspends until the send
- * completes). Everything in a request is a slice - pointer plus length, the C span - into the
- * connection's read buffer, valid only for the duration of the handler call.
+ * Every request gets a context: the parsed request, the response being shaped, and a body sink.
+ * The context is passed to each middleware and to the handler, and any of them may read the
+ * request and shape the response. A handler writes its body into the sink; the framework puts
+ * the head (status, headers) in front of it - in one send when the body fits the buffer, or
+ * streamed when it does not. The handler runs on the connection's coroutine, so a write that has
+ * to reach the wire simply suspends it until the send completes.
  *
- *     static ioma_response user(ioma_request *req) {
- *         ioma_slice id = req->route[0].value;                // the :id of "/users/:id"
- *         return ioma_textf(req, 200, "user %.*s\n", (int)id.len, id.p);
+ *     static void user(ioma_ctx *c) {
+ *         ioma_slice id = c->req.route[0].value;              // the :id of "/users/:id"
+ *         ioma_printf(c, "user %.*s\n", (int)id.len, id.p);
  *     }
  *     int main(void) {
  *         ioma_route("GET", "/users/:id", user);
@@ -32,7 +34,7 @@ typedef struct conn conn_t;                 /* opaque here; only advanced handle
 #define IOMA_MAX_ROUTE_PARAMS 8             /* :name captures a route pattern may have       */
 #endif
 #ifndef IOMA_MAX_RESP_HEADERS
-#define IOMA_MAX_RESP_HEADERS 16            /* extra headers a handler may add               */
+#define IOMA_MAX_RESP_HEADERS 16            /* headers a reply may add                       */
 #endif
 
 /* A slice: pointer + length, the C span. Not NUL-terminated. */
@@ -40,6 +42,8 @@ typedef struct { const char *p; size_t len; } ioma_slice;
 
 /* One key/value pair of slices: a header, a query parameter, a route parameter. */
 typedef struct { ioma_slice key, value; } ioma_kv;
+
+/* ── the request ───────────────────────────────────────────────────────────────────────── */
 
 /* A parsed request: all the data, as slices into the connection's read buffer (decoded
  * parameters into a per-request arena), valid only until the handler returns. Read the arrays
@@ -60,30 +64,59 @@ typedef struct ioma_request {
 
     ioma_slice  body;                           /* Content-Length body, or a chunked one decoded */
     bool        keep_alive;                     /* computed from version + Connection         */
-
-    conn_t     *conn;                           /* advanced: await_recv/await_send in a handler */
-    char       *scratch; size_t scratch_cap;    /* per-request arena for building a body      */
 } ioma_request;
 
-/* A response the handler builds and returns. body points at memory that stays valid until the
- * send completes: a string literal, static data, or the request scratch (see ioma_textf). */
-typedef struct ioma_response {
-    int          status;                        /* 200, 404, ...                             */
-    const char  *content_type;                  /* NULL -> "text/plain"                      */
-    const void  *body; size_t body_len;
-    ioma_kv      extra[IOMA_MAX_RESP_HEADERS];  /* headers added with ioma_header_set        */
-    int          n_extra;
-    bool         close;                         /* force Connection: close after this reply  */
-} ioma_response;
+/* ── the context ───────────────────────────────────────────────────────────────────────── */
 
-typedef ioma_response (*ioma_handler)(ioma_request *req);
+/* One request's context: the request, the response being shaped, and the body sink. The head
+ * (status, content type, headers, framing) is built when the first bytes go to the wire - after
+ * the chain returns when everything fit the buffer, earlier when the body streams - and is frozen
+ * from then on (head_sent). Valid only while the middleware chain and the handler run. */
+typedef struct ioma_ctx {
+    ioma_request req;
 
-/* Middleware runs around the handler (the onion model): do work before, call ioma_next_run to
- * invoke the rest of the chain and then the endpoint, then do work after and return its response -
- * or return a response WITHOUT calling ioma_next_run to short-circuit (auth failure, cache hit). */
+    int         status;                         /* 200 by default                            */
+    ioma_slice  content_type;                   /* "text/plain" by default; any slice        */
+    ioma_kv     headers[IOMA_MAX_RESP_HEADERS]; /* added with ioma_header                    */
+    size_t      n_headers;
+    bool        close;                          /* close the connection after this reply     */
+    bool        head_sent;                      /* the head is on the wire; the above are frozen */
+
+    void       *user;                           /* free slot: middleware hands data to the handler */
+
+    /* the sink - private */
+    conn_t     *conn;
+    char       *buf;                            /* head reserve, then the body buffer        */
+    char       *out;                            /* the body buffer                           */
+    size_t      out_cap, out_len;
+    size_t      content_length;                 /* declared with ioma_content_length         */
+    bool        has_length, chunked, failed;
+} ioma_ctx;
+
+typedef void (*ioma_handler)(ioma_ctx *c);
+
+/* Middleware runs around the handler (the onion model): shape the context, call ioma_next_run to
+ * run the rest of the chain and then the endpoint, then act on the result - or write a reply and
+ * return WITHOUT calling ioma_next_run to short-circuit (auth failure, cache hit). */
 typedef struct ioma_next ioma_next;
-typedef ioma_response (*ioma_mw)(ioma_request *req, ioma_next *next);
-ioma_response ioma_next_run(ioma_request *req, ioma_next *next);
+typedef void (*ioma_mw)(ioma_ctx *c, ioma_next *next);
+void ioma_next_run(ioma_ctx *c, ioma_next *next);
+
+/* ── the response ──────────────────────────────────────────────────────────────────────── */
+
+/* Body writes. They buffer; a buffer that fills up is sent, head first, and the body streams from
+ * then on - chunked on HTTP/1.1, until close on HTTP/1.0, or with the length declared below.
+ * Return 0, or -1 once the peer is gone (further writes are ignored). */
+int  ioma_write (ioma_ctx *c, const void *data, size_t len);
+int  ioma_text  (ioma_ctx *c, const char *s);                          /* a C string          */
+int  ioma_printf(ioma_ctx *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+int  ioma_json  (ioma_ctx *c, const char *s);                          /* sets the type, writes */
+
+/* Shape the head. Only before it is sent: ioma_header returns false afterwards. */
+bool ioma_header        (ioma_ctx *c, const char *name, const char *value);   /* stays valid until sent */
+void ioma_content_type  (ioma_ctx *c, const char *type);
+void ioma_content_length(ioma_ctx *c, size_t n);       /* stream a large body with a known length */
+int  ioma_flush         (ioma_ctx *c);                 /* send what is buffered now (starts streaming) */
 
 /* ── slices ────────────────────────────────────────────────────────────────────────────── */
 
@@ -95,22 +128,10 @@ long       ioma_slice_int(ioma_slice s);                         /* leading inte
  * Returns the pair count. A pair that does not fit the arena is skipped. */
 size_t     ioma_kv_parse(const char *s, size_t n, ioma_kv *out, size_t cap, char *arena, size_t arena_cap);
 
-/* ── response builders ─────────────────────────────────────────────────────────────────── */
-
-ioma_response ioma_text (int status, const char *s);                      /* text/plain, strlen(s)   */
-ioma_response ioma_json (int status, const char *s);                      /* application/json         */
-ioma_response ioma_bytes(int status, const char *content_type,
-                         const void *body, size_t body_len);
-/* printf a body into req->scratch (truncated to scratch_cap) and return it as text/plain */
-ioma_response ioma_textf(ioma_request *req, int status, const char *fmt, ...)
-    __attribute__((format(printf, 3, 4)));
-/* Add a response header. name/value must stay valid until the reply is sent. */
-void ioma_header_set(ioma_response *res, const char *name, const char *value);
-
 /* ── routing ───────────────────────────────────────────────────────────────────────────── */
 
 /* Register an endpoint. method is matched exactly; path is matched by segment and may contain
- * :name captures ("/users/:id") that land in req->route. An exact path always beats a pattern.
+ * :name captures ("/users/:id") that land in req.route. An exact path always beats a pattern.
  * Call before ioma_run, from the main thread; the table is then read-only and shared. */
 void ioma_route(const char *method, const char *path, ioma_handler fn);
 /* Fallback handler when nothing matches (default is a built-in 404). */

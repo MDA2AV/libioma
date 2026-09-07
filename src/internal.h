@@ -122,7 +122,7 @@ void    ioma__conn_pool_drain(proactor_t *p);
 
 void          ioma__serve(conn_t *c);             /* the per-connection HTTP loop            */
 ioma_handler  ioma__match(const ioma_request *req);
-ioma_response ioma__dispatch(ioma_request *req);
+void          ioma__dispatch(ioma_ctx *c);
 
 /* ── ASCII helpers ─────────────────────────────────────────────────────────────────────── */
 

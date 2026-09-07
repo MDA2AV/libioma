@@ -171,12 +171,20 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
    `Connection` (a length test rejects almost every header before a byte is compared). A chunked
    body is decoded in place by `phr_decode_chunked`, which also survives fragmentation.
 3. **Keep-alive**: HTTP/1.1 unless `Connection: close`; HTTP/1.0 only with `Connection: keep-alive`.
-4. **Dispatch** to the route (section 5); the handler returns an `ioma_response` by value.
-5. **Serialize** with `memcpy` of precomposed pieces (`"HTTP/1.1 200 OK\r\n"`, header names) plus a
-   small integer writer — no `snprintf` on the hot path. `Connection:` is written only when it
-   says something (close, or a 1.0 keep-alive).
-6. **Send** once when the body fits behind the head in the 4 KB head buffer (the usual case), else
-   head then body. Then loop; leftover bytes of a pipelined next request are carried over.
+4. **Dispatch** a context to the middleware chain and the route (section 5). The context holds
+   the request, the reply being shaped (status, content type, headers) and a body sink: an 8 KB
+   buffer with room reserved in front of it for the head.
+5. **Write**: the handler calls `ioma_write` / `ioma_printf`; bytes land in the buffer. If it
+   fills, the framework sends what it has — head first, framed chunked on HTTP/1.1 or until close
+   on HTTP/1.0 (or with a length the handler declared) — and the handler suspends on that send.
+6. **Finish**: after the chain returns, whatever is buffered goes out. The usual case is that
+   everything fit: the head (with `Content-Length`, serialized by `memcpy` of precomposed pieces
+   plus a small integer writer, no `snprintf`) is copied into the reserve right before the body
+   and the reply is one send. A streamed reply gets its terminating chunk. Then loop; leftover
+   bytes of a pipelined next request are carried over.
+
+Because the head is built at the first send, middleware can shape headers and status until then,
+and `head_sent` tells a handler when that moment has passed.
 
 Everything in a request is a slice (pointer + length) into the read buffer, valid only during
 the handler. Three key/value arrays hang off it, read directly: `headers` (names lower-cased once

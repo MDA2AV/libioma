@@ -76,6 +76,28 @@ results.append(check("GET /users/:id -> route param + decoded query param", st =
 st, hd, body = get("/users/42/extra")
 results.append(check("  extra segment does not match the pattern", st == 404))
 
+# a body far larger than the reply buffer streams: chunked on HTTP/1.1 (http.client decodes it)
+import http.client
+hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+hc.request("GET", "/stream?n=5000")
+r = hc.getresponse(); data = r.read(); hc.close()
+results.append(check("GET /stream -> chunked stream, every line arrives",
+                     r.status == 200 and r.getheader("transfer-encoding") == "chunked"
+                     and data.count(b"\n") == 5000 and data.endswith(b"line 5000 of 5000\n")))
+# the same on HTTP/1.0: no length known, so it streams until close
+s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=10)
+s.send(b"GET /stream?n=3000 HTTP/1.0\r\nHost: x\r\n\r\n")
+raw = b""
+while True:
+    chunk = s.recv(65536)
+    if not chunk: break
+    raw += chunk
+s.close()
+head, _, body = raw.partition(b"\r\n\r\n")
+results.append(check("GET /stream on HTTP/1.0 -> until close, no length, all lines",
+                     b"Connection: close" in head and b"Content-Length" not in head
+                     and b"chunked" not in head and body.count(b"\n") == 3000))
+
 # POST /echo reflects the body
 s = connect()
 s.send(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world")
