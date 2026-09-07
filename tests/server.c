@@ -7,85 +7,85 @@
 #include <stdlib.h>
 
 /* GET / */
-static void home(ioma_ctx *c)
+static void home(ioma_ctx *ctx)
 {
-    ioma_text(c, "hello from ioma\n");                 /* 200, text/plain: the defaults */
+    ioma_text(ctx, "hello from ioma\n");                 /* 200, text/plain: the defaults */
 }
 
 /* GET /health */
-static void health(ioma_ctx *c)
+static void health(ioma_ctx *ctx)
 {
-    ioma_text(c, "ok");
+    ioma_text(ctx, "ok");
 }
 
 /* GET /whoami?x=1&y=2 - everything the request carries, read straight from its fields and
  * arrays: the raw query, then each parameter split and decoded, then every header (names are
  * lower-cased). ioma_printf formats straight into the reply buffer. */
-static void whoami(ioma_ctx *c)
+static void whoami(ioma_ctx *ctx)
 {
-    ioma_request *r = &c->req;
-    ioma_printf(c, "method = %.*s\npath   = %.*s\nquery  = %.*s\nkeep-alive = %s\n",
+    ioma_request *r = &ctx->req;
+    ioma_printf(ctx, "method = %.*s\npath   = %.*s\nquery  = %.*s\nkeep-alive = %s\n",
                 (int)r->method.len, r->method.p,
                 (int)r->path.len,   r->path.p,
                 (int)r->query.len,  r->query.p,
                 r->keep_alive ? "yes" : "no");
 
     for (size_t i = 0; i < r->n_params; i++)
-        ioma_printf(c, "param  %.*s = %.*s\n",
+        ioma_printf(ctx, "param  %.*s = %.*s\n",
                     (int)r->params[i].key.len,   r->params[i].key.p,
                     (int)r->params[i].value.len, r->params[i].value.p);
 
     for (size_t i = 0; i < r->n_headers; i++)
-        ioma_printf(c, "header %.*s: %.*s\n",
+        ioma_printf(ctx, "header %.*s: %.*s\n",
                     (int)r->headers[i].key.len,   r->headers[i].key.p,
                     (int)r->headers[i].value.len, r->headers[i].value.p);
 
-    ioma_header(c, "X-Powered-By", "ioma");             /* fine: nothing has gone out yet */
+    ioma_header(ctx, "X-Powered-By", "ioma");             /* fine: nothing has gone out yet */
 }
 
 /* GET /users/:id?fields=... - the :id capture is req.route_params[0]. A query parameter is found by
  * walking req.params: there are few, so the loop is the lookup. */
-static void user(ioma_ctx *c)
+static void user(ioma_ctx *ctx)
 {
-    ioma_slice id     = c->req.route_params[0].value;
+    ioma_slice id     = ctx->req.route_params[0].value;
     ioma_slice fields = { "", 0 };
-    for (size_t i = 0; i < c->req.n_params; i++)
-        if (ioma_slice_eq(c->req.params[i].key, "fields"))
-            fields = c->req.params[i].value;
-    ioma_printf(c, "user %.*s fields=%.*s\n", (int)id.len, id.p, (int)fields.len, fields.p);
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioma_slice_eq(ctx->req.params[i].key, "fields"))
+            fields = ctx->req.params[i].value;
+    ioma_printf(ctx, "user %.*s fields=%.*s\n", (int)id.len, id.p, (int)fields.len, fields.p);
 }
 
 /* GET /users/:id/posts/:post - captures come in pattern order; ioma_to_i64 reads a whole number
  * or fails, so a non-numeric id is a 400 instead of a silent zero. */
-static void post(ioma_ctx *c)
+static void post(ioma_ctx *ctx)
 {
     int64_t user_id, post_id;
-    if (!ioma_to_i64(c->req.route_params[0].value, &user_id) ||
-        !ioma_to_i64(c->req.route_params[1].value, &post_id)) {
-        c->res.status = 400;
-        ioma_text(c, "ids must be integers\n");
+    if (!ioma_to_i64(ctx->req.route_params[0].value, &user_id) ||
+        !ioma_to_i64(ctx->req.route_params[1].value, &post_id)) {
+        ctx->res.status = 400;
+        ioma_text(ctx, "ids must be integers\n");
         return;
     }
-    ioma_printf(c, "post %lld of user %lld\n", (long long)post_id, (long long)user_id);
+    ioma_printf(ctx, "post %lld of user %lld\n", (long long)post_id, (long long)user_id);
 }
 
 /* GET /convert?i=..&d=..&b=.. - the typed conversions; a value that does not parse is a 400. */
-static void convert(ioma_ctx *c)
+static void convert(ioma_ctx *ctx)
 {
-    for (size_t k = 0; k < c->req.n_params; k++) {
-        ioma_kv p = c->req.params[k];
+    for (size_t k = 0; k < ctx->req.n_params; k++) {
+        ioma_kv p = ctx->req.params[k];
         int64_t i;
         double  d;
         bool    b;
         if (ioma_slice_eq(p.key, "i") && ioma_to_i64(p.value, &i)) {
-            ioma_printf(c, "i=%lld\n", (long long)i);
+            ioma_printf(ctx, "i=%lld\n", (long long)i);
         } else if (ioma_slice_eq(p.key, "d") && ioma_to_double(p.value, &d)) {
-            ioma_printf(c, "d=%g\n", d);
+            ioma_printf(ctx, "d=%g\n", d);
         } else if (ioma_slice_eq(p.key, "b") && ioma_to_bool(p.value, &b)) {
-            ioma_printf(c, "b=%s\n", b ? "true" : "false");
+            ioma_printf(ctx, "b=%s\n", b ? "true" : "false");
         } else {
-            c->res.status = 400;
-            ioma_printf(c, "bad %.*s\n", (int)p.key.len, p.key.p);
+            ctx->res.status = 400;
+            ioma_printf(ctx, "bad %.*s\n", (int)p.key.len, p.key.p);
             return;
         }
     }
@@ -94,22 +94,22 @@ static void convert(ioma_ctx *c)
 /* POST /echo - the body read whole (Content-Length or chunked, decoded) and sent back with the
  * same content type. The reply's content type is a slice, so the request's header value is
  * assigned as is; no copy. */
-static void echo(ioma_ctx *c)
+static void echo(ioma_ctx *ctx)
 {
-    ioma_slice body = ioma_body(c);
-    ioma_content_type(c, "application/octet-stream");
-    for (size_t i = 0; i < c->req.n_headers; i++)
-        if (ioma_slice_eq(c->req.headers[i].key, "content-type"))
-            c->res.content_type = c->req.headers[i].value;
-    ioma_write(c, body.p, body.len);
+    ioma_slice body = ioma_body_all(ctx);
+    ioma_content_type(ctx, "application/octet-stream");
+    for (size_t i = 0; i < ctx->req.n_headers; i++)
+        if (ioma_slice_eq(ctx->req.headers[i].key, "content-type"))
+            ctx->res.content_type = ctx->req.headers[i].value;
+    ioma_write(ctx, body.p, body.len);
 }
 
 /* POST /greet with a form body (name=...) - ioma_kv_parse splits and decodes it like a query
  * string. The decoded values only need to live while the handler runs, so a local arena will do:
  * the reply is copied into the sink as it is written. */
-static void greet(ioma_ctx *c)
+static void greet(ioma_ctx *ctx)
 {
-    ioma_slice body = ioma_body(c);
+    ioma_slice body = ioma_body_all(ctx);
     ioma_kv    form[8];
     char       arena[512];
     size_t     n = ioma_kv_parse(body.p, body.len, form, 8, arena, sizeof arena);
@@ -118,33 +118,59 @@ static void greet(ioma_ctx *c)
     for (size_t i = 0; i < n; i++)
         if (ioma_slice_eq(form[i].key, "name"))
             name = form[i].value;
-    ioma_printf(c, "hello %.*s\n", (int)name.len, name.p);
+    ioma_printf(ctx, "hello %.*s\n", (int)name.len, name.p);
 }
 
 /* GET /stream?n=lines - a body far larger than the buffer. Nothing special to do: once the
  * buffer fills, the framework sends the head and streams the rest (chunked on HTTP/1.1), and
  * each write that reaches the wire just suspends this handler until the send completes. */
-static void stream(ioma_ctx *c)
+static void stream(ioma_ctx *ctx)
 {
     int64_t n = 1000;
-    for (size_t i = 0; i < c->req.n_params; i++)
-        if (ioma_slice_eq(c->req.params[i].key, "n"))
-            ioma_to_i64(c->req.params[i].value, &n);
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioma_slice_eq(ctx->req.params[i].key, "n"))
+            ioma_to_i64(ctx->req.params[i].value, &n);
     for (int64_t i = 1; i <= n; i++)
-        ioma_printf(c, "line %lld of %lld\n", (long long)i, (long long)n);
+        ioma_printf(ctx, "line %lld of %lld\n", (long long)i, (long long)n);
 }
 
-/* POST /upload - a body of any size, streamed: each ioma_body_read hands over the next bytes
+/* POST /upload - a body of any size, streamed: each ioma_body_read_until hands over the next bytes
  * straight from the wire (suspending the handler while they arrive), nothing is buffered. A
  * handler that never asks for the body does not pay for it either: the framework drains it. */
-static void upload(ioma_ctx *c)
+static void upload(ioma_ctx *ctx)
 {
     char   chunk[4096];
     size_t total = 0;
-    int    n;
-    while ((n = ioma_body_read(c, chunk, sizeof chunk)) > 0)
+    int    n, reads = 0;
+    while ((n = ioma_body_read_until(ctx, chunk, sizeof chunk)) > 0) {
         total += (size_t)n;
-    ioma_printf(c, "%zu bytes\n", total);
+        reads++;
+    }
+    ioma_printf(ctx, "%zu bytes in %d reads\n", total, reads);
+}
+
+/* POST /chunks[?first=N] - the body chunk by chunk, exactly as the client framed it: each chunk's
+ * length and bytes on a line, "end" after the last. With first=N, N bytes are streamed off first
+ * and the chunk read then gives the rest of the chunk they came from. A chunk that does not fit
+ * the buffer is a 413 (the engine answers it); a body that is not chunked is a 400. */
+static void chunks(ioma_ctx *ctx)
+{
+    char    buf[1024];
+    int64_t first = 0;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioma_slice_eq(ctx->req.params[i].key, "first"))
+            ioma_to_i64(ctx->req.params[i].value, &first);
+    if (first > 0 && first <= (int64_t)sizeof buf)
+        ioma_printf(ctx, "first=%d\n", ioma_body_read_until(ctx, buf, (size_t)first));
+    int n;
+    while ((n = ioma_body_read_chunk(ctx, buf, sizeof buf)) > 0)
+        ioma_printf(ctx, "%d:%.*s\n", n, n, buf);
+    if (n == 0) {
+        ioma_text(ctx, "end\n");
+    } else if (ctx->res.status == 200) {                     /* -1 without a status: not chunked */
+        ctx->res.status = 400;
+        ioma_text(ctx, "not chunked\n");
+    }
 }
 
 /* Middleware: stamps a Server header, then runs the rest of the chain. Setting headers before
@@ -152,18 +178,18 @@ static void upload(ioma_ctx *c)
  * already be on the wire); c->status and the rest are there to inspect on the way back out.
  * One that wanted to block a request (auth, rate limit) would write its reply and return
  * without calling ioma_next_run. */
-static void add_server(ioma_ctx *c, ioma_next *next)
+static void add_server(ioma_ctx *ctx, ioma_next *next)
 {
-    ioma_header(c, "Server", "ioma");
-    ioma_next_run(c, next);
+    ioma_header(ctx, "Server", "ioma");
+    ioma_next_run(ctx, next);
 }
 
 /* The fallback for anything unrouted, replacing the built-in text 404. */
-static void not_found(ioma_ctx *c)
+static void not_found(ioma_ctx *ctx)
 {
-    c->res.status = 404;
-    ioma_content_type(c, "application/json");
-    ioma_text(c, "{\"error\":\"not found\"}");
+    ctx->res.status = 404;
+    ioma_content_type(ctx, "application/json");
+    ioma_text(ctx, "{\"error\":\"not found\"}");
 }
 
 /* An environment variable as a number, or the fallback when unset or not a whole number. */
@@ -191,6 +217,7 @@ int main(void)
     ioma_route("POST", "/greet",                 greet);
     ioma_route("GET",  "/stream",                stream);
     ioma_route("POST", "/upload",                upload);
+    ioma_route("POST", "/chunks",                chunks);
     ioma_default(not_found);
 
     int workers = (int)env_number("IOMA_WORKERS", 0);          /* 0: one per core */

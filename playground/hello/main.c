@@ -10,10 +10,10 @@
 #include <ioma.h>
 
 /* GET /hello/:name - the capture is the first route parameter; the reply goes into the slab. */
-static void hello(ioma_ctx *c)
+static void hello(ioma_ctx *ctx)
 {
-    ioma_slice name = c->req.route_params[0].value;
-    ioma_printf(c, "hello %.*s\n", (int)name.len, name.p);
+    ioma_slice name = ctx->req.route_params[0].value;
+    ioma_printf(ctx, "hello %.*s\n", (int)name.len, name.p);
 }
 
 /* POST /repeat/:times - reads the body, then streams it back that many times as numbered lines.
@@ -22,21 +22,21 @@ static void hello(ioma_ctx *c)
  * the head and the body streams chunked from then on. The slab also goes out by itself whenever
  * it fills, and whatever is left goes out when the handler returns. A write or a flush returns -1
  * once the peer is gone. */
-static void repeat(ioma_ctx *c)
+static void repeat(ioma_ctx *ctx)
 {
     int64_t times;
-    if (!ioma_to_i64(c->req.route_params[0].value, &times) || times < 1) {
-        c->res.status = 400;
-        ioma_text(c, "usage: POST a body to /repeat/<times>\n");
+    if (!ioma_to_i64(ctx->req.route_params[0].value, &times) || times < 1) {
+        ctx->res.status = 400;
+        ioma_text(ctx, "usage: POST a body to /repeat/<times>\n");
         return;
     }
-    ioma_slice body = ioma_body(c);                  /* the whole body; over 16 KB it is refused */
-    if (c->res.status != 200)
+    ioma_slice body = ioma_body_all(ctx);                  /* the whole body; over 16 KB it is refused */
+    if (ctx->res.status != 200)
         return;                                      /* 413: the engine sends it, nothing to add */
     for (int64_t i = 1; i <= times; i++) {
-        if (ioma_printf(c, "%lld: %.*s\n", (long long)i, (int)body.len, body.p) < 0)
+        if (ioma_printf(ctx, "%lld: %.*s\n", (long long)i, (int)body.len, body.p) < 0)
             return;
-        if (i % 10 == 0 && ioma_flush(c) < 0)
+        if (i % 10 == 0 && ioma_flush(ctx) < 0)
             return;
     }
 }

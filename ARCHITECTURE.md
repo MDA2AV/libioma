@@ -171,11 +171,12 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
    copy). `-2` means "incomplete": read more and parse again, so a request split at any byte works.
 2. **Body, on demand**: one pass over the headers picks out `Content-Length`,
    `Transfer-Encoding` and `Connection` (a length test rejects almost every header before a byte
-   is compared), but the body stays on the wire. `ioma_body` reads it whole into the request
-   buffer (a chunked one decoded in place by `phr_decode_chunked`, which survives fragmentation);
-   `ioma_body_read` streams it, any size, staging chunked bytes after the head and decoding in
-   place. Whatever a handler leaves unread is drained after it returns, up to a limit, past which
-   the reply says close.
+   is compared), but the body stays on the wire. `ioma_body_all` reads it whole into the request
+   buffer, a chunked one decoded down over its own raw bytes; `ioma_body_read_until` streams it, any
+   size, filling the caller's buffer; `ioma_body_read_chunk` hands over one chunk exactly as the
+   sender framed it. All three chunked paths share one small parser (a raw stage after the head, a
+   size-line reader, a data mover) that survives a split at any byte. Whatever a handler leaves
+   unread is drained after it returns, up to a limit, past which the reply says close.
 3. **Keep-alive**: HTTP/1.1 unless `Connection: close`; HTTP/1.0 only with `Connection: keep-alive`.
 4. **Dispatch** a context to the middleware chain and the route (section 5). The context holds
    the request and the response; the response holds the reply being shaped (status, content

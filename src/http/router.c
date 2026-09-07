@@ -30,7 +30,7 @@ typedef struct {
     ioma_handler fn;
 } route_t;
 
-static void not_found(ioma_ctx *c);
+static void not_found(ioma_ctx *ctx);
 
 static route_t g_routes[IOMA_MAX_ROUTES];
 static int     g_nroutes;
@@ -97,10 +97,10 @@ void ioma_default(const ioma_handler fn)
 }
 
 /* The built-in fallback: a plain 404. */
-static void not_found(ioma_ctx *c)
+static void not_found(ioma_ctx *ctx)
 {
-    c->res.status = 404;
-    ioma_text(c, "404 Not Found\n");
+    ctx->res.status = 404;
+    ioma_text(ctx, "404 Not Found\n");
 }
 
 /* Walk the request path against a pattern segment by segment, recording the captures in
@@ -175,26 +175,26 @@ void ioma_use(ioma_mw mw)
 
 /* Run the next middleware, or the endpoint once the chain is exhausted. A middleware that does
  * not call this short-circuits the request. */
-void ioma_next_run(ioma_ctx *c, ioma_next *next)
+void ioma_next_run(ioma_ctx *ctx, ioma_next *next)
 {
     if (next->i < next->n) {
         ioma_mw   mw    = next->mws[next->i];
         ioma_next inner = { next->mws, next->n, next->i + 1, next->handler };
-        mw(c, &inner);
+        mw(ctx, &inner);
         return;
     }
-    next->handler(c);
+    next->handler(ctx);
 }
 
 /* Match the route, then run the middleware chain around it. With no middleware registered this
  * is a direct call. */
-void ioma__dispatch(ioma_ctx *c)
+void ioma__dispatch(ioma_ctx *ctx)
 {
-    const route_t *route = match(&c->req);
+    const route_t *route = match(&ctx->req);
     if (g_nmw == 0) {
-        route->fn(c);
+        route->fn(ctx);
         return;
     }
     ioma_next next = { g_mws, g_nmw, 0, route->fn };
-    ioma_next_run(c, &next);
+    ioma_next_run(ctx, &next);
 }

@@ -189,15 +189,6 @@ bool ioma_to_bool(ioma_slice s, bool *out)
 
 /* ── key/value parsing ─────────────────────────────────────────────────────────────────── */
 
-/* Value of a hex digit, or -1. */
-static int hexval(unsigned char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    c |= 0x20U;
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    return -1;
-}
-
 /* Percent-decode [s, s+n) into dst ('+' becomes a space, a malformed %XX is kept as is).
  * Never longer than the input; returns the decoded length. */
 static size_t decode(const char *src, size_t len, char *dst)
@@ -207,7 +198,7 @@ static size_t decode(const char *src, size_t len, char *dst)
         if (src[i] == '+') {
             dst[out++] = ' ';
         } else if (src[i] == '%' && i + 2 < len) {
-            int hi = hexval((unsigned char)src[i + 1]), lo = hexval((unsigned char)src[i + 2]);
+            int hi = ioma__hexval((unsigned char)src[i + 1]), lo = ioma__hexval((unsigned char)src[i + 2]);
             if (hi >= 0 && lo >= 0) {
                 dst[out++] = (char)(hi * 16 + lo);
                 i += 2;
@@ -269,9 +260,9 @@ size_t ioma_kv_parse(const char *text, size_t len, ioma_kv *out, size_t cap, cha
 /* ── shaping the reply ─────────────────────────────────────────────────────────────────── */
 
 /* Add a header to the reply. false once the head is on the wire, or when the table is full. */
-bool ioma_header(ioma_ctx *c, const char *name, const char *value)
+bool ioma_header(ioma_ctx *ctx, const char *name, const char *value)
 {
-    ioma_response *res = &c->res;
+    ioma_response *res = &ctx->res;
     if (res->head_sent || res->n_headers == IOMA_MAX_RESP_HEADERS)
         return false;
     res->headers[res->n_headers++] = (ioma_kv){ { name, strlen(name) }, { value, strlen(value) } };
@@ -279,22 +270,22 @@ bool ioma_header(ioma_ctx *c, const char *name, const char *value)
 }
 
 /* Set the content type from a C string (a slice can be assigned to res.content_type directly). */
-void ioma_content_type(ioma_ctx *c, const char *type)
+void ioma_content_type(ioma_ctx *ctx, const char *type)
 {
-    c->res.content_type = (ioma_slice){ type, strlen(type) };
+    ctx->res.content_type = (ioma_slice){ type, strlen(type) };
 }
 
 /* Declare the body length, so a body larger than the slab streams with Content-Length. */
-void ioma_content_length(ioma_ctx *c, size_t n)
+void ioma_content_length(ioma_ctx *ctx, size_t n)
 {
-    c->res.content_length = n;
-    c->res.has_length     = true;
+    ctx->res.content_length = n;
+    ctx->res.has_length     = true;
 }
 
 /* Write a C string. */
-int ioma_text(ioma_ctx *c, const char *s)
+int ioma_text(ioma_ctx *ctx, const char *s)
 {
-    return ioma_write(c, s, strlen(s));
+    return ioma_write(ctx, s, strlen(s));
 }
 
 /* The reason phrase for a status code; "Unknown" if unlisted. */

@@ -221,13 +221,62 @@ results.append(check("unread body drained, pipelined next request served",
 hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
 hc.request("POST", "/upload", body=b"x" * 1048576)
 r = hc.getresponse(); data = r.read()
-results.append(check("POST /upload 1 MB streamed in", r.status == 200 and data == b"1048576 bytes\n"))
+results.append(check("POST /upload 1 MB streamed in", r.status == 200 and data == b"1048576 bytes in 256 reads\n"))
 def gen():
     for _ in range(64):
         yield b"y" * 4096
 hc.request("POST", "/upload", body=gen(), encode_chunked=True)
 r = hc.getresponse(); data = r.read()
-results.append(check("POST /upload 256 KB chunked streamed in", r.status == 200 and data == b"262144 bytes\n"))
+results.append(check("POST /upload 256 KB chunked streamed in", r.status == 200 and data == b"262144 bytes in 64 reads\n"))
+
+
+# --- chunk-exact reads on a raw socket: split size lines, an extension, trailers, pipelining ---
+def raw_exchange(pieces, pause=0.03):
+    """Send the pieces with a pause between them, read until the server closes, and return the
+    responses as (status, body) pairs (all these replies carry a Content-Length)."""
+    s = connect()
+    for piece in pieces:
+        s.sendall(piece)
+        time.sleep(pause)
+    data = b""
+    while True:
+        try:
+            chunk = s.recv(65536)
+        except socket.timeout:
+            break
+        if not chunk:
+            break
+        data += chunk
+    s.close()
+    out = []
+    while b"\r\n\r\n" in data:
+        head, _, rest = data.partition(b"\r\n\r\n")
+        status = int(head.split(b" ")[1])
+        n = 0
+        for line in head.split(b"\r\n"):
+            if line.lower().startswith(b"content-length:"):
+                n = int(line.split(b":")[1])
+        out.append((status, rest[:n]))
+        data = rest[n:]
+    return out
+
+
+chunked_head = b"POST /chunks HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"
+pipelined = b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"
+rs = raw_exchange([chunked_head + b"5\r\nhel", b"lo\r\n3;ext=v\r", b"\nabc\r\n0\r\nx-tr", b"ailer: 1\r\n\r\n" + pipelined])
+results.append(check("POST /chunks -> each chunk as framed (split anywhere, extension, trailer), then a pipelined request",
+                     len(rs) == 2 and rs[0] == (200, b"5:hello\n3:abc\nend\n") and rs[1][0] == 200))
+rs = raw_exchange([b"POST /chunks?first=2 HTTP/1.1\r\nHost: x\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n"
+                   b"5\r\nhello\r\n3\r\nabc\r\n0\r\n\r\n"])
+results.append(check("POST /chunks?first=2 -> a chunk read after a byte read gives the rest of that chunk",
+                     rs == [(200, b"first=2\n3:llo\n3:abc\nend\n")]))
+rs = raw_exchange([chunked_head + b"7d0\r\n" + b"x" * 2000 + b"\r\n0\r\n\r\n"])
+results.append(check("POST /chunks with a 2000-byte chunk into a 1 KB buffer -> 413", len(rs) == 1 and rs[0][0] == 413))
+rs = raw_exchange([b"POST /chunks HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello"])
+results.append(check("POST /chunks with a Content-Length body -> 400 not chunked", rs == [(400, b"not chunked\n")]))
+rs = raw_exchange([b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel", b"lo\r\n0\r\n\r\n" + pipelined])
+results.append(check("POST /echo chunked read whole (split), then a pipelined request",
+                     len(rs) == 2 and rs[0] == (200, b"hello") and rs[1][0] == 200))
 hc.close()
 
 # a body too large to read whole is answered 413

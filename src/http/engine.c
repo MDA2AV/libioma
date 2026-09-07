@@ -41,20 +41,21 @@ static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
 struct serve_state {
     conn_t *conn;
     char   *read_buf;                       /* the read buffer (IOMA_REQ_CAP): head, then body     */
-    size_t  filled;                         /* bytes of this request received into it so far      */
+    size_t  filled;                         /* bytes received into it: the head and, for a         */
+                                            /* Content-Length body, its bytes as they arrive       */
     size_t  head_len;                       /* where the body starts                              */
     size_t  body_read;                      /* body bytes handed out so far                       */
     bool    body_done;                      /* the whole body has been taken off the wire         */
-    bool    body_whole;                     /* ioma_body read it into read_buf                    */
+    bool    body_whole;                     /* ioma_body_all read it into read_buf                */
     int     body_err;                       /* 0, a status to answer (400, 413), or -1: peer gone */
     size_t  next_req_off, next_req_len;     /* the next pipelined request's bytes, in read_buf    */
-    /* streaming a chunked body: raw bytes are staged after the head and decoded in place */
-    struct phr_chunked_decoder decoder;
-    size_t  staged_raw;                     /* undecoded bytes at the stage                       */
-    size_t  decoded_pos, decoded_len;       /* decoded bytes at the stage, not yet handed out     */
-    size_t  parked_len;                     /* bytes past the terminator, parked at the buffer end */
+    /* a chunked body: its raw bytes are staged in read_buf and decoded from there */
+    size_t  raw_pos, raw_end;               /* raw bytes not yet consumed: read_buf[raw_pos, raw_end) */
+    size_t  stage_floor;                    /* the stage stays above this: the head, plus a whole */
+                                            /* read's decoded body so far                         */
+    size_t  chunk_left;                     /* data bytes of the current chunk still to deliver   */
 };
-#define STATE(c) ((struct serve_state *)(c)->priv)
+#define STATE(ctx) ((struct serve_state *)(ctx)->priv)
 
 /* ── request headers ───────────────────────────────────────────────────────────────────── */
 
@@ -233,9 +234,9 @@ enum framing {
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
  * snprintf. Every field name goes out lower-cased: the engine's own are lowercase literals, a
  * handler's are folded as they are copied. Returns the length, or -1 if it does not fit. */
-static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing framing, size_t body_len)
+static int build_head(const ioma_ctx *ctx, char *dst, size_t cap, enum framing framing, size_t body_len)
 {
-    const ioma_response *res = &c->res;
+    const ioma_response *res = &ctx->res;
     char *p   = dst;
     char *end = dst + cap;
 
@@ -272,10 +273,10 @@ static int build_head(const ioma_ctx *c, char *dst, size_t cap, enum framing fra
     /* Connection: only when it says something. HTTP/1.1 is persistent by default, so a kept-alive
      * 1.1 reply carries none; a 1.0 client that asked for keep-alive is told it got it; a closing
      * reply always says close. */
-    bool keep = c->req.keep_alive && !res->close;
+    bool keep = ctx->req.keep_alive && !res->close;
     if (!keep)
         PUTC("connection: close\r\n");
-    else if (c->req.minor_version == 0)
+    else if (ctx->req.minor_version == 0)
         PUTC("connection: keep-alive\r\n");
 
     for (size_t i = 0; i < res->n_headers; i++) {                 /* names go out lower-cased */
@@ -321,10 +322,10 @@ static int fail(ioma_response *res)
  * framing: a final flush with the head unsent means the whole body is here (Content-Length, one
  * send); an early flush means the body outgrew the slab, so it streams - with the declared length
  * if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. */
-static int flush(ioma_ctx *c, bool final)
+static int flush(ioma_ctx *ctx, bool final)
 {
-    ioma_response *res  = &c->res;
-    conn_t        *conn = STATE(c)->conn;
+    ioma_response *res  = &ctx->res;
+    conn_t        *conn = STATE(ctx)->conn;
     if (res->failed)
         return -1;
 
@@ -334,7 +335,7 @@ static int flush(ioma_ctx *c, bool final)
         enum framing framing  = FRAME_LENGTH;
         size_t       body_len = res->has_length ? res->content_length : res->len;
         if (!res->has_length && !final) {
-            if (c->req.minor_version >= 1) {
+            if (ctx->req.minor_version >= 1) {
                 framing = FRAME_CHUNKED;
                 res->chunked = true;
             } else {
@@ -342,7 +343,7 @@ static int flush(ioma_ctx *c, bool final)
                 res->close = true;
             }
         }
-        head_len = build_head(c, head, sizeof head, framing, body_len);
+        head_len = build_head(ctx, head, sizeof head, framing, body_len);
         if (head_len < 0)
             return fail(res);
         res->head_sent = true;
@@ -372,30 +373,30 @@ static int flush(ioma_ctx *c, bool final)
 
 /* After the chain: send what is left - the whole reply if nothing went out yet - and close a
  * chunked stream. */
-static int finish(ioma_ctx *c)
+static int finish(ioma_ctx *ctx)
 {
-    ioma_response *res = &c->res;
+    ioma_response *res = &ctx->res;
     if (res->failed)
         return -1;
     bool pending = !res->head_sent || res->len;       /* nothing sent yet, or bytes still in the slab */
-    if (pending && flush(c, true) < 0)
+    if (pending && flush(ctx, true) < 0)
         return -1;
-    if (res->chunked && await_send(STATE(c)->conn, "0\r\n\r\n", 5) < 0)
+    if (res->chunked && await_send(STATE(ctx)->conn, "0\r\n\r\n", 5) < 0)
         return -1;
     return 0;
 }
 
 /* Append body bytes to the slab; send it, head first, whenever it fills. */
-int ioma_write(ioma_ctx *c, const void *data, size_t len)
+int ioma_write(ioma_ctx *ctx, const void *data, size_t len)
 {
-    ioma_response *res = &c->res;
+    ioma_response *res = &ctx->res;
     if (res->failed)
         return -1;
     const char *src = data;
     while (len) {
         size_t room = res->cap - res->len;
         if (room == 0) {
-            if (flush(c, false) < 0)
+            if (flush(ctx, false) < 0)
                 return -1;
             continue;
         }
@@ -409,22 +410,22 @@ int ioma_write(ioma_ctx *c, const void *data, size_t len)
 }
 
 /* Something bigger than the whole slab: format it on the heap and write it in pieces. */
-static int write_formatted_heap(ioma_ctx *c, const char *fmt, va_list ap, size_t len)
+static int write_formatted_heap(ioma_ctx *ctx, const char *fmt, va_list ap, size_t len)
 {
     char *tmp = malloc(len + 1);
     if (!tmp)
         return -1;
     vsnprintf(tmp, len + 1, fmt, ap);
-    int rc = ioma_write(c, tmp, len);
+    int rc = ioma_write(ctx, tmp, len);
     free(tmp);
     return rc;
 }
 
 /* Format straight into the slab. If it does not fit the room left, flush and format again into
  * the empty slab; if it would not fit even that, it goes through the heap. */
-int ioma_printf(ioma_ctx *c, const char *fmt, ...)
+int ioma_printf(ioma_ctx *ctx, const char *fmt, ...)
 {
-    ioma_response *res = &c->res;
+    ioma_response *res = &ctx->res;
     if (res->failed)
         return -1;
     va_list ap, again;
@@ -441,8 +442,8 @@ int ioma_printf(ioma_ctx *c, const char *fmt, ...)
         res->len += (size_t)n;
         rc = 0;
     } else if ((size_t)n >= res->cap) {                   /* bigger than the slab itself */
-        rc = write_formatted_heap(c, fmt, again, (size_t)n);
-    } else if (flush(c, false) == 0) {                    /* make room, then it fits */
+        rc = write_formatted_heap(ctx, fmt, again, (size_t)n);
+    } else if (flush(ctx, false) == 0) {                    /* make room, then it fits */
         res->len += (size_t)vsnprintf(res->buf, res->cap, fmt, again);
         rc = 0;
     }
@@ -451,98 +452,32 @@ int ioma_printf(ioma_ctx *c, const char *fmt, ...)
 }
 
 /* Send what is in the slab now. Starts streaming: the head goes out with it. */
-int ioma_flush(ioma_ctx *c)
+int ioma_flush(ioma_ctx *ctx)
 {
-    return flush(c, false);
+    return flush(ctx, false);
 }
 
 /* ── the body: read on demand ──────────────────────────────────────────────────────────── */
 
 /* A body failure with a status: the engine answers with it after the handler unless a reply is
  * already streaming, and res.status shows it so a handler can stop before it writes anything. */
-static void body_fail(ioma_ctx *c, int status)
+static void body_fail(ioma_ctx *ctx, int status)
 {
-    STATE(c)->body_err = status;
-    c->res.status      = status;
+    STATE(ctx)->body_err = status;
+    ctx->res.status      = status;
 }
 
-/* The whole body, into the request buffer right after the head. Content-Length: read until it is
- * all there. Chunked: decode in place, reading more as needed - phr keeps state across calls, so a
- * split anywhere works - and remember what follows the terminator (a pipelined next request). */
-ioma_slice ioma_body(ioma_ctx *c)
+/* --- a Content-Length body --- */
+
+/* Up to n body bytes into dst: first the ones that arrived with the head, then straight from the
+ * wire, never past the declared length (a pipelined request is never consumed). One receive's
+ * worth; the count, or -1 when the peer is gone. */
+static int fixed_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_t n)
 {
-    struct serve_state *state = STATE(c);
-    ioma_request *req = &c->req;
-    const ioma_slice none = { req->body.p, 0 };
-
-    if (state->body_whole)
-        return req->body;
-    if (state->body_read || state->body_err)                    /* already streaming, or failed */
-        return none;
-
-    char *body = state->read_buf + state->head_len;
-    if (req->chunked) {
-        struct phr_chunked_decoder decoder = {};
-        decoder.consume_trailer = 1;
-        size_t  decoded = state->filled - state->head_len;       /* raw bytes already here */
-        ssize_t rc      = phr_decode_chunked(&decoder, body, &decoded);
-        while (rc == -2) {                               /* needs more: append after the decoded prefix */
-            size_t off = state->head_len + decoded;
-            if (off == IOMA_REQ_CAP) {
-                body_fail(c, 413);
-                return none;
-            }
-            int n = await_recv(state->conn, state->read_buf + off, IOMA_REQ_CAP - off);
-            if (n <= 0) {
-                state->body_err = -1;
-                return none;
-            }
-            size_t chunk = (size_t)n;
-            rc = phr_decode_chunked(&decoder, state->read_buf + off, &chunk);
-            decoded += chunk;
-        }
-        if (rc < 0) {
-            body_fail(c, 400);
-            return none;
-        }
-        req->body         = (ioma_slice){ body, decoded };
-        state->next_req_off = state->head_len + decoded;       /* the bytes past the terminator */
-        state->next_req_len = (size_t)rc;
-    } else {
-        size_t total = state->head_len + req->content_length;
-        if (total > IOMA_REQ_CAP) {
-            body_fail(c, 413);
-            return none;
-        }
-        while (state->filled < total) {
-            int n = await_recv(state->conn, state->read_buf + state->filled, IOMA_REQ_CAP - state->filled);
-            if (n <= 0) {
-                state->body_err = -1;
-                return none;
-            }
-            state->filled += (size_t)n;
-        }
-        req->body         = (ioma_slice){ body, req->content_length };
-        state->next_req_off = total;
-        state->next_req_len = state->filled - total;
-    }
-    state->body_read   = req->body.len;
-    state->body_done  = true;
-    state->body_whole = true;
-    return req->body;
-}
-
-/* Stream a Content-Length body: first the bytes that arrived with the head, then straight from
- * the wire into dst, never past the declared length (so a pipelined request is never consumed). */
-static int body_read_fixed(ioma_ctx *c, struct serve_state *state, char *dst, size_t cap)
-{
-    size_t remaining = c->req.content_length - state->body_read;
-    if (remaining == 0) {
-        state->body_done = true;
-        return 0;
-    }
-    size_t n        = remaining < cap ? remaining : cap;
-    size_t buffered = state->filled - state->head_len;    /* body bytes that came with the head */
+    size_t remaining = ctx->req.content_length - state->body_read;
+    if (n > remaining)
+        n = remaining;
+    size_t buffered = state->filled - state->head_len;      /* body bytes that came with the head */
     if (state->body_read < buffered) {
         if (n > buffered - state->body_read)
             n = buffered - state->body_read;
@@ -556,82 +491,255 @@ static int body_read_fixed(ioma_ctx *c, struct serve_state *state, char *dst, si
         n = (size_t)got;
     }
     state->body_read += n;
-    if (state->body_read == c->req.content_length)
+    if (state->body_read == ctx->req.content_length)
         state->body_done = true;
     return (int)n;
 }
 
-/* Stream a chunked body. Raw bytes are staged after the head and decoded in place; decoded bytes
- * are handed out, then the stage is reused. Bytes past the terminator are parked at the end of the
- * buffer for the next request. */
-static int body_read_chunked(ioma_ctx *c, struct serve_state *state, char *dst, size_t cap)
+/* --- a chunked body: the raw bytes are staged in read_buf, after the head --- */
+
+/* More raw bytes into the stage, read_buf[raw_pos, raw_end). Below stage_floor the buffer is
+ * spoken for, so an empty stage restarts there and a full one is compacted down to it. false with
+ * the failure recorded: no room at all (413), or the peer gone. */
+static bool raw_fill(ioma_ctx *ctx, struct serve_state *state)
 {
-    char  *stage = state->read_buf + state->head_len;
-    size_t stage_cap = IOMA_REQ_CAP - state->head_len;
+    char *buf = state->read_buf;
+    if (state->raw_pos == state->raw_end) {
+        state->raw_pos = state->raw_end = state->stage_floor;
+    } else if (state->raw_end == IOMA_REQ_CAP && state->raw_pos > state->stage_floor) {
+        size_t held = state->raw_end - state->raw_pos;
+        memmove(buf + state->stage_floor, buf + state->raw_pos, held);
+        state->raw_pos = state->stage_floor;
+        state->raw_end = state->stage_floor + held;
+    }
+    if (state->raw_end == IOMA_REQ_CAP) {                     /* a size line, or a whole body, too big */
+        body_fail(ctx, 413);
+        return false;
+    }
+    int n = await_recv(state->conn, buf + state->raw_end, IOMA_REQ_CAP - state->raw_end);
+    if (n <= 0) {
+        state->body_err = -1;
+        return false;
+    }
+    state->raw_end += (size_t)n;
+    return true;
+}
+
+/* The line at the front of the stage, filling until its CRLF is there. Its length without the
+ * CRLF, or -1 with the failure recorded. */
+static long raw_line(ioma_ctx *ctx, struct serve_state *state)
+{
     for (;;) {
-        if (state->decoded_len) {
-            size_t n = state->decoded_len < cap ? state->decoded_len : cap;
-            memcpy(dst, stage + state->decoded_pos, n);
-            state->decoded_pos  += n;
-            state->decoded_len  -= n;
-            state->body_read += n;
-            return (int)n;
-        }
-        if (state->body_done)
-            return 0;
-        if (state->staged_raw == 0) {
-            int got = await_recv(state->conn, stage, stage_cap);
-            if (got <= 0) {
-                state->body_err = -1;
-                return -1;
-            }
-            state->staged_raw = (size_t)got;
-        }
-        size_t  decoded = state->staged_raw;
-        ssize_t rc      = phr_decode_chunked(&state->decoder, stage, &decoded);
-        state->staged_raw  = 0;
-        state->decoded_pos = 0;
-        state->decoded_len = decoded;
-        if (rc == -1) {
-            body_fail(c, 400);
+        char *line = state->read_buf + state->raw_pos;
+        char *eol  = memmem(line, state->raw_end - state->raw_pos, "\r\n", 2);
+        if (eol)
+            return eol - line;
+        if (!raw_fill(ctx, state))
             return -1;
-        }
-        if (rc >= 0) {
-            state->body_done = true;
-            if (rc > 0) {                                   /* the next request's bytes: park them at the
-                                                             * buffer's end (the stage never reaches it while
-                                                             * decoded bytes are still pending) */
-                state->parked_len = (size_t)rc;
-                memmove(state->read_buf + IOMA_REQ_CAP - state->parked_len, stage + decoded, state->parked_len);
-            }
-        }
     }
 }
 
-/* The next bytes of the body into dst; 0 once it is all consumed, which a whole read did at once. */
-int ioma_body_read(ioma_ctx *c, void *dst, size_t cap)
+/* After the last chunk: trailer lines up to an empty one, then the body is done and whatever
+ * follows is the next request. */
+static bool chunk_trailers(ioma_ctx *ctx, struct serve_state *state)
 {
-    struct serve_state *state = STATE(c);
-    if (state->body_err || cap == 0)
+    for (;;) {
+        long len = raw_line(ctx, state);
+        if (len < 0)
+            return false;
+        state->raw_pos += (size_t)len + 2;
+        if (len == 0)
+            break;
+    }
+    state->body_done    = true;
+    state->next_req_off = state->raw_pos;
+    state->next_req_len = state->raw_end - state->raw_pos;
+    return true;
+}
+
+/* The next chunk's size line - hex digits, an optional extension, CRLF - into chunk_left. The
+ * last chunk (size 0) also takes its trailers and ends the body. */
+static bool chunk_header(ioma_ctx *ctx, struct serve_state *state)
+{
+    long len = raw_line(ctx, state);
+    if (len < 0)
+        return false;
+    const char *line = state->read_buf + state->raw_pos;
+    size_t      size = 0, i = 0;
+    for (; i < (size_t)len; i++) {
+        int digit = ioma__hexval((unsigned char)line[i]);
+        if (digit < 0)
+            break;
+        if (size > (SIZE_MAX >> 4)) {
+            body_fail(ctx, 400);
+            return false;
+        }
+        size = (size << 4) | (size_t)digit;
+    }
+    bool ended = i == (size_t)len || line[i] == ';' || line[i] == ' ' || line[i] == '\t';
+    if (i == 0 || !ended) {
+        body_fail(ctx, 400);
+        return false;
+    }
+    state->raw_pos += (size_t)len + 2;
+    if (size == 0)
+        return chunk_trailers(ctx, state);
+    state->chunk_left = size;
+    return true;
+}
+
+/* Up to n data bytes of the current chunk: into dst, or when dst is null in place at the stage
+ * floor (a whole read), which then moves past them. What the stage holds, after one fill when it
+ * is empty; the CRLF that ends the chunk is consumed with its last byte. The count, or -1. */
+static int chunk_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_t n)
+{
+    char *buf = state->read_buf;
+    if (state->raw_pos == state->raw_end && !raw_fill(ctx, state))
+        return -1;
+    size_t avail = state->raw_end - state->raw_pos;
+    if (n > avail)
+        n = avail;
+    if (n > state->chunk_left)
+        n = state->chunk_left;
+    if (dst) {
+        memcpy(dst, buf + state->raw_pos, n);
+    } else {
+        memmove(buf + state->stage_floor, buf + state->raw_pos, n);   /* leftwards: the floor never passes raw_pos */
+        state->stage_floor += n;
+    }
+    state->raw_pos    += n;
+    state->chunk_left -= n;
+    state->body_read  += n;
+    if (state->chunk_left == 0) {
+        while (state->raw_end - state->raw_pos < 2)
+            if (!raw_fill(ctx, state))
+                return -1;
+        if (buf[state->raw_pos] != '\r' || buf[state->raw_pos + 1] != '\n') {
+            body_fail(ctx, 400);
+            return -1;
+        }
+        state->raw_pos += 2;
+    }
+    return (int)n;
+}
+
+/* --- the three reads --- */
+
+/* The whole body, in place right after the head: a Content-Length body is received until it is
+ * complete, a chunked one is decoded down over its own raw bytes. Once; then the slice, which is
+ * also req.body. */
+ioma_slice ioma_body_all(ioma_ctx *ctx)
+{
+    struct serve_state *state = STATE(ctx);
+    ioma_request       *req   = &ctx->req;
+    const ioma_slice    none  = { req->body.p, 0 };
+
+    if (state->body_whole)
+        return req->body;
+    if (state->body_read || state->body_err)                    /* already streaming, or failed */
+        return none;
+
+    char *body = state->read_buf + state->head_len;
+    if (req->chunked) {
+        while (!state->body_done) {
+            if (state->chunk_left == 0) {
+                if (!chunk_header(ctx, state))
+                    return none;
+            } else if (chunk_data(ctx, state, nullptr, state->chunk_left) < 0) {
+                return none;
+            }
+        }
+        req->body = (ioma_slice){ body, state->stage_floor - state->head_len };
+    } else {
+        size_t total = state->head_len + req->content_length;
+        if (total > IOMA_REQ_CAP) {
+            body_fail(ctx, 413);
+            return none;
+        }
+        while (state->filled < total) {
+            int n = await_recv(state->conn, state->read_buf + state->filled, IOMA_REQ_CAP - state->filled);
+            if (n <= 0) {
+                state->body_err = -1;
+                return none;
+            }
+            state->filled += (size_t)n;
+        }
+        req->body           = (ioma_slice){ body, req->content_length };
+        state->next_req_off = total;
+        state->next_req_len = state->filled - total;
+        state->body_read    = req->content_length;
+        state->body_done    = true;
+    }
+    state->body_whole = true;
+    return req->body;
+}
+
+/* The next bytes of the body into dst, reading until n are there or the body ends. */
+int ioma_body_read_until(ioma_ctx *ctx, void *dst, size_t n)
+{
+    struct serve_state *state = STATE(ctx);
+    if (state->body_err || n == 0)
+        return -1;
+    char  *out = dst;
+    size_t got = 0;
+    while (got < n && !state->body_done) {
+        int k;
+        if (!ctx->req.chunked)
+            k = fixed_data(ctx, state, out + got, n - got);
+        else if (state->chunk_left == 0)
+            k = chunk_header(ctx, state) ? 0 : -1;
+        else
+            k = chunk_data(ctx, state, out + got, n - got);
+        if (k < 0)
+            return -1;
+        got += (size_t)k;
+    }
+    return (int)got;
+}
+
+/* The next chunk of a chunked body, whole, into dst: the rest of the current one when a read
+ * stopped inside it, else the next. */
+int ioma_body_read_chunk(ioma_ctx *ctx, void *dst, size_t cap)
+{
+    struct serve_state *state = STATE(ctx);
+    if (state->body_err || !ctx->req.chunked)
         return -1;
     if (state->body_done)
         return 0;
-    return c->req.chunked ? body_read_chunked(c, state, dst, cap) : body_read_fixed(c, state, dst, cap);
+    if (state->chunk_left == 0) {
+        if (!chunk_header(ctx, state))
+            return -1;
+        if (state->body_done)
+            return 0;
+    }
+    if (state->chunk_left > cap) {                              /* the chunk does not fit dst */
+        body_fail(ctx, 413);
+        return -1;
+    }
+    char  *out  = dst;
+    size_t want = state->chunk_left, got = 0;
+    while (got < want) {
+        int k = chunk_data(ctx, state, out + got, want - got);
+        if (k < 0)
+            return -1;
+        got += (size_t)k;
+    }
+    return (int)got;
 }
 
 /* After the chain: take an unread body off the wire so the connection stays in sync, up to a
  * limit - past it, the reply says close and the rest is never read. */
-static void drain_body(ioma_ctx *c)
+static void drain_body(ioma_ctx *ctx)
 {
-    struct serve_state *state = STATE(c);
+    struct serve_state *state = STATE(ctx);
     char   tmp[4096];
     size_t drained = 0;
     while (!state->body_done && !state->body_err) {
         if (drained >= IOMA_DRAIN_MAX) {
-            c->res.close = true;
+            ctx->res.close = true;
             return;
         }
-        int n = ioma_body_read(c, tmp, sizeof tmp);
+        int n = ioma_body_read_until(ctx, tmp, sizeof tmp);
         if (n <= 0)
             return;
         drained += (size_t)n;
@@ -707,14 +815,14 @@ static void init_body_state(struct serve_state *state, conn_t *conn, char *read_
                             size_t head_len, const ioma_request *req)
 {
     memset(state, 0, sizeof *state);
-    state->conn     = conn;
-    state->read_buf = read_buf;
-    state->filled   = filled;
-    state->head_len = head_len;
-    if (req->chunked) {
-        state->decoder.consume_trailer = 1;
-        state->staged_raw = filled - head_len;
-    } else {
+    state->conn        = conn;
+    state->read_buf    = read_buf;
+    state->filled      = filled;
+    state->head_len    = head_len;
+    state->raw_pos     = head_len;                    /* chunked: what came with the head is raw body */
+    state->raw_end     = filled;
+    state->stage_floor = head_len;
+    if (!req->chunked) {
         size_t total = head_len + req->content_length;
         state->body_done = req->content_length == 0;
         if (filled >= total) {
@@ -745,10 +853,6 @@ static void init_response(ioma_response *res, char *slab)
  * buffer and return how many there are. */
 static size_t carry_next_request(struct serve_state *state, char *read_buf)
 {
-    if (state->parked_len) {                          /* parked past a chunked terminator */
-        state->next_req_off = IOMA_REQ_CAP - state->parked_len;
-        state->next_req_len = state->parked_len;
-    }
     if (state->next_req_len)
         memmove(read_buf, read_buf + state->next_req_off, state->next_req_len);
     return state->next_req_len;

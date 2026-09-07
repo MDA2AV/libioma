@@ -10,8 +10,8 @@
  * The handler runs on the connection's coroutine, so a read or a write that has to touch the
  * wire simply suspends it until the I/O completes.
  *
- *     static void user(ioma_ctx *c) {
- *         ioma_slice id = c->req.route_params[0].value;              // the :id of "/users/:id"
+ *     static void user(ioma_ctx *ctx) {
+ *         ioma_slice id = ctx->req.route_params[0].value;              // the :id of "/users/:id"
  *         ioma_printf(c, "user %.*s\n", (int)id.len, id.p);
  *     }
  *     int main(void) {
@@ -101,42 +101,48 @@ typedef struct ioma_ctx {
     void         *priv;                         /* the engine's own state                    */
 } ioma_ctx;
 
-typedef void (*ioma_handler)(ioma_ctx *c);
+typedef void (*ioma_handler)(ioma_ctx *ctx);
 
 /* Middleware runs around the handler (the onion model): shape the context, call ioma_next_run to
  * run the rest of the chain and then the endpoint, then act on the result - or write a reply and
  * return WITHOUT calling ioma_next_run to short-circuit (auth failure, cache hit). */
 typedef struct ioma_next ioma_next;
-typedef void (*ioma_mw)(ioma_ctx *c, ioma_next *next);
-void ioma_next_run(ioma_ctx *c, ioma_next *next);
+typedef void (*ioma_mw)(ioma_ctx *ctx, ioma_next *next);
+void ioma_next_run(ioma_ctx *ctx, ioma_next *next);
 
 /* ── the body ──────────────────────────────────────────────────────────────────────────── */
 
-/* Read the whole body into the request buffer, once, and return it (also in req.body). It must
- * fit the buffer (16 KB by default): otherwise the slice is empty and res.status is 413, which
- * becomes the reply - a handler that streams should check and stop. Not for a body you already
- * started streaming. */
-ioma_slice ioma_body(ioma_ctx *c);
+/* The whole body, read into the request buffer once and returned as a slice (also req.body). It
+ * must fit the buffer (16 KB by default): otherwise the slice is empty and res.status is 413,
+ * which becomes the reply - a handler that streams its reply should check and stop. Not after
+ * one of the reads below. */
+ioma_slice ioma_body_all(ioma_ctx *ctx);
 
-/* Stream the body: the next bytes into dst, at most cap. Returns the count, 0 at the end (at once
- * after ioma_body: the body was consumed whole), -1 on error (the connection then closes after
- * the reply). Any size of body, nothing buffered. */
-int        ioma_body_read(ioma_ctx *c, void *dst, size_t cap);
+/* The next bytes of the body into dst, reading until n are there or the body ends. Returns the
+ * count (less than n only at the end), 0 once it is all consumed, -1 on error (the connection
+ * then closes after the reply). Any size of body, nothing kept in the engine. */
+int ioma_body_read_until(ioma_ctx *ctx, void *dst, size_t n);
+
+/* The next chunk of a chunked body, exactly as the sender framed it, into dst: the rest of the
+ * current chunk when a read stopped inside one, else the next whole one. Returns its length, 0 at
+ * the last chunk, -1 on error - a chunk larger than cap is a 413 - or when the body is not
+ * chunked. */
+int ioma_body_read_chunk(ioma_ctx *ctx, void *dst, size_t cap);
 
 /* ── the reply ─────────────────────────────────────────────────────────────────────────── */
 
 /* Body writes into the slab. When it fills, it is sent - head first - and the body streams from
  * then on: chunked on HTTP/1.1, until close on HTTP/1.0, or with the length declared below.
  * Return 0, or -1 once the peer is gone (further writes are ignored). */
-int  ioma_write (ioma_ctx *c, const void *data, size_t len);
-int  ioma_text  (ioma_ctx *c, const char *s);                          /* a C string          */
-int  ioma_printf(ioma_ctx *c, const char *fmt, ...) __attribute__((format(printf, 2, 3)));   /* formatted, into the slab */
+int  ioma_write (ioma_ctx *ctx, const void *data, size_t len);
+int  ioma_text  (ioma_ctx *ctx, const char *s);                          /* a C string          */
+int  ioma_printf(ioma_ctx *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));   /* formatted, into the slab */
 
 /* Shape the head. Only before it is sent: ioma_header returns false afterwards. */
-bool ioma_header        (ioma_ctx *c, const char *name, const char *value);   /* both stay valid until sent; the name is sent lower-cased */
-void ioma_content_type  (ioma_ctx *c, const char *type);
-void ioma_content_length(ioma_ctx *c, size_t n);       /* stream a large body with a known length */
-int  ioma_flush         (ioma_ctx *c);                 /* send what is in the slab now (starts streaming) */
+bool ioma_header        (ioma_ctx *ctx, const char *name, const char *value);   /* both stay valid until sent; the name is sent lower-cased */
+void ioma_content_type  (ioma_ctx *ctx, const char *type);
+void ioma_content_length(ioma_ctx *ctx, size_t n);       /* stream a large body with a known length */
+int  ioma_flush         (ioma_ctx *ctx);                 /* send what is in the slab now (starts streaming) */
 
 /* ── slices ────────────────────────────────────────────────────────────────────────────── */
 
