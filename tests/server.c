@@ -255,31 +255,32 @@ static long env_number(const char *name, long fallback)
 
 int main(void)
 {
-    ioma_use(add_server);                        /* global middleware, runs on every request */
 
-    ioma_get (NULL, "/",                      home);         /* NULL: the root group, no prefix */
-    ioma_get (NULL, "/health",                health);
-    ioma_get (NULL, "/whoami",                whoami);
-    ioma_get (NULL, "/users/:id",             user);
-    ioma_get (NULL, "/users/new",             new_user_form); /* static beside the capture: wins for GET */
-    ioma_post(NULL, "/users/:id",             update_user);   /* so POST /users/new falls through to :id */
-    ioma_get (NULL, "/users/:id/posts/:post", post);
-    ioma_get (NULL, "/convert",               convert);
-    ioma_post(NULL, "/echo",                  echo);
-    ioma_post(NULL, "/greet",                 greet);
-    ioma_get (NULL, "/stream",                stream);
-    ioma_post(NULL, "/upload",                upload);
-    ioma_post(NULL, "/chunks",                chunks);
-    ioma_default(not_found);
+    /* the routes as a script: outside any IOMA_GROUP block this is the root */
+    IOMA_USE(add_server);                        /* root middleware: every request */
+    IOMA_GET ("/",                      home);
+    IOMA_GET ("/health",                health);
+    IOMA_GET ("/whoami",                whoami);
+    IOMA_GET ("/users/:id",             user);
+    IOMA_GET ("/users/new",             new_user_form);     /* static beside the capture: wins for GET */
+    IOMA_POST("/users/:id",             update_user);       /* so POST /users/new falls through to :id */
+    IOMA_GET ("/users/:id/posts/:post", post);
+    IOMA_GET ("/convert",               convert);
+    IOMA_POST("/echo",                  echo);
+    IOMA_POST("/greet",                 greet);
+    IOMA_GET ("/stream",                stream);
+    IOMA_POST("/upload",                upload);
+    IOMA_POST("/chunks",                chunks);
+    IOMA_DEFAULT(not_found);
 
     /* groups: /api with middleware of its own, /api/admin below it gated by a token, and one
-     * endpoint with middleware for itself only */
-    ioma_group *api = ioma_group_new(NULL, "/api");
-    ioma_group_use(api, api_header);
-    ioma_get(api, "/ping", ping);
-    ioma_group *admin = ioma_group_new(api, "/admin");
-    ioma_group_use(admin, require_token);
-    ioma_endpoint_use(ioma_get(admin, "/stats", stats), endpoint_header);
+     * endpoint with middleware for itself only, listed after its handler */
+    IOMA_GROUP("/api", api_header) {
+        IOMA_GET("/ping", ping);
+        IOMA_GROUP("/admin", require_token) {
+            IOMA_GET("/stats", stats, endpoint_header);
+        }
+    }
 
     int workers = (int)env_number("IOMA_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOMA_PORT", 8080);

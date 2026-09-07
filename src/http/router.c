@@ -8,9 +8,6 @@
 
 #include <string.h>
 
-#ifndef IOMA_MAX_MW
-#define IOMA_MAX_MW          16                     /* per group, per endpoint, and at the root */
-#endif
 
 struct ioma_group {
     ioma_group *parent;                             /* nullptr only for the root */
@@ -58,6 +55,7 @@ struct ioma_next {
 static void not_found(ioma_ctx *ctx);
 
 static ioma_group     g_root = { .prefix = "" };    /* no prefix; ioma_use's middleware */
+static ioma_group    *g_current = &g_root;          /* the script form's open group */
 static ioma_endpoint *g_first, *g_last;             /* endpoints in registration order */
 static struct node    g_tree;                       /* the root node */
 static ioma_handler   g_fallback = not_found;
@@ -139,6 +137,41 @@ void ioma_endpoint_use(ioma_endpoint *endpoint, ioma_mw mw)
         return;
     }
     endpoint->own[endpoint->n_own++] = mw;
+}
+
+/* --- the script form (the IOMA_ macros) --- */
+
+/* Open a group below the current one and make it current; its middleware list ends at a null. */
+ioma_group *ioma__group_begin(struct ioma_group_args args)
+{
+    ioma_group *group = ioma_group_new(g_current, args.prefix);
+    for (int i = 0; i < IOMA_MAX_MW && args.mws[i]; i++)
+        ioma_group_use(group, args.mws[i]);
+    g_current = group;
+    return group;
+}
+
+/* Close the current group; null, so the block's loop ends. */
+ioma_group *ioma__group_end(void)
+{
+    if (g_current->parent)
+        g_current = g_current->parent;
+    return nullptr;
+}
+
+/* The group a script-form registration goes into. */
+ioma_group *ioma__group_current(void)
+{
+    return g_current;
+}
+
+/* An endpoint in the current group, with its middleware list (ended by a null). */
+ioma_endpoint *ioma__endpoint(const char *method, struct ioma_endpoint_args args)
+{
+    ioma_endpoint *ep = ioma_route(g_current, method, args.path, args.fn);
+    for (int i = 0; i < IOMA_MAX_MW && args.mws[i]; i++)
+        ioma_endpoint_use(ep, args.mws[i]);
+    return ep;
 }
 
 /* Replace the built-in 404 fallback. */

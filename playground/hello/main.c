@@ -43,7 +43,7 @@ static void repeat(ioma_ctx *ctx)
 
 int main(void)
 {
-    ioma_get (NULL, "/hello/:name",   hello);       /* NULL: the root group, no prefix */
-    ioma_post(NULL, "/repeat/:times", repeat);
+    IOMA_GET ("/hello/:name",   hello);
+    IOMA_POST("/repeat/:times", repeat);
     return ioma_run(0, 8080);
 }

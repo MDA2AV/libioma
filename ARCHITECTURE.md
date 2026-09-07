@@ -231,6 +231,12 @@ middleware, then each group's from outermost to innermost, then the endpoint's o
 array, so dispatch is a call through it with no walking of groups. The fallbacks run behind the
 root's middleware only.
 
+The `IOMA_` macros are the same registrations as a script: `IOMA_GROUP(prefix, middleware...)`
+opens a group for the block that follows (a run-once `for`, the group popped when it ends),
+`IOMA_GET(path, handler, middleware...)` and its siblings register into the open group, and
+`IOMA_USE` adds middleware to it. The middleware lists travel in small structs ended by a null,
+so every argument is type-checked and a wrong signature is a compile error.
+
 ## 6. One keep-alive request, end to end
 
 1. Bytes arrive. The kernel copies them into a provided buffer and posts a `RECV` CQE.

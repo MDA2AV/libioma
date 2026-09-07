@@ -212,6 +212,61 @@ void ioma_use(ioma_mw mw);
  * method gets a built-in 405 with an allow header. */
 void ioma_default(ioma_handler fn);
 
+/* ── the same, as a script ─────────────────────────────────────────────────────────────── */
+
+/* Registration as a block-structured script: a current group, which the block after IOMA_GROUP
+ * sets (the root outside any block), endpoints registered into it, with their own middleware
+ * listed after the handler, and IOMA_USE adding middleware to it. Plain functions underneath, so
+ * everything is type-checked; a group's block runs exactly once (do not break out of it).
+ *
+ *     IOMA_USE(log);
+ *     IOMA_GET("/", home);
+ *     IOMA_GROUP("/api", api_header) {
+ *         IOMA_GET("/ping", ping);
+ *         IOMA_GROUP("/admin", require_token) {
+ *             IOMA_GET("/stats", stats, timing);
+ *         }
+ *     }
+ */
+#define IOMA_MAX_MW 16                              /* middleware per group and per endpoint */
+struct ioma_group_args    { const char *prefix; ioma_mw mws[IOMA_MAX_MW + 1]; };           /* +1: the ending null */
+struct ioma_endpoint_args { const char *path; ioma_handler fn; ioma_mw mws[IOMA_MAX_MW + 1]; };
+
+/* What the macros call: the current group's stack and an endpoint with a middleware list. */
+ioma_group    *ioma__group_begin(struct ioma_group_args args);
+ioma_group    *ioma__group_end(void);
+ioma_group    *ioma__group_current(void);
+ioma_endpoint *ioma__endpoint(const char *method, struct ioma_endpoint_args args);
+
+/* The argument lists become the structs above. An argument count picks the expansion, so the
+ * middleware list always has its own braces and no macro is ever invoked with an empty variadic
+ * part: clean under -Wall -Wextra -pedantic, in C11 and later. */
+#define IOMA__CAT2(a, b) a##b
+#define IOMA__CAT(a, b)  IOMA__CAT2(a, b)
+#define IOMA__PICK(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16, _17, _18, name, ...) name
+#define IOMA__RW(path, fn, ...) (struct ioma_endpoint_args){ (path), (fn), { __VA_ARGS__, NULL } }
+#define IOMA__RB(path, fn)      (struct ioma_endpoint_args){ (path), (fn), { NULL } }
+#define IOMA__ROUTE_ARGS(...)   IOMA__PICK(__VA_ARGS__, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, \
+                                           IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, IOMA__RW, \
+                                           IOMA__RW, IOMA__RW, IOMA__RB, IOMA__RB, IOMA__RB)(__VA_ARGS__)
+#define IOMA__GW(prefix, ...)   (struct ioma_group_args){ (prefix), { __VA_ARGS__, NULL } }
+#define IOMA__GB(prefix)        (struct ioma_group_args){ (prefix), { NULL } }
+#define IOMA__GROUP_ARGS(...)   IOMA__PICK(__VA_ARGS__, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, \
+                                           IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GW, \
+                                           IOMA__GW, IOMA__GW, IOMA__GW, IOMA__GB, IOMA__GB)(__VA_ARGS__)
+
+#define IOMA_GROUP(...)                                                                             \
+    for (ioma_group *IOMA__CAT(ioma__block_, __LINE__) = ioma__group_begin(IOMA__GROUP_ARGS(__VA_ARGS__)); \
+         IOMA__CAT(ioma__block_, __LINE__); IOMA__CAT(ioma__block_, __LINE__) = ioma__group_end())
+#define IOMA_USE(mw)            ioma_group_use(ioma__group_current(), (mw))
+#define IOMA_ROUTE(method, ...) ioma__endpoint((method), IOMA__ROUTE_ARGS(__VA_ARGS__))
+#define IOMA_GET(...)           IOMA_ROUTE("GET",    __VA_ARGS__)
+#define IOMA_POST(...)          IOMA_ROUTE("POST",   __VA_ARGS__)
+#define IOMA_PUT(...)           IOMA_ROUTE("PUT",    __VA_ARGS__)
+#define IOMA_PATCH(...)         IOMA_ROUTE("PATCH",  __VA_ARGS__)
+#define IOMA_DELETE(...)        IOMA_ROUTE("DELETE", __VA_ARGS__)
+#define IOMA_DEFAULT(fn)        ioma_default(fn)
+
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
 /* Start `workers` proactor threads (<= 0: one per core) serving HTTP on `port`, and block until
