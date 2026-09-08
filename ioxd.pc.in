@@ -1,7 +1,7 @@
 prefix=@PREFIX@
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
-includedir=${prefix}/include/ioxd
+includedir=${prefix}/include
 
 Name: ioxd
 Description: HTTP/1.1 server framework on a thread-per-core io_uring runtime

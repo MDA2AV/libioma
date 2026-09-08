@@ -2,7 +2,7 @@
 #
 #   make            build libioxd.a, libioxd.so and the examples
 #   make lib        just the libraries
-#   make install    install libs, headers (under <prefix>/include/ioxd) and ioxd.pc
+#   make install    install libs, ioxd.h and ioxd/*.h (under <prefix>/include) and ioxd.pc
 #   sudo make install PREFIX=/usr/local
 #
 # Downstream then builds with:  cc app.c $(pkg-config --cflags --libs ioxd) -o app
@@ -25,7 +25,7 @@ LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /d
 CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra $(STD)
 CPP     := -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
-HDRS    := $(wildcard include/*.h lib/*/*.h)
+HDRS    := $(wildcard include/*.h include/ioxd/*.h lib/*/*.h)
 PTHREAD := -pthread
 
 VERSION := 0.1.0
@@ -33,7 +33,7 @@ SONAME  := libioxd.so.0
 
 PREFIX ?= /usr/local
 LIBDIR := $(PREFIX)/lib
-INCDIR := $(PREFIX)/include/ioxd
+INCDIR := $(PREFIX)/include
 PCDIR  := $(LIBDIR)/pkgconfig
 
 UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run json/json
@@ -111,18 +111,19 @@ ioxd.pc: ioxd.pc.in
 
 # --- install / uninstall ---
 install: lib ioxd.pc
-	install -d $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCDIR) $(DESTDIR)$(PCDIR)
+	install -d $(DESTDIR)$(LIBDIR) $(DESTDIR)$(INCDIR)/ioxd $(DESTDIR)$(PCDIR)
 	install -m644 libioxd.a $(DESTDIR)$(LIBDIR)/
 	install -m755 libioxd.so $(DESTDIR)$(LIBDIR)/libioxd.so.$(VERSION)
 	ln -sf libioxd.so.$(VERSION) $(DESTDIR)$(LIBDIR)/$(SONAME)
 	ln -sf $(SONAME) $(DESTDIR)$(LIBDIR)/libioxd.so
 	install -m644 include/ioxd.h $(DESTDIR)$(INCDIR)/
+	install -m644 include/ioxd/*.h $(DESTDIR)$(INCDIR)/ioxd/
 	install -m644 ioxd.pc $(DESTDIR)$(PCDIR)/
 	@echo "installed ioxd $(VERSION) to $(PREFIX)"
 
 uninstall:
 	rm -f $(DESTDIR)$(LIBDIR)/libioxd.a $(DESTDIR)$(LIBDIR)/libioxd.so*
-	rm -rf $(DESTDIR)$(INCDIR)
+	rm -rf $(DESTDIR)$(INCDIR)/ioxd $(DESTDIR)$(INCDIR)/ioxd.h
 	rm -f $(DESTDIR)$(PCDIR)/ioxd.pc
 
 clean:

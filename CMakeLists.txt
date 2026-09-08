@@ -71,7 +71,7 @@ add_library(ioxd::ioxd ALIAS ioxd)
 target_include_directories(ioxd
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ioxd>
+            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
         PRIVATE
             lib
             third_party/picohttpparser)
@@ -117,7 +117,8 @@ endif()
 install(TARGETS ioxd EXPORT ioxdTargets
         ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
         LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
-install(FILES include/ioxd.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ioxd)
+install(FILES include/ioxd.h DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY include/ioxd DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(EXPORT ioxdTargets
         NAMESPACE ioxd::
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ioxd

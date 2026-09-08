@@ -14,7 +14,8 @@ process
  │   └─ pools: conn objects, coroutine stacks
 ```
 
-`include/ioxd.h` is the whole public API. Under `lib/` there are two planes, one concern per file:
+`include/ioxd.h` is the whole public API, an umbrella over `include/ioxd/`: `slice.h`, `http.h`,
+`router.h`, `json.h` and `pipe.h`, one per concern, each usable on its own. Under `lib/` there are two planes, one concern per file:
 `io/` is the I/O plane - `uring.c` (the ring), `coro.c` + `switch_x86_64.S` (coroutines),
 `bufring.c` (the buffer ring), `conn.c` (a connection and its awaits), `proactor.c` (the worker
 loop), with `proactor.h` as the interface the other plane uses - and `http/` is the HTTP plane -
