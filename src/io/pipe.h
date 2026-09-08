@@ -35,16 +35,16 @@ typedef struct ioma_pipereader {
     int            error;               /* 0, or IOMA_PIPE_GONE / IOMA_PIPE_FULL, sticky */
 } ioma_pipereader;
 
-void        ioma_pipereader_init     (ioma_pipereader *r, conn_t *conn, char *buf, size_t cap);
-void        ioma_pipereader_close    (ioma_pipereader *r);                    /* returns the buffers it holds */
-int         ioma_pipereader_read     (ioma_pipereader *r, ioma_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
-void        ioma_pipereader_examine  (ioma_pipereader *r, size_t n);          /* looked at n live bytes: the next read waits for more */
-void        ioma_pipereader_drop     (ioma_pipereader *r, size_t n);          /* consume n live bytes */
-const char *ioma_pipereader_keep     (ioma_pipereader *r, size_t n);          /* consume n live bytes, kept: contiguous with the run; nullptr when there is no room */
-void        ioma_pipereader_run_begin(ioma_pipereader *r);                    /* freeze the run; the next keep starts another */
-ioma_slice  ioma_pipereader_run      (const ioma_pipereader *r);              /* the run in progress */
-void        ioma_pipereader_release  (ioma_pipereader *r);                    /* forget every kept byte; live bytes stay */
-int         ioma_pipereader_copy     (ioma_pipereader *r, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
+void        ioma_pipereader_init     (ioma_pipereader *pr, conn_t *conn, char *buf, size_t cap);
+void        ioma_pipereader_close    (ioma_pipereader *pr);                    /* returns the buffers it holds */
+int         ioma_pipereader_read     (ioma_pipereader *pr, ioma_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
+void        ioma_pipereader_examine  (ioma_pipereader *pr, size_t n);          /* looked at n live bytes: the next read waits for more */
+void        ioma_pipereader_drop     (ioma_pipereader *pr, size_t n);          /* consume n live bytes */
+const char *ioma_pipereader_keep     (ioma_pipereader *pr, size_t n);          /* consume n live bytes, kept: contiguous with the run; nullptr when there is no room */
+void        ioma_pipereader_run_begin(ioma_pipereader *pr);                    /* freeze the run; the next keep starts another */
+ioma_slice  ioma_pipereader_run      (const ioma_pipereader *pr);              /* the run in progress */
+void        ioma_pipereader_release  (ioma_pipereader *pr);                    /* forget every kept byte; live bytes stay */
+int         ioma_pipereader_copy     (ioma_pipereader *pr, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
 
 /* The writer: a slab, sent on flush. */
 typedef struct ioma_pipewriter {
@@ -54,12 +54,12 @@ typedef struct ioma_pipewriter {
     bool    failed;                     /* the peer is gone: every call fails from here on */
 } ioma_pipewriter;
 
-void  ioma_pipewriter_init   (ioma_pipewriter *w, conn_t *conn, char *buf, size_t cap);
-void *ioma_pipewriter_reserve(ioma_pipewriter *w, size_t n);                  /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
-void  ioma_pipewriter_advance(ioma_pipewriter *w, size_t n);
-int   ioma_pipewriter_write  (ioma_pipewriter *w, const void *data, size_t n);  /* copy in; larger than the slab goes straight out */
-int   ioma_pipewriter_flush  (ioma_pipewriter *w);                            /* send the slab; suspends */
-int   ioma_pipewriter_send   (ioma_pipewriter *w, const void *data, size_t n);  /* write, then flush */
+void  ioma_pipewriter_init   (ioma_pipewriter *pw, conn_t *conn, char *buf, size_t cap);
+void *ioma_pipewriter_reserve(ioma_pipewriter *pw, size_t n);                  /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
+void  ioma_pipewriter_advance(ioma_pipewriter *pw, size_t n);
+int   ioma_pipewriter_write  (ioma_pipewriter *pw, const void *data, size_t n);  /* copy in; larger than the slab goes straight out */
+int   ioma_pipewriter_flush  (ioma_pipewriter *pw);                            /* send the slab; suspends */
+int   ioma_pipewriter_send   (ioma_pipewriter *pw, const void *data, size_t n);  /* write, then flush */
 
 /* The pair, as the public API sees it. */
 struct ioma_pipe {
