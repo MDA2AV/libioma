@@ -1,5 +1,15 @@
 # Streams and pipes over the I/O plane (design, branch `streams`)
 
+**Status.** Steps 1 to 4 below are on the branch: `io/pipe.h` (reader, writer), the HTTP engine
+reading through the reader with the in-place fast path, and the public `ioma_pipe` with
+`ioma_run_pipes`, a line-echo fixture and its tests. The reader's verbs ended up as examine /
+drop / keep / copy rather than one `advance(consumed, examined)`, because kept bytes - the
+request model's slices - need to stay put, which Pipelines has no notion of. Open, to talk
+about: the public surface (run_begin/run stay private for now); outbound connections
+(`ioma_connect` on IORING_OP_CONNECT, the same pipe over a socket to a database or a peer);
+a second transport (QUIC, TLS) and whether that wants a vtable; letting the live bytes sit in a
+second kernel buffer while a run continues in the first, so streamed bodies never copy twice.
+
 ## Why
 
 Today the I/O plane offers two primitives, `await_recv` and `await_send`, and the HTTP engine

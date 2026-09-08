@@ -164,7 +164,34 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
 
 ---
 
-## 4. HTTP
+## 4. Pipes: the reader and the writer
+
+The connection's bytes reach the HTTP engine, or a handler of your own under `ioma_run_pipes`,
+through a pipe (`io/pipe.h`; `ioma_pipe` in the public header): a reader over the buffers the
+kernel filled and a writer over a slab. Every call that has to wait suspends the coroutine and
+the loop resumes it on the completion, so one piece of code drives any connection the I/O plane
+runs - the shape of .NET's PipeReader and PipeWriter, with coroutines in place of tasks.
+
+**The reader** hands out received bytes as one contiguous span at a time. The kernel delivers
+them as provided buffers, 2 KB each, and the reader keeps them as such: when everything live
+lies in one buffer - a whole request head in one receive, the common case - `read` returns that
+buffer's bytes in place, no copy. Only when the bytes span buffers, or when the consumer keeps
+bytes it wants contiguous, are they gathered into the consumer's buffer (the 16 KB request
+buffer, for HTTP). Four verbs drive it: `examine` (looked at n bytes without consuming them, so
+the next `read` waits for more instead of returning the same incomplete head), `drop`
+(consume), `keep` (consume, but the bytes stay where they are, contiguous with the run and valid
+until `release`) and `copy` (the plain read into a buffer of your own). A run is a stretch of
+kept bytes: the head is one and a whole-read body another; `run_begin` freezes the head's so
+the body's can move without it. At most two kernel buffers are held at a time, one with frozen
+kept bytes and one with the live bytes, so a slow handler pins one 2 KB buffer per request in
+flight; the starvation log says when `BUF_COUNT` should grow.
+
+**The writer** is the slab: `reserve` n bytes to format into directly and `advance` by what was
+written, `write` to copy in, `flush` to send (a suspension), `send` for both. The HTTP reply
+keeps its own head-building and chunk framing on its slab and sends through the same await; a
+raw pipe writes straight.
+
+## 5. HTTP
 
 `serve()` in `http.c` is the coroutine every connection runs. Per request:
 
@@ -172,8 +199,9 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
    copy). `-2` means "incomplete": read more and parse again, so a request split at any byte works.
 2. **Body, on demand**: one pass over the headers picks out `Content-Length`,
    `Transfer-Encoding` and `Connection` (a length test rejects almost every header before a byte
-   is compared), but the body stays on the wire. `ioma_body_all` reads it whole into the request
-   buffer, a chunked one decoded down over its own raw bytes; `ioma_body_read_until` streams it, any
+   is compared), but the body stays on the wire. `ioma_body_all` keeps it whole in the reader - in place
+   after the head when it all arrived in one receive, gathered otherwise, a chunked one slid
+   together chunk by chunk; `ioma_body_read_until` streams it, any
    size, filling the caller's buffer; `ioma_body_read_next_chunk` hands over one chunk exactly as the
    sender framed it. All three chunked paths share one small parser (a raw stage after the head, a
    size-line reader, a data mover) that survives a split at any byte. Whatever a handler leaves
@@ -206,7 +234,7 @@ a body (`ioma_textf`).
 
 ---
 
-## 5. Router and middleware
+## 6. Router and middleware
 
 Endpoints are registered in groups before the workers start: a group is a path prefix plus
 middleware, groups nest, and the root (`NULL`) is the group with no prefix whose middleware
@@ -238,7 +266,7 @@ opens a group for the block that follows (a run-once `for`, the group popped whe
 `IOMA_USE` adds middleware to it. The middleware lists travel in small structs ended by a null,
 so every argument is type-checked and a wrong signature is a compile error.
 
-## 6. One keep-alive request, end to end
+## 7. One keep-alive request, end to end
 
 1. Bytes arrive. The kernel copies them into a provided buffer and posts a `RECV` CQE.
 2. `enter` returns; dispatch queues the slice on the connection and resumes its coroutine.
