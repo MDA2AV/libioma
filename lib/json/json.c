@@ -208,6 +208,8 @@ bool ioxd_json_string(ioxd_json *j, ioxd_slice s)
 
 bool ioxd_json_cstr(ioxd_json *j, const char *s)
 {
+    if (!s)
+        return ioxd_json_null(j);                     /* a null pointer is JSON null */
     return separator(j) && put_string(j, s, strlen(s));
 }
 

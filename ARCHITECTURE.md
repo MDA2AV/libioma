@@ -294,6 +294,13 @@ whatever the locale says. Nesting and the commas it owes are two bits per level,
 deeper than `IOXD_JSON_DEPTH` fails cleanly. A reply larger than the slab streams out chunked
 while the writer keeps going, which is the whole point of writing as you go.
 
+A struct can be described once and serialized with one call: `IOXD_JSON_STRUCT(user, USER_FIELDS)`
+expands a field list twice, into the struct's members and into a `user_to_json` function, so the
+two cannot drift. A line is the field's kind - `VALUE`, `OBJECT`, `OPTIONAL`, `ARRAY`, `OBJECTS` - its
+type and its name; scalars pick their writer by C type through `_Generic`, nested structs call
+their own function, arrays loop over a count field. It is text substitution all the way down: the
+generated function is the code one would write by hand, with no table and nothing at runtime.
+
 ## Tunables
 
 | name | default | what |

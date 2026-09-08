@@ -41,7 +41,8 @@ is `NULL`, with `ioxd_use` for middleware on everything. `ioxd_run` resolves it 
 chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port.
 Underneath, a connection is a pipe: `ioxd_run_pipes` hands a handler of your own the reader and writer the
 HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with
-the `ioxd_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills. The same registrations read as a script with the `IOXD_GET`, `IOXD_GROUP` and `IOXD_USE` macros, a group's block
+the `ioxd_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills; a struct
+described once with `IOXD_JSON_STRUCT` serializes with one call, nested objects and arrays included. The same registrations read as a script with the `IOXD_GET`, `IOXD_GROUP` and `IOXD_USE` macros, a group's block
 nesting the routes below it; the hello example and `tests/server.c` are written that way.
 `playground/hello/main.c` is a complete example.
 

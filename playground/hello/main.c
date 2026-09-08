@@ -42,11 +42,33 @@ static void repeat(ioxd_ctx *ctx)
     }
 }
 
-/* GET /users/:id - a JSON document, written as you go: each call puts its bytes straight into the
- * reply, escaped, with the commas and nesting tracked for you; nothing is built up in memory
- * first. ioxd_json_reply sets the content type. A document larger than the slab streams out
- * chunked while the writer keeps going. */
-static void user(ioxd_ctx *ctx)
+/* The shapes GET /users/:id replies with, described once: each list defines the struct and its
+ * *_to_json function. A line is the field's kind, its type (or the nested struct's name) and its
+ * name; ARRAY and OBJECTS lines add the field that holds the count. */
+#define ADDRESS_FIELDS(X)                       \
+    X(VALUE,    const char *, city)             \
+    X(VALUE,    const char *, zip)              /* NULL comes out as null */
+IOXD_JSON_STRUCT(address, ADDRESS_FIELDS)
+
+#define ORDER_FIELDS(X)                         \
+    X(VALUE,    int,          number)           \
+    X(VALUE,    double,       total)
+IOXD_JSON_STRUCT(order, ORDER_FIELDS)
+
+#define USER_FIELDS(X)                          \
+    X(VALUE,    int64_t,      id)               \
+    X(VALUE,    const char *, name)             \
+    X(VALUE,    bool,         active)           \
+    X(OBJECT,   address,      address)          /* nested, by value                 */ \
+    X(OPTIONAL, address,      billing)          /* a pointer: null when there is none */ \
+    X(ARRAY,    const char *, tags,   n_tags)   /* scalars, and the count field     */ \
+    X(OBJECTS,  order,        orders, n_orders) /* nested objects, and the count     */
+IOXD_JSON_STRUCT(user, USER_FIELDS)
+
+/* GET /users/:id - fill the struct, serialize it with one call. The document goes straight into
+ * the reply, escaped, streamed chunked if it outgrows the slab; ioxd_json_reply sets the content
+ * type. */
+static void user_endpoint(ioxd_ctx *ctx)
 {
     int64_t id;
     if (!ioxd_to_i64(ctx->req.route_params[0].value, &id)) {
@@ -54,27 +76,23 @@ static void user(ioxd_ctx *ctx)
         ioxd_text(ctx, "the id must be an integer\n");
         return;
     }
+    const char  *tags[]   = { "new", "c23" };
+    struct order orders[] = { { 1, 9.5 }, { 2, 0.25 } };
+    struct user  u = {
+        .id = id, .name = "Zo\xc3\xab \"Z\" O'Neil", .active = id % 2 == 0,
+        .address = { .city = "Porto", .zip = NULL },
+        .billing = NULL,
+        .tags = tags, .n_tags = 2,
+        .orders = orders, .n_orders = id % 2 == 0 ? 2 : 0,
+    };
     ioxd_json j = ioxd_json_reply(ctx);
-    ioxd_json_object(&j);
-        ioxd_json_key(&j, "id");      ioxd_json_int(&j, id);
-        ioxd_json_key(&j, "name");    ioxd_json_cstr(&j, "Zo\xc3\xab \"Z\" O'Neil");   /* escaped on the way out */
-        ioxd_json_key(&j, "active");  ioxd_json_bool(&j, id % 2 == 0);
-        ioxd_json_key(&j, "score");   ioxd_json_double(&j, 0.1 * (double)id);
-        ioxd_json_key(&j, "address"); ioxd_json_object(&j);
-            ioxd_json_key(&j, "city"); ioxd_json_cstr(&j, "Porto");
-            ioxd_json_key(&j, "zip");  ioxd_json_null(&j);
-        ioxd_json_end(&j);
-        ioxd_json_key(&j, "tags");    ioxd_json_array(&j);
-            ioxd_json_cstr(&j, "new");
-            ioxd_json_cstr(&j, "c23");
-        ioxd_json_end(&j);
-    ioxd_json_end(&j);
+    user_to_json(&j, &u);
 }
 
 int main(void)
 {
     IOXD_GET ("/hello/:name",   hello);
-    IOXD_GET ("/users/:id",     user);
+    IOXD_GET ("/users/:id",     user_endpoint);
     IOXD_POST("/repeat/:times", repeat);
     return ioxd_run(0, 8080);
 }
