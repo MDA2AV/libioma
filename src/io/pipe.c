@@ -273,22 +273,30 @@ int ioma_pipereader_copy(ioma_pipereader *pr, void *dst, size_t n)
 
 /* ── the writer ────────────────────────────────────────────────────────────────────────── */
 
-void ioma_pipewriter_init(ioma_pipewriter *pw, conn_t *conn, char *buf, size_t cap)
+void ioma_pipewriter_init(ioma_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)
 {
-    *pw      = (ioma_pipewriter){};
-    pw->conn = conn;
-    pw->buf  = buf;
-    pw->cap  = cap;
+    *pw       = (ioma_pipewriter){};
+    pw->conn  = conn;
+    pw->buf   = buf;
+    pw->lead  = lead;
+    pw->cap   = cap;
+    pw->slack = slack;
+}
+
+void ioma_pipewriter_reset(ioma_pipewriter *pw)
+{
+    pw->head = pw->len = pw->tail = 0;
 }
 
 int ioma_pipewriter_flush(ioma_pipewriter *pw)
 {
     if (pw->failed)
         return -1;
-    if (pw->len == 0)
+    size_t total = pw->head + pw->len + pw->tail;
+    if (total == 0)
         return 0;
-    int rc = await_send(pw->conn, pw->buf, pw->len);
-    pw->len = 0;
+    int rc = await_send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    pw->head = pw->len = pw->tail = 0;
     if (rc < 0) {
         pw->failed = true;
         return -1;
@@ -302,7 +310,7 @@ void *ioma_pipewriter_reserve(ioma_pipewriter *pw, size_t n)
         return nullptr;
     if (pw->len + n > pw->cap && ioma_pipewriter_flush(pw) < 0)
         return nullptr;
-    return pw->buf + pw->len;
+    return ioma_pipewriter_at(pw);
 }
 
 void ioma_pipewriter_advance(ioma_pipewriter *pw, size_t n)
@@ -310,19 +318,40 @@ void ioma_pipewriter_advance(ioma_pipewriter *pw, size_t n)
     pw->len += n;
 }
 
+char *ioma_pipewriter_front(ioma_pipewriter *pw, size_t n)
+{
+    if (n > pw->lead - pw->head)
+        return nullptr;
+    pw->head += n;
+    return pw->buf + pw->lead - pw->head;
+}
+
+char *ioma_pipewriter_back(ioma_pipewriter *pw, size_t n)
+{
+    if (n > pw->slack - pw->tail)
+        return nullptr;
+    char *at = pw->buf + pw->lead + pw->len + pw->tail;
+    pw->tail += n;
+    return at;
+}
+
+int ioma_pipewriter_through(ioma_pipewriter *pw, const void *data, size_t n)
+{
+    if (pw->failed)
+        return -1;
+    if (await_send(pw->conn, data, n) < 0) {
+        pw->failed = true;
+        return -1;
+    }
+    return 0;
+}
+
 int ioma_pipewriter_write(ioma_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
-    if (n > pw->cap) {                                   /* larger than the slab: straight from the caller's memory */
-        if (ioma_pipewriter_flush(pw) < 0)
-            return -1;
-        if (await_send(pw->conn, data, n) < 0) {
-            pw->failed = true;
-            return -1;
-        }
-        return 0;
-    }
+    if (n > pw->cap)                                    /* larger than the slab: straight from the caller's memory */
+        return ioma_pipewriter_flush(pw) < 0 ? -1 : ioma_pipewriter_through(pw, data, n);
     void *at = ioma_pipewriter_reserve(pw, n);
     if (!at)
         return -1;
@@ -338,10 +367,10 @@ int ioma_pipewriter_send(ioma_pipewriter *pw, const void *data, size_t n)
 
 /* ── the pipe ──────────────────────────────────────────────────────────────────────────── */
 
-void ioma__pipe_init(struct ioma_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t slab_cap)
+void ioma__pipe_init(struct ioma_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
 {
     ioma_pipereader_init(&p->in, conn, gather, gather_cap);
-    ioma_pipewriter_init(&p->out, conn, slab, slab_cap);
+    ioma_pipewriter_init(&p->out, conn, slab, lead, cap, slack);
 }
 
 void ioma__pipe_close(struct ioma_pipe *p)

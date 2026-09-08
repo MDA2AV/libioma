@@ -29,6 +29,7 @@ profiles score.
 | Registered file table: direct accept into slots, recv/send/close by index | keep-alive not measurable; churn +3%; connections no longer consume process fds |
 | PGO (`-fprofile-generate`, train, `-fprofile-use`) on top of LTO | +1.5–2% |
 | Request model: the query split into `params` eagerly, header names lower-cased at parse (8 bytes a step) so handlers compare with plain `ioma_slice_eq` | about −1% each; the price of direct data access |
+| Parse straight from the provided buffer when a whole request sits in one (the pipe's reader keeps it in place; the copy happens only for a request that spans receives) | neutral, as predicted: the copy it removes was under 1% |
 | gcc 14 and C23 (was gcc 13 and gnu11) | neutral: 1.23M vs 1.22M req/s keep-alive and equal churn, wrk and oha, three interleaved rounds on 4 reactors. The standard changes what the compiler accepts, not the code it emits |
 
 The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
@@ -78,6 +79,5 @@ utilisation, so a 2% cut in CPU per request buys far more than 2% in latency.
 
 ## Still open
 
-- **Parse straight from the provided buffer** when a whole request sits in one, skipping the copy in `await_recv`. Small.
 - **Connection steering** (`SO_INCOMING_CPU`, reuseport BPF) so a connection is served by the worker on its NIC queue's CPU. Real on a NIC, irrelevant on the loopback the benchmark uses.
 - **Profiling on the benchmark host itself** with `perf`, to see the split of that 15 µs. This is the one thing that could reveal something not visible from the i9.

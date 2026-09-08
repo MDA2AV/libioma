@@ -15,6 +15,8 @@
  * bytes stay where they are - the consumer's, to point into and even overwrite - until release.
  * At most two kernel buffers are held: one with kept bytes of earlier runs, one with the live
  * bytes and the run in progress. */
+
+// BUF_SIZE can be increased to keep entire requests in a single rx_item, avoiding buffering
 typedef struct ioma_pipereader {
     conn_t        *conn;
     char          *buf;                 /* the gathering buffer, the consumer's */
@@ -46,25 +48,58 @@ ioma_slice  ioma_pipereader_run      (const ioma_pipereader *pr);              /
 void        ioma_pipereader_release  (ioma_pipereader *pr);                    /* forget every kept byte; live bytes stay */
 int         ioma_pipereader_copy     (ioma_pipereader *pr, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
 
-/* The writer: a slab, sent on flush. */
+/* The writer: a slab with a head and a tail. Data goes in at the tail (reserve/advance, or write);
+ * a frame's front goes into the lead just before the pending data and its back into the slack just
+ * after it, and one flush sends the whole span. The HTTP reply puts its head and a chunk's size
+ * line in front and a chunk's CRLF behind; a raw pipe may never touch them. */
 typedef struct ioma_pipewriter {
     conn_t *conn;
-    char   *buf;
-    size_t  cap, len;
-    bool    failed;                     /* the peer is gone: every call fails from here on */
+    char   *buf;                        /* [lead][cap][slack] */
+    size_t  lead, cap, slack;
+    size_t  head;                       /* bytes of the lead in use: a frame's front             */
+    size_t  len;                        /* data bytes                                            */
+    size_t  tail;                       /* bytes of the slack in use: a frame's back             */
+    bool    failed;                     /* the peer is gone: every call fails from here on       */
 } ioma_pipewriter;
 
-void  ioma_pipewriter_init   (ioma_pipewriter *pw, conn_t *conn, char *buf, size_t cap);
-void *ioma_pipewriter_reserve(ioma_pipewriter *pw, size_t n);                  /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
-void  ioma_pipewriter_advance(ioma_pipewriter *pw, size_t n);
-int   ioma_pipewriter_write  (ioma_pipewriter *pw, const void *data, size_t n);  /* copy in; larger than the slab goes straight out */
-int   ioma_pipewriter_flush  (ioma_pipewriter *pw);                            /* send the slab; suspends */
-int   ioma_pipewriter_send   (ioma_pipewriter *pw, const void *data, size_t n);  /* write, then flush */
+void   ioma_pipewriter_init   (ioma_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack);
+void   ioma_pipewriter_reset  (ioma_pipewriter *pw);                          /* drop everything pending           */
+void  *ioma_pipewriter_reserve(ioma_pipewriter *pw, size_t n);                /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
+void   ioma_pipewriter_advance(ioma_pipewriter *pw, size_t n);
+char  *ioma_pipewriter_front  (ioma_pipewriter *pw, size_t n);                /* n bytes just before the pending span; nullptr when the lead has no room  */
+char  *ioma_pipewriter_back   (ioma_pipewriter *pw, size_t n);                /* n bytes just after it; nullptr when the slack has no room                */
+int    ioma_pipewriter_write  (ioma_pipewriter *pw, const void *data, size_t n);   /* copy in; larger than the slab goes straight out          */
+int    ioma_pipewriter_through(ioma_pipewriter *pw, const void *data, size_t n);   /* send now, ahead of the pending span, bypassing the slab   */
+int    ioma_pipewriter_flush  (ioma_pipewriter *pw);                          /* send front, data and back; suspends */
+int    ioma_pipewriter_send   (ioma_pipewriter *pw, const void *data, size_t n);   /* write, then flush                                         */
 
-/* The pair, as the public API sees it. */
+/* Where the next byte goes, and how many fit before the slab is full. */
+static inline char *ioma_pipewriter_at(const ioma_pipewriter *pw)
+{
+    return pw->buf + pw->lead + pw->len;
+}
+static inline size_t ioma_pipewriter_room(const ioma_pipewriter *pw)
+{
+    return pw->cap - pw->len;
+}
+
+/* The pair every handler receives, HTTP or raw (the public ioma_pipe). Its buffers live on the
+ * connection's coroutine stack. */
+#ifndef IOMA_PIPE_GATHER
+#define IOMA_PIPE_GATHER 16384              /* the reader's gathering buffer: kept plus live bytes */
+#endif
+#ifndef IOMA_PIPE_LEAD
+#define IOMA_PIPE_LEAD   512                /* in front of the slab: a frame's front               */
+#endif
+#ifndef IOMA_PIPE_CAP
+#define IOMA_PIPE_CAP    8192               /* the slab: bytes buffered before a flush             */
+#endif
+#ifndef IOMA_PIPE_SLACK
+#define IOMA_PIPE_SLACK  8                  /* behind the slab: a frame's back                     */
+#endif
 struct ioma_pipe {
     ioma_pipereader in;
     ioma_pipewriter out;
 };
-void ioma__pipe_init (struct ioma_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t slab_cap);
+void ioma__pipe_init (struct ioma_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
 void ioma__pipe_close(struct ioma_pipe *p);

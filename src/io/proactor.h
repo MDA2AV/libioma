@@ -31,7 +31,8 @@
 #endif
 
 typedef struct proactor proactor_t;
-typedef void (*handler_fn)(conn_t *c);
+struct ioma_pipe;
+typedef void (*handler_fn)(struct ioma_pipe *pipe);   /* a connection, as a pipe */
 
 struct proactor {
     /* set by the creator */

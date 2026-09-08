@@ -76,8 +76,8 @@ A **stackful coroutine** is a function running on its own stack that can pause i
 variables intact. That is what lets a handler be written as plain sequential code:
 
 ```c
-n = await_recv(c, buf, sizeof buf);   /* pauses here until data arrives */
-await_send(c, reply, len);            /* pauses here until the send completes */
+ioma_pipe_read(pipe, &live);          /* pauses here until data arrives */
+ioma_pipe_send(pipe, reply, len);     /* pauses here until the send completes */
 ```
 
 ### The switch
@@ -144,17 +144,18 @@ address stays valid for exactly as long as the operation is in flight.
 Accept → take a `conn_t` from the pool → arm its multishot recv → spawn its handler coroutine.
 
 The connection has **two owners**, the handler coroutine and the armed recv, so `refs` starts at 2.
-Data CQEs are queued on the connection (`rx`, a small ring of slices) and wake the handler if it is
-parked in `await_recv`. When the handler returns, `conn_close` cancels the recv, returns any unread
+Data CQEs are queued on the connection (`rx`, a small ring of filled buffers) and wake the handler
+if it is parked in the pipe's reader. When the handler returns, `conn_close` cancels the recv, returns any unread
 buffers, closes the fd and drops its ref. The recv's ref drops when its terminal CQE arrives
 (`-ECANCELED`, or the peer's FIN). At zero refs the `conn_t` goes back to the pool. A connection is
 therefore never recycled while a completion for it is still coming.
 
 ### The two awaits
 
-`await_recv` copies the next queued slice into the caller's buffer, returns the provided buffer to
-the ring when the slice is fully consumed, and parks if the queue is empty. `await_send` stages a
-SEND SQE (`MSG_WAITALL`, so the kernel finishes short sends itself) and parks until its CQE.
+`ioma__await_item` hands the next queued buffer over whole - the pipe's reader owns it from then
+until it returns it to the ring - and parks if the queue is empty. `await_send` stages a SEND SQE
+(`MSG_WAITALL`, so the kernel finishes short sends itself) and parks until its CQE; the pipe's
+writer is the only caller. Nothing above the pipe touches either.
 
 ### Shared nothing
 
@@ -209,8 +210,8 @@ raw pipe writes straight.
 3. **Keep-alive**: HTTP/1.1 unless `Connection: close`; HTTP/1.0 only with `Connection: keep-alive`.
 4. **Dispatch** a context to the middleware chain and the route (section 5). The context holds
    the request and the response; the response holds the reply being shaped (status, content
-   type, headers) and the write slab: an 8 KB buffer with room reserved in front of it for the
-   head.
+   type, headers); the bytes go into the pipe's writer, an 8 KB slab with a lead in front of it
+   for the head and a chunk's size line, and slack behind it for a chunk's CRLF.
 5. **Write**: the handler calls `ioma_write` / `ioma_printf`; bytes land in the buffer. If it
    fills, the framework sends what it has — head first, framed chunked on HTTP/1.1 or until close
    on HTTP/1.0 (or with a length the handler declared) — and the handler suspends on that send.

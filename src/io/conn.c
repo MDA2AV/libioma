@@ -1,9 +1,10 @@
 /*
  * conn.c - one connection's life on its worker: the pooled conn_t, its two owners' refcount, the
- * multishot recv and the queue of slices it delivers, parking on -ENOBUFS, closing, and the two
- * awaits a handler coroutine calls.
+ * multishot recv and the queue of buffers it delivers, parking on -ENOBUFS, closing, and the
+ * awaits the pipe is built on.
  */
 #include "io/internal.h"
+#include "io/pipe.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -107,7 +108,7 @@ void ioma__arm_recv(proactor_t *p, conn_t *c)
     c->recv = RECV_ARMED;
 }
 
-/* Resume the coroutine parked in await_recv, if there is one. It pops the queue itself. */
+/* Resume the coroutine parked waiting for bytes, if there is one. It pops the queue itself. */
 static void wake_reader(conn_t *c)
 {
     coro_t *waiter = c->waiter;
@@ -192,7 +193,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
             c->err = result;
         }
         c->recv = RECV_DONE;
-        wake_reader(c);                              /* a parked await_recv returns 0 / -errno   */
+        wake_reader(c);                              /* a parked reader sees 0 / -errno          */
         conn_unref(c);                               /* the recv's ref; may recycle c            */
         return;
     }
@@ -270,8 +271,13 @@ static void conn_close(conn_t *c)
 /* The connection's coroutine: run the worker's handler to completion, then close. */
 void ioma__conn_main(void *arg)
 {
-    conn_t *c = arg;
-    c->p->handler(c);
+    conn_t          *c = arg;
+    char             gather[IOMA_PIPE_GATHER];
+    char             slab[IOMA_PIPE_LEAD + IOMA_PIPE_CAP + IOMA_PIPE_SLACK];
+    struct ioma_pipe pipe;
+    ioma__pipe_init(&pipe, c, gather, sizeof gather, slab, IOMA_PIPE_LEAD, IOMA_PIPE_CAP, IOMA_PIPE_SLACK);
+    c->p->handler(&pipe);
+    ioma__pipe_close(&pipe);
     conn_close(c);
 }
 
@@ -296,29 +302,6 @@ int ioma__await_item(conn_t *c, struct rx_item *out)
     }
 }
 
-int await_recv(conn_t *c, void *buf, size_t len)
-{
-    if (len == 0)
-        return -EINVAL;
-    for (;;) {
-        if (c->rx_head != c->rx_tail) {
-            struct rx_item *item = &c->rx[c->rx_head & RX_MASK];
-            size_t n = item->len < len ? item->len : len;
-            memcpy(buf, item->ptr, n);
-            item->ptr += n;
-            item->len -= (uint32_t)n;
-            if (item->len == 0) {
-                ioma__bufring_return(&c->p->bufs, item->buf_id);
-                c->rx_head++;
-            }
-            return (int)n;
-        }
-        if (c->eof)
-            return c->err;
-        c->waiter = coro_current();
-        coro_yield();                                /* ioma__on_recv wakes us */
-    }
-}
 
 /* Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno. */
 int await_send(conn_t *c, const void *buf, size_t len)

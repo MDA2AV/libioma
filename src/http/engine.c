@@ -1,9 +1,9 @@
 /*
  * engine.c - the HTTP/1.1 engine: parse a request head with picohttpparser, run the middleware
  * chain and the endpoint against a context, read the body on demand (whole or streamed) through
- * the connection's reader (io/pipe.h) and
- * drain what was left, then send what was written. All of it runs on the connection's coroutine,
- * so await_recv and await_send simply suspend it and the loop resumes it.
+ * the connection's pipe (io/pipe.h) and drain
+ * what was left, then send what was written through the same pipe. All of it runs on the
+ * connection's coroutine, so a read or a flush simply suspends it and the loop resumes it.
  */
 #include "http/engine.h"
 #include "http/internal.h"
@@ -18,22 +18,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef IOMA_REQ_CAP
-#define IOMA_REQ_CAP      16384     /* the head, and a body read whole, must fit here         */
-#endif
 #ifndef IOMA_PARAM_CAP
 #define IOMA_PARAM_CAP    2048      /* per-request arena for percent-decoded query parameters */
 #endif
 #ifndef IOMA_HEAD_CAP
 #define IOMA_HEAD_CAP     4096      /* a serialized reply head must fit here                  */
 #endif
-#ifndef IOMA_OUT_CAP
-#define IOMA_OUT_CAP      8192      /* the write slab: body bytes buffered before a reply streams */
-#endif
 #ifndef IOMA_DRAIN_MAX
 #define IOMA_DRAIN_MAX    (1024UL * 1024)   /* unread body discarded after a handler before we close instead */
 #endif
-#define IOMA_LEAD         512       /* room in front of the slab for the reply head or a chunk size */
 
 /* serve() hands req.headers to picohttpparser as its header array: a kv (two slices) must lay
  * out exactly like a phr_header (name, name_len, value, value_len). */
@@ -45,14 +38,16 @@ static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
 
 /* The engine's per-request state, behind ctx->priv. */
 struct serve_state {
-    ioma_pipereader *reader;                    /* the connection's bytes; the head is kept in it     */
+    struct ioma_pipe *pipe;                 /* the connection: the head is kept in its reader     */
     size_t       body_read;                 /* body bytes handed out so far                       */
     bool         body_done;                 /* the whole body has been taken off the wire         */
     bool         body_whole;                /* ioma_body_all kept it                              */
     int          body_err;                  /* 0, a status to answer (400, 413), or -1: peer gone */
     size_t       chunk_left;                /* data bytes of the current chunk still to deliver   */
 };
-#define STATE(ctx) ((struct serve_state *)(ctx)->priv)
+#define STATE(ctx)  ((struct serve_state *)(ctx)->priv)
+#define READER(ctx) (&STATE(ctx)->pipe->in)
+#define WRITER(ctx) (&STATE(ctx)->pipe->out)
 
 /* ── request headers ───────────────────────────────────────────────────────────────────── */
 
@@ -213,12 +208,13 @@ static struct cslice status_line(int code)
 
 /* A bodyless framework reply (parse errors, limits): an error path, so plain snprintf. Best
  * effort; the caller then closes. */
-static void send_status(conn_t *conn, int code)
+static void send_status(ioma_pipewriter *pw, int code)
 {
     char head[128];
     int  len = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                         code, ioma_reason(code));
-    await_send(conn, head, (size_t)len);
+    ioma_pipewriter_reset(pw);                        /* whatever the handler had buffered is moot */
+    ioma_pipewriter_send(pw, head, (size_t)len);
 }
 
 /* How the body is delimited on the wire. */
@@ -292,20 +288,14 @@ static int build_head(const ioma_ctx *ctx, char *dst, size_t cap, enum framing f
     return (int)(p - dst);
 }
 
-/* Wrap the slab's bytes as one chunk: the size line goes just before them (into the lead), the
- * CRLF just after (into the slack). start/total describe the framed span. */
-static void frame_chunk(char *body, size_t len, char **start, size_t *total)
+/* The chunked terminator: the empty last chunk and the end of the trailers. */
+static void put_terminator(char *at)
 {
-    char size_line[16];
-    int  digits = put_hex(size_line, len);
-    char *at = body - (digits + 2);
-    memcpy(at, size_line, (size_t)digits);
-    at[digits]     = '\r';
-    at[digits + 1] = '\n';
-    body[len]     = '\r';
-    body[len + 1] = '\n';
-    *start = at;
-    *total = len + (size_t)digits + 4;
+    at[0] = '0';
+    at[1] = '\r';
+    at[2] = '\n';
+    at[3] = '\r';
+    at[4] = '\n';
 }
 
 /* Mark the reply dead (the peer is gone, or a head that cannot be built) and fail the call. */
@@ -321,16 +311,15 @@ static int fail(ioma_response *res)
  * if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. */
 static int flush(ioma_ctx *ctx, bool final)
 {
-    ioma_response *res  = &ctx->res;
-    conn_t        *conn = STATE(ctx)->reader->conn;
+    ioma_response   *res = &ctx->res;
+    ioma_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
-
     char head[IOMA_HEAD_CAP];
     int  head_len = 0;
     if (!res->head_sent) {                                /* the first send: decide the framing */
         enum framing framing  = FRAME_LENGTH;
-        size_t       body_len = res->has_length ? res->content_length : res->len;
+        size_t       body_len = res->has_length ? res->content_length : pw->len;
         if (!res->has_length && !final) {
             if (ctx->req.minor_version >= 1) {
                 framing = FRAME_CHUNKED;
@@ -345,25 +334,33 @@ static int flush(ioma_ctx *ctx, bool final)
             return fail(res);
         res->head_sent = true;
     }
-
-    char  *start = res->buf;                              /* the span to send */
-    size_t total = res->len;
-    if (res->chunked && res->len)
-        frame_chunk(res->buf, res->len, &start, &total);
-
-    if (head_len) {
-        size_t lead_room = (size_t)(start - (res->buf - IOMA_LEAD));   /* free bytes in front of the span */
-        if ((size_t)head_len <= lead_room) {              /* prepend: one contiguous send */
-            start -= head_len;
-            memcpy(start, head, (size_t)head_len);
-            total += (size_t)head_len;
-        } else if (await_send(conn, head, (size_t)head_len) < 0) {
+    if (res->chunked && pw->len) {                        /* the slab's bytes as one chunk: size in front, CRLF behind */
+        char  size_line[16];
+        int   digits = put_hex(size_line, pw->len);
+        char *front  = ioma_pipewriter_front(pw, (size_t)digits + 2);
+        char *back   = ioma_pipewriter_back(pw, 2);
+        if (!front || !back)
             return fail(res);
-        }
+        memcpy(front, size_line, (size_t)digits);
+        front[digits]     = '\r';
+        front[digits + 1] = '\n';
+        back[0] = '\r';
+        back[1] = '\n';
     }
-
-    res->len = 0;
-    if (total && await_send(conn, start, total) < 0)
+    if (final && res->chunked) {                          /* the terminator rides the same send */
+        char *back = ioma_pipewriter_back(pw, 5);
+        if (!back)
+            return fail(res);
+        put_terminator(back);
+    }
+    if (head_len) {
+        char *front = ioma_pipewriter_front(pw, (size_t)head_len);
+        if (front)
+            memcpy(front, head, (size_t)head_len);        /* one contiguous send */
+        else if (ioma_pipewriter_through(pw, head, (size_t)head_len) < 0)   /* bigger than the lead: on its own, first */
+            return fail(res);
+    }
+    if (ioma_pipewriter_flush(pw) < 0)
         return fail(res);
     return 0;
 }
@@ -372,34 +369,41 @@ static int flush(ioma_ctx *ctx, bool final)
  * chunked stream. */
 static int finish(ioma_ctx *ctx)
 {
-    ioma_response *res = &ctx->res;
+    ioma_response   *res = &ctx->res;
+    ioma_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
-    bool pending = !res->head_sent || res->len;       /* nothing sent yet, or bytes still in the slab */
-    if (pending && flush(ctx, true) < 0)
-        return -1;
-    if (res->chunked && await_send(STATE(ctx)->reader->conn, "0\r\n\r\n", 5) < 0)
-        return -1;
+    if (!res->head_sent || pw->len)                       /* nothing sent yet, or bytes still in the slab */
+        return flush(ctx, true);
+    if (res->chunked) {                                   /* streamed and drained: just the terminator */
+        char *back = ioma_pipewriter_back(pw, 5);
+        if (!back)
+            return fail(res);
+        put_terminator(back);
+        if (ioma_pipewriter_flush(pw) < 0)
+            return fail(res);
+    }
     return 0;
 }
 
 /* Append body bytes to the slab; send it, head first, whenever it fills. */
 int ioma_write(ioma_ctx *ctx, const void *data, size_t len)
 {
-    ioma_response *res = &ctx->res;
+    ioma_response   *res = &ctx->res;
+    ioma_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
     const char *src = data;
     while (len) {
-        size_t room = res->cap - res->len;
+        size_t room = ioma_pipewriter_room(pw);
         if (room == 0) {
             if (flush(ctx, false) < 0)
                 return -1;
             continue;
         }
         size_t n = len < room ? len : room;
-        memcpy(res->buf + res->len, src, n);
-        res->len += n;
+        memcpy(ioma_pipewriter_at(pw), src, n);
+        ioma_pipewriter_advance(pw, n);
         src += n;
         len -= n;
     }
@@ -422,26 +426,27 @@ static int write_formatted_heap(ioma_ctx *ctx, const char *fmt, va_list ap, size
  * the empty slab; if it would not fit even that, it goes through the heap. */
 int ioma_printf(ioma_ctx *ctx, const char *fmt, ...)
 {
-    ioma_response *res = &ctx->res;
+    ioma_response   *res = &ctx->res;
+    ioma_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
     va_list ap, again;
     va_start(ap, fmt);
     va_copy(again, ap);
-    size_t room = res->cap - res->len;
-    int    n    = vsnprintf(res->buf + res->len, room, fmt, ap);
+    size_t room = ioma_pipewriter_room(pw);
+    int    n    = vsnprintf(ioma_pipewriter_at(pw), room, fmt, ap);
     va_end(ap);
 
     int rc = -1;
     if (n < 0) {
         /* a formatting error: nothing written */
     } else if ((size_t)n < room) {                        /* it fit */
-        res->len += (size_t)n;
+        ioma_pipewriter_advance(pw, (size_t)n);
         rc = 0;
-    } else if ((size_t)n >= res->cap) {                   /* bigger than the slab itself */
+    } else if ((size_t)n >= pw->cap) {                    /* bigger than the slab itself */
         rc = write_formatted_heap(ctx, fmt, again, (size_t)n);
-    } else if (flush(ctx, false) == 0) {                    /* make room, then it fits */
-        res->len += (size_t)vsnprintf(res->buf, res->cap, fmt, again);
+    } else if (flush(ctx, false) == 0) {                  /* make room, then it fits */
+        ioma_pipewriter_advance(pw, (size_t)vsnprintf(ioma_pipewriter_at(pw), pw->cap, fmt, again));
         rc = 0;
     }
     va_end(again);
@@ -452,6 +457,24 @@ int ioma_printf(ioma_ctx *ctx, const char *fmt, ...)
 int ioma_flush(ioma_ctx *ctx)
 {
     return flush(ctx, false);
+}
+
+/* n bytes of the reply to write into directly, flushing first when they do not fit. */
+void *ioma_reserve(ioma_ctx *ctx, size_t n)
+{
+    ioma_response   *res = &ctx->res;
+    ioma_pipewriter *pw  = WRITER(ctx);
+    if (res->failed || n > pw->cap)
+        return nullptr;
+    if (n > ioma_pipewriter_room(pw) && flush(ctx, false) < 0)
+        return nullptr;
+    return ioma_pipewriter_at(pw);
+}
+
+/* The caller wrote n of the reserved bytes. */
+void ioma_advance(ioma_ctx *ctx, size_t n)
+{
+    ioma_pipewriter_advance(WRITER(ctx), n);
 }
 
 /* ── the body: read on demand ──────────────────────────────────────────────────────────── */
@@ -468,7 +491,7 @@ static void body_fail(ioma_ctx *ctx, int status)
  * 413, the peer gone or the input ending inside the body is -1. */
 static bool body_bytes(ioma_ctx *ctx, ioma_slice *live)
 {
-    int rc = ioma_pipereader_read(STATE(ctx)->reader, live);
+    int rc = ioma_pipereader_read(READER(ctx), live);
     if (rc > 0)
         return true;
     if (rc == IOMA_PIPE_FULL)
@@ -489,7 +512,7 @@ static long body_line(ioma_ctx *ctx, ioma_slice *live)
         const char *eol = memmem(live->p, live->len, "\r\n", 2);
         if (eol)
             return eol - live->p;
-        ioma_pipereader_examine(STATE(ctx)->reader, live->len);
+        ioma_pipereader_examine(READER(ctx), live->len);
     }
 }
 
@@ -501,7 +524,7 @@ static bool chunk_trailers(ioma_ctx *ctx)
         long len = body_line(ctx, &live);
         if (len < 0)
             return false;
-        ioma_pipereader_drop(STATE(ctx)->reader, (size_t)len + 2);
+        ioma_pipereader_drop(READER(ctx), (size_t)len + 2);
         if (len == 0)
             break;
     }
@@ -533,7 +556,7 @@ static bool chunk_header(ioma_ctx *ctx)
         body_fail(ctx, 400);
         return false;
     }
-    ioma_pipereader_drop(STATE(ctx)->reader, (size_t)len + 2);
+    ioma_pipereader_drop(READER(ctx), (size_t)len + 2);
     if (size == 0)
         return chunk_trailers(ctx);
     STATE(ctx)->chunk_left = size;
@@ -549,13 +572,13 @@ static bool chunk_end(ioma_ctx *ctx)
             return false;
         if (live.len >= 2)
             break;
-        ioma_pipereader_examine(STATE(ctx)->reader, live.len);
+        ioma_pipereader_examine(READER(ctx), live.len);
     }
     if (live.p[0] != '\r' || live.p[1] != '\n') {
         body_fail(ctx, 400);
         return false;
     }
-    ioma_pipereader_drop(STATE(ctx)->reader, 2);
+    ioma_pipereader_drop(READER(ctx), 2);
     return true;
 }
 
@@ -567,7 +590,7 @@ static bool chunk_end(ioma_ctx *ctx)
 ioma_slice ioma_body_all(ioma_ctx *ctx)
 {
     struct serve_state *state = STATE(ctx);
-    ioma_pipereader        *r     = state->reader;
+    ioma_pipereader        *pr    = &state->pipe->in;
     ioma_request       *req   = &ctx->req;
     const ioma_slice    none  = { nullptr, 0 };
 
@@ -587,7 +610,7 @@ ioma_slice ioma_body_all(ioma_ctx *ctx)
             if (!body_bytes(ctx, &live))
                 return none;
             size_t n = live.len < state->chunk_left ? live.len : state->chunk_left;
-            if (!ioma_pipereader_keep(r, n)) {
+            if (!ioma_pipereader_keep(pr, n)) {
                 body_fail(ctx, 413);
                 return none;
             }
@@ -596,20 +619,20 @@ ioma_slice ioma_body_all(ioma_ctx *ctx)
             if (state->chunk_left == 0 && !chunk_end(ctx))
                 return none;
         }
-        req->body = ioma_pipereader_run(r);
+        req->body = ioma_pipereader_run(pr);
     } else {
-        if (req->content_length > IOMA_REQ_CAP) {
+        if (req->content_length > pr->cap) {
             body_fail(ctx, 413);
             return none;
         }
         ioma_slice live = none;
         while (req->content_length && live.len < req->content_length) {
             if (live.len)
-                ioma_pipereader_examine(r, live.len);
+                ioma_pipereader_examine(pr, live.len);
             if (!body_bytes(ctx, &live))
                 return none;
         }
-        const char *kept = req->content_length ? ioma_pipereader_keep(r, req->content_length) : live.p;
+        const char *kept = req->content_length ? ioma_pipereader_keep(pr, req->content_length) : live.p;
         if (req->content_length && !kept) {
             body_fail(ctx, 413);
             return none;
@@ -628,7 +651,7 @@ static int fixed_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_
     size_t remaining = ctx->req.content_length - state->body_read;
     if (n > remaining)
         n = remaining;
-    int got = ioma_pipereader_copy(state->reader, dst, n);
+    int got = ioma_pipereader_copy(&state->pipe->in, dst, n);
     if (got <= 0) {
         state->body_err = -1;                            /* gone, or the input ended inside the body */
         return -1;
@@ -644,7 +667,7 @@ static int chunk_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_
 {
     if (n > state->chunk_left)
         n = state->chunk_left;
-    int got = ioma_pipereader_copy(state->reader, dst, n);
+    int got = ioma_pipereader_copy(&state->pipe->in, dst, n);
     if (got <= 0) {
         state->body_err = -1;
         return -1;
@@ -734,18 +757,18 @@ static void drain_body(ioma_ctx *ctx)
  * version, headers). What is buffered is parsed first: after a reply, a pipelined next request
  * may already be there. More is read only when the head is incomplete. Returns the head's
  * length, or -1 once the connection is finished (431 or 400 answered, or the peer went away). */
-static long read_head(ioma_ctx *ctx, conn_t *conn)
+static long read_head(ioma_ctx *ctx)
 {
-    ioma_pipereader  *r       = STATE(ctx)->reader;
+    ioma_pipereader  *pr      = READER(ctx);
     ioma_request *req     = &ctx->req;
     size_t        already = 0;                         /* what the previous attempt scanned */
     ioma_slice    live = { nullptr, 0 };
     for (;;) {
-        int rc = ioma_pipereader_read(r, &live);
+        int rc = ioma_pipereader_read(pr, &live);
         if (rc == 0)
             return -1;                                /* the peer is done: a clean end between requests */
         if (rc == IOMA_PIPE_FULL) {
-            send_status(conn, 431);
+            send_status(WRITER(ctx), 431);
             return -1;
         }
         if (rc < 0)
@@ -758,15 +781,15 @@ static long read_head(ioma_ctx *ctx, conn_t *conn)
                                        (struct phr_header *)req->headers, &req->n_headers,
                                        already);
         if (parsed >= 0) {
-            ioma_pipereader_keep(r, (size_t)parsed);      /* the head stays put, where it was parsed */
-            ioma_pipereader_run_begin(r);                 /* the body's kept bytes are a run of their own */
+            ioma_pipereader_keep(pr, (size_t)parsed);      /* the head stays put, where it was parsed */
+            ioma_pipereader_run_begin(pr);                 /* the body's kept bytes are a run of their own */
             return parsed;
         }
         if (parsed == -1) {                           /* malformed */
-            send_status(conn, 400);
+            send_status(WRITER(ctx), 400);
             return -1;
         }
-        ioma_pipereader_examine(r, live.len);             /* incomplete: the next read waits for more */
+        ioma_pipereader_examine(pr, live.len);             /* incomplete: the next read waits for more */
         already = live.len;
     }
 }
@@ -799,14 +822,14 @@ static void fill_request(ioma_request *req, char *params_arena, size_t arena_cap
 /* The engine's bookkeeping for reading the body on demand: where it starts, what already
  * arrived with the head, and - for a Content-Length body that is entirely here - where the next
  * request starts. */
-static void init_body_state(struct serve_state *state, ioma_pipereader *reader, const ioma_request *req)
+static void init_body_state(struct serve_state *state, struct ioma_pipe *pipe, const ioma_request *req)
 {
-    *state = (struct serve_state){ .reader = reader };
+    *state = (struct serve_state){ .pipe = pipe };
     state->body_done = !req->chunked && req->content_length == 0;
 }
 
 /* A response with its defaults and an empty slab. */
-static void init_response(ioma_response *res, char *slab)
+static void init_response(ioma_response *res, ioma_pipewriter *pw)
 {
     res->status         = 200;
     res->content_type   = (ioma_slice){ "text/plain", 10 };
@@ -815,53 +838,46 @@ static void init_response(ioma_response *res, char *slab)
     res->head_sent      = false;
     res->content_length = 0;
     res->has_length     = false;
-    res->buf            = slab + IOMA_LEAD;
-    res->cap            = IOMA_OUT_CAP;
-    res->len            = 0;
     res->chunked        = false;
     res->failed         = false;
+    ioma_pipewriter_reset(pw);
 }
 
 
 /* The proactor handler for every connection: one request per iteration - get the head, run
  * the chain against a context, drain what it left of the body, send what it wrote - while kept
  * alive. Returning closes the connection. */
-void ioma__serve(conn_t *conn)
+void ioma__serve(struct ioma_pipe *pipe)
 {
-    char        gather[IOMA_REQ_CAP];                 /* where a request's bytes go when they must be contiguous */
-    char        params[IOMA_PARAM_CAP];               /* decoded query parameters                              */
-    char        slab[IOMA_LEAD + IOMA_OUT_CAP + 2];   /* lead, the write slab, CRLF slack                      */
-    ioma_pipereader reader;                               /* the connection's bytes, across requests               */
-    ioma_pipereader_init(&reader, conn, gather, sizeof gather);
+    char params[IOMA_PARAM_CAP];                      /* decoded query parameters */
 
     for (;;) {
         ioma_ctx           ctx;                       /* this request's context             */
-        struct serve_state state = { .reader = &reader };
+        struct serve_state state = { .pipe = pipe };
         ctx.priv = &state;
 
-        long head_len = read_head(&ctx, conn);
+        long head_len = read_head(&ctx);
         if (head_len < 0)
-            break;
+            return;
         fill_request(&ctx.req, params, sizeof params);
-        init_body_state(&state, &reader, &ctx.req);
-        init_response(&ctx.res, slab);
+        init_body_state(&state, pipe, &ctx.req);
+        init_response(&ctx.res, &pipe->out);
         ctx.user = nullptr;
 
         ioma__dispatch(&ctx);                         /* middleware chain + endpoint */
 
         if (state.body_err) {                         /* too large, malformed, or gone */
             if (state.body_err > 0 && !ctx.res.head_sent)
-                send_status(conn, state.body_err);
-            break;
+                send_status(&pipe->out, state.body_err);
+            return;
         }
         drain_body(&ctx);                             /* what the handler left unread */
         if (state.body_err)
-            break;
+            return;
         if (finish(&ctx) < 0)                         /* sends; suspends meanwhile */
-            break;
+            return;
         if (!ctx.req.keep_alive || ctx.res.close)
-            break;
-        ioma_pipereader_release(&reader);                 /* this request's bytes go; a pipelined next one stays */
+            return;
+        ioma_pipereader_release(&pipe->in);           /* this request's bytes go; a pipelined next one stays */
     }
-    ioma_pipereader_close(&reader);
 }

@@ -38,7 +38,7 @@ enum recv_state {
 struct conn {
     int             fd;                   /* the socket, or its file slot under fixed files    */
     proactor_t     *p;
-    coro_t         *waiter;               /* coroutine parked in await_recv, or nullptr           */
+    coro_t         *waiter;               /* coroutine parked waiting for bytes, or nullptr      */
     struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
     unsigned        rx_head, rx_tail;
     enum recv_state recv;
@@ -52,9 +52,8 @@ struct conn {
 
 /* Awaits: call from a coroutine on the owning worker. The coroutine parks; the loop resumes it
  * when the completion arrives. */
-int await_recv(conn_t *c, void *buf, size_t len);        /* >0 bytes, 0 peer closed, <0 -errno */
 int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, else -errno     */
-int ioma__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno */
+int ioma__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
 conn_t *ioma__conn_new(proactor_t *p, int fd);           /* from the pool, or fresh              */

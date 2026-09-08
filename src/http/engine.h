@@ -3,6 +3,6 @@
  */
 #pragma once
 
-#include "io/conn.h"
+#include "io/pipe.h"
 
-void ioma__serve(conn_t *conn);                   /* requests on the connection until it ends */
+void ioma__serve(struct ioma_pipe *pipe);         /* requests on the connection until it ends */

@@ -86,9 +86,6 @@ typedef struct ioma_response {
     size_t      content_length;                 /* declared with ioma_content_length         */
     bool        has_length;
 
-    char       *buf;                            /* the write slab                            */
-    size_t      cap, len;
-
     bool        chunked, failed;                /* private: how a stream is framed; peer gone */
 } ioma_response;
 
@@ -135,6 +132,10 @@ int ioma_body_read_next_chunk(ioma_ctx *ctx, void *dst, size_t cap);
  * then on: chunked on HTTP/1.1, until close on HTTP/1.0, or with the length declared below.
  * Return 0, or -1 once the peer is gone (further writes are ignored). */
 int  ioma_write (ioma_ctx *ctx, const void *data, size_t len);
+/* Or write into the slab directly: reserve n bytes (flushing first when they do not fit; nullptr
+ * once the peer is gone or n exceeds the slab) and advance by what was written. */
+void *ioma_reserve(ioma_ctx *ctx, size_t n);
+void  ioma_advance(ioma_ctx *ctx, size_t n);
 int  ioma_text  (ioma_ctx *ctx, const char *s);                          /* a C string          */
 int  ioma_printf(ioma_ctx *ctx, const char *fmt, ...) __attribute__((format(printf, 2, 3)));   /* formatted, into the slab */
 
