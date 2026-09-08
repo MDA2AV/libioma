@@ -3,6 +3,7 @@
  */
 #include "http/internal.h"
 #include "io/pipe.h"
+#include "io/proactor.h"
 
 #include <pthread.h>
 #include <sched.h>

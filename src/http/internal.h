@@ -1,11 +1,12 @@
 /*
  * http/internal.h - what the HTTP plane's files share with each other. Private; not installed.
- * The plane sits on the I/O plane's interface (io/proactor.h): connections and the awaits.
+ * The plane sits on the I/O plane's interface: io/conn.h, connections and the awaits (run.c also
+ * takes io/proactor.h, the worker itself).
  */
 #pragma once
 
 #include "ioma.h"
-#include "io/proactor.h"
+#include "io/conn.h"
 
 #include <stdint.h>
 #include <stdio.h>

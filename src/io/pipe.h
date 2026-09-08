@@ -7,7 +7,7 @@
 #pragma once
 
 #include "ioma.h"
-#include "io/proactor.h"
+#include "io/conn.h"
 
 /* The reader hands out received bytes as one contiguous span at a time: in place in the kernel's
  * buffer when they lie within one, gathered into the consumer's buffer when they span, or when

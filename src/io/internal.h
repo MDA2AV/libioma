@@ -56,7 +56,6 @@ typedef struct op {
 struct io_uring_sqe *ioma__sqe(proactor_t *p);   /* claim an SQE; flushes without waiting if the SQ is full */
 
 /* bufring.c */
-int  ioma__await_item(conn_t *c, struct rx_item *out);   /* conn.c: the next received buffer, whole   */
 void ioma__return_buf(proactor_t *p, uint16_t buf_id);   /* stage a buffer's return; published per batch  */
 void ioma__bufring_publish(proactor_t *p);            /* publish staged returns: one atomic release    */
 void ioma__bufring_init(proactor_t *p);           /* bufring.c: map, register, fill          */
