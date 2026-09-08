@@ -3,7 +3,8 @@
  * a run of safe bytes at a time, an escape at a time, a number formatted into a small stack
  * buffer. The sink is the reply, a raw pipe, or a buffer; the writer never allocates.
  */
-#include "ioxd.h"
+#include "ioxd/json.h"
+#include "ioxd/pipe.h"
 
 #include <locale.h>
 #include <math.h>

@@ -4,7 +4,8 @@
  * Nothing here touches the runtime.
  */
 #include "http/internal.h"
-#include "ioxd.h"
+#include "ioxd/http.h"
+#include "ioxd/slice.h"
 
 #include <errno.h>
 #include <limits.h>
