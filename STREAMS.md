@@ -31,23 +31,23 @@ suspend the coroutine"; the caller does not see it.
 
 ## The pieces
 
-**`ioma_writer`** - the slab with a head reserve, a tail, and a connection to flush to.
+**`ioma_pipewriter`** - the slab with a head reserve, a tail, and a connection to flush to.
 
-    void  *ioma_writer_reserve(w, size_t n);   /* n bytes at the tail, flushing first if they do not fit */
-    void   ioma_writer_advance(w, size_t n);   /* the caller wrote n of them */
-    int    ioma_writer_write  (w, data, n);    /* copy in (reserve + memcpy + advance)                */
-    int    ioma_writer_flush  (w);             /* send what is in the slab; suspends                   */
-    int    ioma_writer_send   (w, data, n);    /* write + flush                                        */
+    void  *ioma_pipewriter_reserve(w, size_t n);   /* n bytes at the tail, flushing first if they do not fit */
+    void   ioma_pipewriter_advance(w, size_t n);   /* the caller wrote n of them */
+    int    ioma_pipewriter_write  (w, data, n);    /* copy in (reserve + memcpy + advance)                */
+    int    ioma_pipewriter_flush  (w);             /* send what is in the slab; suspends                   */
+    int    ioma_pipewriter_send   (w, data, n);    /* write + flush                                        */
 
 The HTTP response keeps its head-building on top (first flush builds the head into the lead).
 `ioma_write`, `ioma_printf`, `ioma_flush` become thin calls; `ioma_reserve`/`ioma_advance` are new
 on the context, for handlers that format straight into the reply.
 
-**`ioma_reader`** - the connection's received bytes, one contiguous span at a time.
+**`ioma_pipereader`** - the connection's received bytes, one contiguous span at a time.
 
-    int    ioma_reader_read   (r, ioma_slice *span);        /* what is buffered, contiguous; waits for more when the caller examined it all; 0 at EOF, -1 on error */
-    void   ioma_reader_advance(r, size_t consumed, size_t examined);   /* consumed: gone (provided buffers returned to the ring); examined: do not wake me until more than this arrives */
-    int    ioma_reader_copy   (r, void *dst, size_t n);     /* the Stream-style read: up to n bytes into dst */
+    int    ioma_pipereader_read   (r, ioma_slice *span);        /* what is buffered, contiguous; waits for more when the caller examined it all; 0 at EOF, -1 on error */
+    void   ioma_pipereader_advance(r, size_t consumed, size_t examined);   /* consumed: gone (provided buffers returned to the ring); examined: do not wake me until more than this arrives */
+    int    ioma_pipereader_copy   (r, void *dst, size_t n);     /* the Stream-style read: up to n bytes into dst */
 
 Why one span and not a list of segments. io_uring hands data over as provided buffers, each a
 pointer and a length, and the reader keeps them as such internally (the rx queue does already).

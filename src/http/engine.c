@@ -41,7 +41,7 @@ static_assert(offsetof(ioma_kv, key)    == offsetof(struct phr_header, name) &&
 
 /* The engine's per-request state, behind ctx->priv. */
 struct serve_state {
-    ioma_reader *reader;                    /* the connection's bytes; the head is kept in it     */
+    ioma_pipereader *reader;                    /* the connection's bytes; the head is kept in it     */
     size_t       body_read;                 /* body bytes handed out so far                       */
     bool         body_done;                 /* the whole body has been taken off the wire         */
     bool         body_whole;                /* ioma_body_all kept it                              */
@@ -464,7 +464,7 @@ static void body_fail(ioma_ctx *ctx, int status)
  * 413, the peer gone or the input ending inside the body is -1. */
 static bool body_bytes(ioma_ctx *ctx, ioma_slice *live)
 {
-    int rc = ioma_reader_read(STATE(ctx)->reader, live);
+    int rc = ioma_pipereader_read(STATE(ctx)->reader, live);
     if (rc > 0)
         return true;
     if (rc == IOMA_PIPE_FULL)
@@ -485,7 +485,7 @@ static long body_line(ioma_ctx *ctx, ioma_slice *live)
         const char *eol = memmem(live->p, live->len, "\r\n", 2);
         if (eol)
             return eol - live->p;
-        ioma_reader_examine(STATE(ctx)->reader, live->len);
+        ioma_pipereader_examine(STATE(ctx)->reader, live->len);
     }
 }
 
@@ -497,7 +497,7 @@ static bool chunk_trailers(ioma_ctx *ctx)
         long len = body_line(ctx, &live);
         if (len < 0)
             return false;
-        ioma_reader_drop(STATE(ctx)->reader, (size_t)len + 2);
+        ioma_pipereader_drop(STATE(ctx)->reader, (size_t)len + 2);
         if (len == 0)
             break;
     }
@@ -529,7 +529,7 @@ static bool chunk_header(ioma_ctx *ctx)
         body_fail(ctx, 400);
         return false;
     }
-    ioma_reader_drop(STATE(ctx)->reader, (size_t)len + 2);
+    ioma_pipereader_drop(STATE(ctx)->reader, (size_t)len + 2);
     if (size == 0)
         return chunk_trailers(ctx);
     STATE(ctx)->chunk_left = size;
@@ -545,13 +545,13 @@ static bool chunk_end(ioma_ctx *ctx)
             return false;
         if (live.len >= 2)
             break;
-        ioma_reader_examine(STATE(ctx)->reader, live.len);
+        ioma_pipereader_examine(STATE(ctx)->reader, live.len);
     }
     if (live.p[0] != '\r' || live.p[1] != '\n') {
         body_fail(ctx, 400);
         return false;
     }
-    ioma_reader_drop(STATE(ctx)->reader, 2);
+    ioma_pipereader_drop(STATE(ctx)->reader, 2);
     return true;
 }
 
@@ -563,7 +563,7 @@ static bool chunk_end(ioma_ctx *ctx)
 ioma_slice ioma_body_all(ioma_ctx *ctx)
 {
     struct serve_state *state = STATE(ctx);
-    ioma_reader        *r     = state->reader;
+    ioma_pipereader        *r     = state->reader;
     ioma_request       *req   = &ctx->req;
     const ioma_slice    none  = { nullptr, 0 };
 
@@ -583,7 +583,7 @@ ioma_slice ioma_body_all(ioma_ctx *ctx)
             if (!body_bytes(ctx, &live))
                 return none;
             size_t n = live.len < state->chunk_left ? live.len : state->chunk_left;
-            if (!ioma_reader_keep(r, n)) {
+            if (!ioma_pipereader_keep(r, n)) {
                 body_fail(ctx, 413);
                 return none;
             }
@@ -592,7 +592,7 @@ ioma_slice ioma_body_all(ioma_ctx *ctx)
             if (state->chunk_left == 0 && !chunk_end(ctx))
                 return none;
         }
-        req->body = ioma_reader_run(r);
+        req->body = ioma_pipereader_run(r);
     } else {
         if (req->content_length > IOMA_REQ_CAP) {
             body_fail(ctx, 413);
@@ -601,11 +601,11 @@ ioma_slice ioma_body_all(ioma_ctx *ctx)
         ioma_slice live = none;
         while (req->content_length && live.len < req->content_length) {
             if (live.len)
-                ioma_reader_examine(r, live.len);
+                ioma_pipereader_examine(r, live.len);
             if (!body_bytes(ctx, &live))
                 return none;
         }
-        const char *kept = req->content_length ? ioma_reader_keep(r, req->content_length) : live.p;
+        const char *kept = req->content_length ? ioma_pipereader_keep(r, req->content_length) : live.p;
         if (req->content_length && !kept) {
             body_fail(ctx, 413);
             return none;
@@ -624,7 +624,7 @@ static int fixed_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_
     size_t remaining = ctx->req.content_length - state->body_read;
     if (n > remaining)
         n = remaining;
-    int got = ioma_reader_copy(state->reader, dst, n);
+    int got = ioma_pipereader_copy(state->reader, dst, n);
     if (got <= 0) {
         state->body_err = -1;                            /* gone, or the input ended inside the body */
         return -1;
@@ -640,7 +640,7 @@ static int chunk_data(ioma_ctx *ctx, struct serve_state *state, char *dst, size_
 {
     if (n > state->chunk_left)
         n = state->chunk_left;
-    int got = ioma_reader_copy(state->reader, dst, n);
+    int got = ioma_pipereader_copy(state->reader, dst, n);
     if (got <= 0) {
         state->body_err = -1;
         return -1;
@@ -732,12 +732,12 @@ static void drain_body(ioma_ctx *ctx)
  * length, or -1 once the connection is finished (431 or 400 answered, or the peer went away). */
 static long read_head(ioma_ctx *ctx, conn_t *conn)
 {
-    ioma_reader  *r       = STATE(ctx)->reader;
+    ioma_pipereader  *r       = STATE(ctx)->reader;
     ioma_request *req     = &ctx->req;
     size_t        already = 0;                         /* what the previous attempt scanned */
     ioma_slice    live = { nullptr, 0 };
     for (;;) {
-        int rc = ioma_reader_read(r, &live);
+        int rc = ioma_pipereader_read(r, &live);
         if (rc == 0)
             return -1;                                /* the peer is done: a clean end between requests */
         if (rc == IOMA_PIPE_FULL) {
@@ -754,15 +754,15 @@ static long read_head(ioma_ctx *ctx, conn_t *conn)
                                        (struct phr_header *)req->headers, &req->n_headers,
                                        already);
         if (parsed >= 0) {
-            ioma_reader_keep(r, (size_t)parsed);      /* the head stays put, where it was parsed */
-            ioma_reader_run_begin(r);                 /* the body's kept bytes are a run of their own */
+            ioma_pipereader_keep(r, (size_t)parsed);      /* the head stays put, where it was parsed */
+            ioma_pipereader_run_begin(r);                 /* the body's kept bytes are a run of their own */
             return parsed;
         }
         if (parsed == -1) {                           /* malformed */
             send_status(conn, 400);
             return -1;
         }
-        ioma_reader_examine(r, live.len);             /* incomplete: the next read waits for more */
+        ioma_pipereader_examine(r, live.len);             /* incomplete: the next read waits for more */
         already = live.len;
     }
 }
@@ -795,7 +795,7 @@ static void fill_request(ioma_request *req, char *params_arena, size_t arena_cap
 /* The engine's bookkeeping for reading the body on demand: where it starts, what already
  * arrived with the head, and - for a Content-Length body that is entirely here - where the next
  * request starts. */
-static void init_body_state(struct serve_state *state, ioma_reader *reader, const ioma_request *req)
+static void init_body_state(struct serve_state *state, ioma_pipereader *reader, const ioma_request *req)
 {
     *state = (struct serve_state){ .reader = reader };
     state->body_done = !req->chunked && req->content_length == 0;
@@ -827,8 +827,8 @@ void ioma__serve(conn_t *conn)
     char        gather[IOMA_REQ_CAP];                 /* where a request's bytes go when they must be contiguous */
     char        params[IOMA_PARAM_CAP];               /* decoded query parameters                              */
     char        slab[IOMA_LEAD + IOMA_OUT_CAP + 2];   /* lead, the write slab, CRLF slack                      */
-    ioma_reader reader;                               /* the connection's bytes, across requests               */
-    ioma_reader_init(&reader, conn, gather, sizeof gather);
+    ioma_pipereader reader;                               /* the connection's bytes, across requests               */
+    ioma_pipereader_init(&reader, conn, gather, sizeof gather);
 
     for (;;) {
         ioma_ctx           ctx;                       /* this request's context             */
@@ -857,7 +857,7 @@ void ioma__serve(conn_t *conn)
             break;
         if (!ctx.req.keep_alive || ctx.res.close)
             break;
-        ioma_reader_release(&reader);                 /* this request's bytes go; a pipelined next one stays */
+        ioma_pipereader_release(&reader);                 /* this request's bytes go; a pipelined next one stays */
     }
-    ioma_reader_close(&reader);
+    ioma_pipereader_close(&reader);
 }

@@ -8,16 +8,16 @@
 
 /* ── the reader ────────────────────────────────────────────────────────────────────────── */
 
-void ioma_reader_init(ioma_reader *r, conn_t *conn, char *buf, size_t cap)
+void ioma_pipereader_init(ioma_pipereader *r, conn_t *conn, char *buf, size_t cap)
 {
-    *r      = (ioma_reader){};
+    *r      = (ioma_pipereader){};
     r->conn = conn;
     r->buf  = buf;
     r->cap  = cap;
 }
 
 /* The live bytes: in buf, or in the current kernel buffer. */
-static ioma_slice live_span(const ioma_reader *r)
+static ioma_slice live_span(const ioma_pipereader *r)
 {
     if (r->live_in_buf)
         return (ioma_slice){ r->buf + r->buf_pos, r->buf_end - r->buf_pos };
@@ -28,7 +28,7 @@ static ioma_slice live_span(const ioma_reader *r)
 
 /* Let the current kernel buffer go once nothing is left in it, neither live bytes nor the run.
  * One that also holds frozen kept bytes lives on as `pinned`. */
-static void cur_done(ioma_reader *r)
+static void cur_done(ioma_pipereader *r)
 {
     if (!r->has_cur || r->cur_pos < r->cur.len || (r->run_in_cur && r->run_len))
         return;
@@ -40,7 +40,7 @@ static void cur_done(ioma_reader *r)
 }
 
 /* Reclaim the bytes dropped from the front of buf's live region. */
-static void compact(ioma_reader *r)
+static void compact(ioma_pipereader *r)
 {
     if (r->buf_pos > r->floor) {
         memmove(r->buf + r->floor, r->buf + r->buf_pos, r->buf_end - r->buf_pos);
@@ -50,7 +50,7 @@ static void compact(ioma_reader *r)
 }
 
 /* Move the current buffer's run and live bytes into buf, so what follows can join them. */
-static bool gather(ioma_reader *r)
+static bool gather(ioma_pipereader *r)
 {
     size_t live = r->has_cur ? r->cur.len - r->cur_pos : 0;
     size_t run  = r->run_in_cur ? r->run_len : 0;
@@ -75,7 +75,7 @@ static bool gather(ioma_reader *r)
 }
 
 /* A buffer that cannot be used: back to the ring, and the reader is done. */
-static int refuse(ioma_reader *r, const struct rx_item *item)
+static int refuse(ioma_pipereader *r, const struct rx_item *item)
 {
     ioma__return_buf(r->conn->p, item->buf_id);
     r->error = IOMA_PIPE_FULL;
@@ -83,7 +83,7 @@ static int refuse(ioma_reader *r, const struct rx_item *item)
 }
 
 /* More bytes: the next kernel buffer, in place when nothing is live, else appended in buf. */
-static int more(ioma_reader *r)
+static int more(ioma_pipereader *r)
 {
     if (r->eof)
         return 0;
@@ -115,7 +115,7 @@ static int more(ioma_reader *r)
     return 1;
 }
 
-int ioma_reader_read(ioma_reader *r, ioma_slice *live)
+int ioma_pipereader_read(ioma_pipereader *r, ioma_slice *live)
 {
     if (r->error)
         return r->error;
@@ -131,13 +131,13 @@ int ioma_reader_read(ioma_reader *r, ioma_slice *live)
     }
 }
 
-void ioma_reader_examine(ioma_reader *r, size_t n)
+void ioma_pipereader_examine(ioma_pipereader *r, size_t n)
 {
     r->examined = n;
 }
 
 /* Forget n live bytes of the current place. */
-static void consume(ioma_reader *r, size_t n)
+static void consume(ioma_pipereader *r, size_t n)
 {
     if (r->live_in_buf) {
         r->buf_pos += n;
@@ -152,12 +152,12 @@ static void consume(ioma_reader *r, size_t n)
     r->examined = r->examined > n ? r->examined - n : 0;
 }
 
-void ioma_reader_drop(ioma_reader *r, size_t n)
+void ioma_pipereader_drop(ioma_pipereader *r, size_t n)
 {
     consume(r, n);
 }
 
-const char *ioma_reader_keep(ioma_reader *r, size_t n)
+const char *ioma_pipereader_keep(ioma_pipereader *r, size_t n)
 {
     const char *kept;
     if (r->live_in_buf) {
@@ -195,7 +195,7 @@ const char *ioma_reader_keep(ioma_reader *r, size_t n)
     return kept;
 }
 
-void ioma_reader_run_begin(ioma_reader *r)
+void ioma_pipereader_run_begin(ioma_pipereader *r)
 {
     if (r->run_in_cur && r->run_len) {
         if (r->has_pinned && !r->cur_is_pinned) {      /* another buffer is pinned already: this run moves to buf */
@@ -216,13 +216,13 @@ void ioma_reader_run_begin(ioma_reader *r)
     cur_done(r);
 }
 
-ioma_slice ioma_reader_run(const ioma_reader *r)
+ioma_slice ioma_pipereader_run(const ioma_pipereader *r)
 {
     const char *base = r->run_in_cur ? (const char *)r->cur.ptr : r->buf;
     return (ioma_slice){ base + r->run_start, r->run_len };
 }
 
-void ioma_reader_release(ioma_reader *r)
+void ioma_pipereader_release(ioma_pipereader *r)
 {
     r->run_len    = 0;
     r->run_in_cur = false;
@@ -244,7 +244,7 @@ void ioma_reader_release(ioma_reader *r)
     cur_done(r);
 }
 
-void ioma_reader_close(ioma_reader *r)
+void ioma_pipereader_close(ioma_pipereader *r)
 {
     if (r->has_cur && !r->cur_is_pinned)
         ioma__return_buf(r->conn->p, r->cur.buf_id);
@@ -253,7 +253,7 @@ void ioma_reader_close(ioma_reader *r)
     r->has_cur = r->has_pinned = r->cur_is_pinned = false;
 }
 
-int ioma_reader_copy(ioma_reader *r, void *dst, size_t n)
+int ioma_pipereader_copy(ioma_pipereader *r, void *dst, size_t n)
 {
     if (r->error)
         return r->error;
@@ -273,15 +273,15 @@ int ioma_reader_copy(ioma_reader *r, void *dst, size_t n)
 
 /* ── the writer ────────────────────────────────────────────────────────────────────────── */
 
-void ioma_writer_init(ioma_writer *w, conn_t *conn, char *buf, size_t cap)
+void ioma_pipewriter_init(ioma_pipewriter *w, conn_t *conn, char *buf, size_t cap)
 {
-    *w      = (ioma_writer){};
+    *w      = (ioma_pipewriter){};
     w->conn = conn;
     w->buf  = buf;
     w->cap  = cap;
 }
 
-int ioma_writer_flush(ioma_writer *w)
+int ioma_pipewriter_flush(ioma_pipewriter *w)
 {
     if (w->failed)
         return -1;
@@ -296,26 +296,26 @@ int ioma_writer_flush(ioma_writer *w)
     return 0;
 }
 
-void *ioma_writer_reserve(ioma_writer *w, size_t n)
+void *ioma_pipewriter_reserve(ioma_pipewriter *w, size_t n)
 {
     if (w->failed || n > w->cap)
         return nullptr;
-    if (w->len + n > w->cap && ioma_writer_flush(w) < 0)
+    if (w->len + n > w->cap && ioma_pipewriter_flush(w) < 0)
         return nullptr;
     return w->buf + w->len;
 }
 
-void ioma_writer_advance(ioma_writer *w, size_t n)
+void ioma_pipewriter_advance(ioma_pipewriter *w, size_t n)
 {
     w->len += n;
 }
 
-int ioma_writer_write(ioma_writer *w, const void *data, size_t n)
+int ioma_pipewriter_write(ioma_pipewriter *w, const void *data, size_t n)
 {
     if (w->failed)
         return -1;
     if (n > w->cap) {                                   /* larger than the slab: straight from the caller's memory */
-        if (ioma_writer_flush(w) < 0)
+        if (ioma_pipewriter_flush(w) < 0)
             return -1;
         if (await_send(w->conn, data, n) < 0) {
             w->failed = true;
@@ -323,7 +323,7 @@ int ioma_writer_write(ioma_writer *w, const void *data, size_t n)
         }
         return 0;
     }
-    void *at = ioma_writer_reserve(w, n);
+    void *at = ioma_pipewriter_reserve(w, n);
     if (!at)
         return -1;
     memcpy(at, data, n);
@@ -331,32 +331,32 @@ int ioma_writer_write(ioma_writer *w, const void *data, size_t n)
     return 0;
 }
 
-int ioma_writer_send(ioma_writer *w, const void *data, size_t n)
+int ioma_pipewriter_send(ioma_pipewriter *w, const void *data, size_t n)
 {
-    return ioma_writer_write(w, data, n) < 0 ? -1 : ioma_writer_flush(w);
+    return ioma_pipewriter_write(w, data, n) < 0 ? -1 : ioma_pipewriter_flush(w);
 }
 
 /* ── the pipe ──────────────────────────────────────────────────────────────────────────── */
 
 void ioma__pipe_init(struct ioma_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t slab_cap)
 {
-    ioma_reader_init(&p->in, conn, gather, gather_cap);
-    ioma_writer_init(&p->out, conn, slab, slab_cap);
+    ioma_pipereader_init(&p->in, conn, gather, gather_cap);
+    ioma_pipewriter_init(&p->out, conn, slab, slab_cap);
 }
 
 void ioma__pipe_close(struct ioma_pipe *p)
 {
-    ioma_reader_close(&p->in);
+    ioma_pipereader_close(&p->in);
 }
 
-int         ioma_pipe_read   (ioma_pipe *p, ioma_slice *live)          { return ioma_reader_read(&p->in, live); }
-void        ioma_pipe_examine(ioma_pipe *p, size_t n)                  { ioma_reader_examine(&p->in, n); }
-void        ioma_pipe_drop   (ioma_pipe *p, size_t n)                  { ioma_reader_drop(&p->in, n); }
-const char *ioma_pipe_keep   (ioma_pipe *p, size_t n)                  { return ioma_reader_keep(&p->in, n); }
-void        ioma_pipe_release(ioma_pipe *p)                            { ioma_reader_release(&p->in); }
-int         ioma_pipe_copy   (ioma_pipe *p, void *dst, size_t n)       { return ioma_reader_copy(&p->in, dst, n); }
-void       *ioma_pipe_reserve(ioma_pipe *p, size_t n)                  { return ioma_writer_reserve(&p->out, n); }
-void        ioma_pipe_advance(ioma_pipe *p, size_t n)                  { ioma_writer_advance(&p->out, n); }
-int         ioma_pipe_write  (ioma_pipe *p, const void *data, size_t n) { return ioma_writer_write(&p->out, data, n); }
-int         ioma_pipe_flush  (ioma_pipe *p)                            { return ioma_writer_flush(&p->out); }
-int         ioma_pipe_send   (ioma_pipe *p, const void *data, size_t n) { return ioma_writer_send(&p->out, data, n); }
+int         ioma_pipe_read   (ioma_pipe *p, ioma_slice *live)          { return ioma_pipereader_read(&p->in, live); }
+void        ioma_pipe_examine(ioma_pipe *p, size_t n)                  { ioma_pipereader_examine(&p->in, n); }
+void        ioma_pipe_drop   (ioma_pipe *p, size_t n)                  { ioma_pipereader_drop(&p->in, n); }
+const char *ioma_pipe_keep   (ioma_pipe *p, size_t n)                  { return ioma_pipereader_keep(&p->in, n); }
+void        ioma_pipe_release(ioma_pipe *p)                            { ioma_pipereader_release(&p->in); }
+int         ioma_pipe_copy   (ioma_pipe *p, void *dst, size_t n)       { return ioma_pipereader_copy(&p->in, dst, n); }
+void       *ioma_pipe_reserve(ioma_pipe *p, size_t n)                  { return ioma_pipewriter_reserve(&p->out, n); }
+void        ioma_pipe_advance(ioma_pipe *p, size_t n)                  { ioma_pipewriter_advance(&p->out, n); }
+int         ioma_pipe_write  (ioma_pipe *p, const void *data, size_t n) { return ioma_pipewriter_write(&p->out, data, n); }
+int         ioma_pipe_flush  (ioma_pipe *p)                            { return ioma_pipewriter_flush(&p->out); }
+int         ioma_pipe_send   (ioma_pipe *p, const void *data, size_t n) { return ioma_pipewriter_send(&p->out, data, n); }
