@@ -2,7 +2,7 @@
  * io/pipe.c - the reader and the writer of io/pipe.h, and the public pipe on top of them.
  */
 #include "io/pipe.h"
-#include "io/internal.h"
+#include "io/proactor.h"
 
 #include <string.h>
 

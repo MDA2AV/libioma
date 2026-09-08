@@ -62,3 +62,7 @@ void proactor_run(proactor_t *p);
 
 /* Start a coroutine on this worker. Safe from the loop or from any coroutine on it. */
 void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
+
+/* Claim an SQE to stage an operation; flushes without waiting when the SQ is full. For the
+ * plane's own files: every op goes through here so it rides the loop's next enter. */
+struct io_uring_sqe *ioma__sqe(proactor_t *p);

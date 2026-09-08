@@ -1,8 +1,7 @@
 /*
- * io/internal.h - what the I/O plane's files share with each other. Private; not installed.
- *
- * Exported internals carry an ioma__ prefix so they cannot collide with a user's symbols. Only
- * declarations, types and macros live here; LTO inlines the small hot ones across files.
+ * io/internal.h - the contract between the loop (proactor.c) and the operations (conn.c): how
+ * a completion finds what it belongs to, and the trace switch. Private; not installed. Each
+ * module's own declarations are in its header (uring.h, coro.h, bufring.h, conn.h, proactor.h).
  */
 #pragma once
 
@@ -10,15 +9,6 @@
 
 #include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-
-/* ── constants ─────────────────────────────────────────────────────────────────────────── */
-
-#define RX_MASK  (RX_QUEUE  - 1U)
-
-#ifndef CONN_POOL_MAX
-#define CONN_POOL_MAX 1024                        /* idle conn_t kept warm per worker         */
-#endif
 
 /* -DTRACE: one line per completion and lifetime event, for chasing a misbehaving path. */
 #ifdef TRACE
@@ -31,10 +21,11 @@
 
 /* user_data is a pointer with a tag in its low three bits; everything pointed at is 8-aligned. */
 enum {
-    TAG_OP = 0,
-    TAG_RECV = 1,
-    TAG_ACCEPT = 2,
-    TAG_IGNORE = 3, };
+    TAG_OP = 0,                                   /* an op_t: a one-shot await                */
+    TAG_RECV = 1,                                 /* a conn_t: its multishot recv             */
+    TAG_ACCEPT = 2,                               /* the listener's multishot accept          */
+    TAG_IGNORE = 3,                               /* a completion nobody waits for            */
+};
 
 #define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))
@@ -47,16 +38,3 @@ typedef struct op {
     int      res;
     unsigned flags;
 } op_t;
-
-/* ── shared between the plane's files ──────────────────────────────────────────────────── */
-
-/* proactor.c */
-struct io_uring_sqe *ioma__sqe(proactor_t *p);   /* claim an SQE; flushes without waiting if the SQ is full */
-
-/* ── connections (conn.c) ──────────────────────────────────────────────────────────────── */
-
-conn_t *ioma__conn_new(proactor_t *p, int fd);
-void    ioma__conn_main(void *arg);               /* the connection's coroutine body         */
-void    ioma__arm_recv(proactor_t *p, conn_t *c);
-void    ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);
-void    ioma__conn_pool_drain(proactor_t *p);
