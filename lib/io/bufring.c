@@ -20,7 +20,7 @@ static void *map_pages(size_t bytes)
 }
 
 /* Map the slab and the ring, register the ring as buffer group BGID, and offer every buffer. */
-void ioma__bufring_init(struct bufring *b, struct uring *ring, int worker)
+void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
 {
     b->ring = map_pages((size_t)BUF_COUNT * sizeof(struct io_uring_buf));
     b->slab = map_pages((size_t)BUF_COUNT * BUF_SIZE);
@@ -40,7 +40,7 @@ void ioma__bufring_init(struct bufring *b, struct uring *ring, int worker)
      * sits in bufs[0].resv, so writing only addr/len/bid leaves it untouched. */
     for (unsigned i = 0; i < BUF_COUNT; i++) {
         struct io_uring_buf *slot = &b->ring->bufs[i];
-        slot->addr = (uint64_t)(uintptr_t)ioma__bufring_at(b, (uint16_t)i);
+        slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, (uint16_t)i);
         slot->len  = BUF_SIZE;
         slot->bid  = (uint16_t)i;
     }
@@ -50,10 +50,10 @@ void ioma__bufring_init(struct bufring *b, struct uring *ring, int worker)
 
 /* Stage a buffer's return to the ring. The loop publishes the tail once per batch: one atomic
  * release for many returns, and the kernel is not re-reading a hot tail per request. */
-void ioma__bufring_return(struct bufring *b, uint16_t buf_id)
+void ioxd__bufring_return(struct bufring *b, uint16_t buf_id)
 {
     struct io_uring_buf *slot = &b->ring->bufs[b->tail & BUF_MASK];
-    slot->addr = (uint64_t)(uintptr_t)ioma__bufring_at(b, buf_id);
+    slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, buf_id);
     slot->len  = BUF_SIZE;
     slot->bid  = buf_id;
     b->tail++;
@@ -62,7 +62,7 @@ void ioma__bufring_return(struct bufring *b, uint16_t buf_id)
 }
 
 /* Publish staged returns to the kernel. */
-void ioma__bufring_publish(struct bufring *b)
+void ioxd__bufring_publish(struct bufring *b)
 {
     if (!b->dirty)
         return;
@@ -71,7 +71,7 @@ void ioma__bufring_publish(struct bufring *b)
 }
 
 /* Unregister the group. Call before uring_exit. */
-void ioma__bufring_unregister(struct bufring *b, struct uring *ring)
+void ioxd__bufring_unregister(struct bufring *b, struct uring *ring)
 {
     (void)b;
     struct io_uring_buf_reg reg;
@@ -81,7 +81,7 @@ void ioma__bufring_unregister(struct bufring *b, struct uring *ring)
 }
 
 /* Unmap the ring and the slab. Call after uring_exit, once no in-flight op can reference them. */
-void ioma__bufring_unmap(struct bufring *b)
+void ioxd__bufring_unmap(struct bufring *b)
 {
     munmap(b->ring, (size_t)BUF_COUNT * sizeof(struct io_uring_buf));
     munmap(b->slab, (size_t)BUF_COUNT * BUF_SIZE);

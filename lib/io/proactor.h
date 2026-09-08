@@ -31,8 +31,8 @@
 #endif
 
 typedef struct proactor proactor_t;
-struct ioma_pipe;
-typedef void (*handler_fn)(struct ioma_pipe *pipe);   /* a connection, as a pipe */
+struct ioxd_pipe;
+typedef void (*handler_fn)(struct ioxd_pipe *pipe);   /* a connection, as a pipe */
 
 struct proactor {
     /* set by the creator */
@@ -66,4 +66,4 @@ void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
 
 /* Claim an SQE to stage an operation; flushes without waiting when the SQ is full. For the
  * plane's own files: every op goes through here so it rides the loop's next enter. */
-struct io_uring_sqe *ioma__sqe(proactor_t *p);
+struct io_uring_sqe *ioxd__sqe(proactor_t *p);

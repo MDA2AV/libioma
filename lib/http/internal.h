@@ -5,7 +5,7 @@
 #pragma once
 
 /* The value of a hex digit, or -1. Percent-decoding (api.c) and chunk sizes (engine.c). */
-static inline int ioma__hexval(unsigned char c)
+static inline int ioxd__hexval(unsigned char c)
 {
     if (c >= '0' && c <= '9')
         return c - '0';

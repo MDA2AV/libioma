@@ -1,5 +1,5 @@
 /*
- * run.c - ioma_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
+ * run.c - ioxd_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
  */
 #include "http/engine.h"
 #include "http/router.h"
@@ -59,13 +59,13 @@ static void raise_nofile(void)
 
 /* Start the workers (workers <= 0: one per available core) and block until a stop signal. */
 /* Worker threads, one proactor each, serving `port` with `handler` on every connection until
- * SIGINT/SIGTERM. What ioma_run and ioma_run_pipes share. */
+ * SIGINT/SIGTERM. What ioxd_run and ioxd_run_pipes share. */
 static int run_workers(int workers, int port, handler_fn handler)
 {
     if (workers <= 0)
         workers = cpu_count();
     if (port < 1 || port > 65535) {
-        fprintf(stderr, "ioma_run: 1<=port<=65535 required\n");
+        fprintf(stderr, "ioxd_run: 1<=port<=65535 required\n");
         return 2;
     }
 
@@ -98,7 +98,7 @@ static int run_workers(int workers, int port, handler_fn handler)
             return 1;
         }
     }
-    fprintf(stderr, "ioma: %d workers on :%d\n", workers, port);
+    fprintf(stderr, "ioxd: %d workers on :%d\n", workers, port);
 
     for (int i = 0; i < workers; i++)
         pthread_join(th[i], nullptr);
@@ -107,13 +107,13 @@ static int run_workers(int workers, int port, handler_fn handler)
     return 0;
 }
 
-int ioma_run(int workers, int port)
+int ioxd_run(int workers, int port)
 {
-    ioma__router_build();                          /* the routes, resolved once, shared read-only */
-    return run_workers(workers, port, ioma__serve);
+    ioxd__router_build();                          /* the routes, resolved once, shared read-only */
+    return run_workers(workers, port, ioxd__serve);
 }
 
-int ioma_run_pipes(int workers, int port, ioma_pipe_handler fn)
+int ioxd_run_pipes(int workers, int port, ioxd_pipe_handler fn)
 {
     return run_workers(workers, port, fn);
 }

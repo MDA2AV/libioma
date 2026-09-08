@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Functional checks for the ioma HTTP layer: python3 tests/smoke.py [port].
+"""Functional checks for the ioxd HTTP layer: python3 tests/smoke.py [port].
 
 Talks to tests/server.c (make check builds and runs it): GET /, /health, /whoami, /users/:id, POST /echo, ...
 """
@@ -67,9 +67,9 @@ def check(name, cond):
 results = []
 
 st, hd, body = get("/")
-results.append(check("GET / -> 200 'hello from ioma'", st == 200 and body == b"hello from ioma\n"))
+results.append(check("GET / -> 200 'hello from ioxd'", st == 200 and body == b"hello from ioxd\n"))
 results.append(check("GET / content-type text/plain", hd.get("content-type") == "text/plain"))
-results.append(check("Server header added by middleware", hd.get("server") == "ioma"))
+results.append(check("Server header added by middleware", hd.get("server") == "ioxd"))
 
 st, hd, body = get("/health")
 results.append(check("GET /health -> 200 'ok'", st == 200 and body == b"ok"))
@@ -77,7 +77,7 @@ results.append(check("GET /health -> 200 'ok'", st == 200 and body == b"ok"))
 st, hd, body = get("/whoami?x=1&y=2")
 results.append(check("GET /whoami -> 200", st == 200))
 results.append(check("  parsed path/query in body", b"path   = /whoami" in body and b"query  = x=1&y=2" in body))
-results.append(check("  custom header X-Powered-By: ioma", hd.get("x-powered-by") == "ioma"))
+results.append(check("  custom header X-Powered-By: ioxd", hd.get("x-powered-by") == "ioxd"))
 
 # route parameter + percent-decoded query parameter
 st, hd, body = get("/users/42?fields=a%20b+c&x=1")
@@ -149,7 +149,7 @@ s.send(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\nCon
 st1, _, b1 = read_response(s)
 st2, _, b2 = read_response(s)
 s.close()
-results.append(check("pipelined two requests", st1 == 200 and b1 == b"ok" and st2 == 200 and b2 == b"hello from ioma\n"))
+results.append(check("pipelined two requests", st1 == 200 and b1 == b"ok" and st2 == 200 and b2 == b"hello from ioxd\n"))
 
 # request split across writes with pauses
 s = connect()
@@ -288,7 +288,7 @@ s = connect()
 s.send(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n" + b"z" * 100000)
 st, hd, body = read_response(s)
 s.close()
-results.append(check("ioma_body on a 100 KB body -> 413", st == 413))
+results.append(check("ioxd_body on a 100 KB body -> 413", st == 413))
 
 # an ignored body past the drain limit: the reply is served and says close
 s = connect()
@@ -340,7 +340,7 @@ results.append(check("GET /json/big -> 3000 objects streamed chunked, valid JSON
 # --- groups: prefixes chain, middleware wraps outer to inner, one endpoint's own middleware ---
 st, hd, body = get("/api/ping")
 results.append(check("GET /api/ping -> group prefix, group middleware, root middleware",
-                     st == 200 and body == b"pong\n" and hd.get("x-api") == "v1" and hd.get("server") == "ioma"))
+                     st == 200 and body == b"pong\n" and hd.get("x-api") == "v1" and hd.get("server") == "ioxd"))
 st, hd, body = get("/api/ping/")
 results.append(check("GET /api/ping/ -> trailing slash tolerated", st == 200 and body == b"pong\n"))
 st, hd, body = get("/api/admin/stats")

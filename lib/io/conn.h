@@ -53,11 +53,11 @@ struct conn {
 /* Awaits: call from a coroutine on the owning worker. The coroutine parks; the loop resumes it
  * when the completion arrives. */
 int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, else -errno     */
-int ioma__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
+int ioxd__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
-conn_t *ioma__conn_new(proactor_t *p, int fd);           /* from the pool, or fresh              */
-void    ioma__conn_main(void *arg);                      /* the connection's coroutine body      */
-void    ioma__arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
-void    ioma__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
-void    ioma__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */
+conn_t *ioxd__conn_new(proactor_t *p, int fd);           /* from the pool, or fresh              */
+void    ioxd__conn_main(void *arg);                      /* the connection's coroutine body      */
+void    ioxd__arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
+void    ioxd__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
+void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */

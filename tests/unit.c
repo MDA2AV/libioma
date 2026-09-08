@@ -1,8 +1,8 @@
 /*
- * unit.c - the handler helpers of include/ioma.h checked without a server: comparisons, the
+ * unit.c - the handler helpers of include/ioxd.h checked without a server: comparisons, the
  * typed conversions and key/value parsing. `make check` runs it before the HTTP suites.
  */
-#include <ioma.h>
+#include <ioxd.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -22,22 +22,22 @@ static void check(const char *what, bool ok, int line)
 #define CHECK(cond) check(#cond, (cond), __LINE__)
 
 /* A slice over a C string. */
-static ioma_slice S(const char *cstr)
+static ioxd_slice S(const char *cstr)
 {
-    return (ioma_slice){ cstr, strlen(cstr) };
+    return (ioxd_slice){ cstr, strlen(cstr) };
 }
 
 /* Each conversion: does text parse to want, and does a failure leave the output alone? */
-static bool i64_is(const char *text, int64_t want)   { int64_t  v = 7; return ioma_to_i64(S(text), &v) && v == want; }
-static bool i64_fails(const char *text)              { int64_t  v = 7; return !ioma_to_i64(S(text), &v) && v == 7; }
-static bool u64_is(const char *text, uint64_t want)  { uint64_t v = 7; return ioma_to_u64(S(text), &v) && v == want; }
-static bool u64_fails(const char *text)              { uint64_t v = 7; return !ioma_to_u64(S(text), &v) && v == 7; }
-static bool int_is(const char *text, int want)       { int      v = 7; return ioma_to_int(S(text), &v) && v == want; }
-static bool int_fails(const char *text)              { int      v = 7; return !ioma_to_int(S(text), &v) && v == 7; }
-static bool dbl_is(const char *text, double want)    { double   v = 7; return ioma_to_double(S(text), &v) && v == want; }
-static bool dbl_fails(const char *text)              { double   v = 7; return !ioma_to_double(S(text), &v) && v == 7; }
-static bool bool_is(const char *text, bool want)     { bool     v = !want; return ioma_to_bool(S(text), &v) && v == want; }
-static bool bool_fails(const char *text)             { bool     v = true; return !ioma_to_bool(S(text), &v) && v; }
+static bool i64_is(const char *text, int64_t want)   { int64_t  v = 7; return ioxd_to_i64(S(text), &v) && v == want; }
+static bool i64_fails(const char *text)              { int64_t  v = 7; return !ioxd_to_i64(S(text), &v) && v == 7; }
+static bool u64_is(const char *text, uint64_t want)  { uint64_t v = 7; return ioxd_to_u64(S(text), &v) && v == want; }
+static bool u64_fails(const char *text)              { uint64_t v = 7; return !ioxd_to_u64(S(text), &v) && v == 7; }
+static bool int_is(const char *text, int want)       { int      v = 7; return ioxd_to_int(S(text), &v) && v == want; }
+static bool int_fails(const char *text)              { int      v = 7; return !ioxd_to_int(S(text), &v) && v == 7; }
+static bool dbl_is(const char *text, double want)    { double   v = 7; return ioxd_to_double(S(text), &v) && v == want; }
+static bool dbl_fails(const char *text)              { double   v = 7; return !ioxd_to_double(S(text), &v) && v == 7; }
+static bool bool_is(const char *text, bool want)     { bool     v = !want; return ioxd_to_bool(S(text), &v) && v == want; }
+static bool bool_fails(const char *text)             { bool     v = true; return !ioxd_to_bool(S(text), &v) && v; }
 
 static void test_integers(void)
 {
@@ -132,99 +132,99 @@ static void test_bools(void)
 
 static void test_strings(void)
 {
-    CHECK(ioma_slice_eq(S("abc"), "abc"));
-    CHECK(!ioma_slice_eq(S("abc"), "ab"));
-    CHECK(!ioma_slice_eq(S("abc"), "abcd"));
-    CHECK(ioma_slice_eq(S(""), ""));
-    CHECK(ioma_slice_eq((ioma_slice){ nullptr, 0 }, ""));         /* an absent slice is empty */
+    CHECK(ioxd_slice_eq(S("abc"), "abc"));
+    CHECK(!ioxd_slice_eq(S("abc"), "ab"));
+    CHECK(!ioxd_slice_eq(S("abc"), "abcd"));
+    CHECK(ioxd_slice_eq(S(""), ""));
+    CHECK(ioxd_slice_eq((ioxd_slice){ nullptr, 0 }, ""));         /* an absent slice is empty */
 
-    CHECK(ioma_slice_eq_ci(S("Content-Type"), "content-type"));
-    CHECK(ioma_slice_eq_ci(S("GZIP"), "gzip"));
-    CHECK(!ioma_slice_eq_ci(S("gzip"), "gzi"));
-    CHECK(!ioma_slice_eq_ci(S("gzip"), "gzipx"));
+    CHECK(ioxd_slice_eq_ci(S("Content-Type"), "content-type"));
+    CHECK(ioxd_slice_eq_ci(S("GZIP"), "gzip"));
+    CHECK(!ioxd_slice_eq_ci(S("gzip"), "gzi"));
+    CHECK(!ioxd_slice_eq_ci(S("gzip"), "gzipx"));
 
-    CHECK(ioma_slice_starts_with(S("/api/users"), "/api/"));
-    CHECK(ioma_slice_starts_with(S("/api/users"), ""));
-    CHECK(!ioma_slice_starts_with(S("/api"), "/api/"));
-    CHECK(ioma_slice_ends_with(S("data.json"), ".json"));
-    CHECK(!ioma_slice_ends_with(S("json"), ".json"));
+    CHECK(ioxd_slice_starts_with(S("/api/users"), "/api/"));
+    CHECK(ioxd_slice_starts_with(S("/api/users"), ""));
+    CHECK(!ioxd_slice_starts_with(S("/api"), "/api/"));
+    CHECK(ioxd_slice_ends_with(S("data.json"), ".json"));
+    CHECK(!ioxd_slice_ends_with(S("json"), ".json"));
 
-    ioma_slice t = ioma_slice_trim(S("  a b \t\r\n"));
+    ioxd_slice t = ioxd_slice_trim(S("  a b \t\r\n"));
     CHECK(t.len == 3 && memcmp(t.p, "a b", 3) == 0);
-    CHECK(ioma_slice_trim(S(" \t ")).len == 0);
-    CHECK(ioma_slice_trim(S("")).len == 0);
-    CHECK(ioma_slice_trim(S("x")).len == 1);
+    CHECK(ioxd_slice_trim(S(" \t ")).len == 0);
+    CHECK(ioxd_slice_trim(S("")).len == 0);
+    CHECK(ioxd_slice_trim(S("x")).len == 1);
 
     char buf[4];
-    CHECK(ioma_cstr(S("abc"), buf, sizeof buf) && strcmp(buf, "abc") == 0);
-    CHECK(!ioma_cstr(S("abcd"), buf, sizeof buf) && strcmp(buf, "abc") == 0);   /* what fit, terminated */
-    CHECK(ioma_cstr(S(""), buf, sizeof buf) && buf[0] == '\0');
+    CHECK(ioxd_cstr(S("abc"), buf, sizeof buf) && strcmp(buf, "abc") == 0);
+    CHECK(!ioxd_cstr(S("abcd"), buf, sizeof buf) && strcmp(buf, "abc") == 0);   /* what fit, terminated */
+    CHECK(ioxd_cstr(S(""), buf, sizeof buf) && buf[0] == '\0');
     buf[0] = 'x';
-    CHECK(!ioma_cstr(S("a"), buf, 0) && buf[0] == 'x');                         /* cap 0 writes nothing */
+    CHECK(!ioxd_cstr(S("a"), buf, 0) && buf[0] == 'x');                         /* cap 0 writes nothing */
 }
 
 static void test_kv_parse(void)
 {
-    ioma_kv kv[8];
+    ioxd_kv kv[8];
     char    arena[64];
-    size_t  n = ioma_kv_parse("a=1&b=hello+world&c=%41%zz&&d&e=", 32, kv, 8, arena, sizeof arena);
+    size_t  n = ioxd_kv_parse("a=1&b=hello+world&c=%41%zz&&d&e=", 32, kv, 8, arena, sizeof arena);
     CHECK(n == 5);
-    CHECK(ioma_slice_eq(kv[0].key, "a") && ioma_slice_eq(kv[0].value, "1"));
-    CHECK(ioma_slice_eq(kv[1].key, "b") && ioma_slice_eq(kv[1].value, "hello world"));
-    CHECK(ioma_slice_eq(kv[2].key, "c") && ioma_slice_eq(kv[2].value, "A%zz"));   /* a bad escape stays */
-    CHECK(ioma_slice_eq(kv[3].key, "d") && kv[3].value.len == 0);
-    CHECK(ioma_slice_eq(kv[4].key, "e") && kv[4].value.len == 0);
+    CHECK(ioxd_slice_eq(kv[0].key, "a") && ioxd_slice_eq(kv[0].value, "1"));
+    CHECK(ioxd_slice_eq(kv[1].key, "b") && ioxd_slice_eq(kv[1].value, "hello world"));
+    CHECK(ioxd_slice_eq(kv[2].key, "c") && ioxd_slice_eq(kv[2].value, "A%zz"));   /* a bad escape stays */
+    CHECK(ioxd_slice_eq(kv[3].key, "d") && kv[3].value.len == 0);
+    CHECK(ioxd_slice_eq(kv[4].key, "e") && kv[4].value.len == 0);
     CHECK(kv[0].value.p != arena && kv[1].value.p >= arena);   /* a view when undecoded, else in the arena */
 
-    n = ioma_kv_parse("k%20ey=v&x=y", 12, kv, 8, arena, sizeof arena);
-    CHECK(n == 2 && ioma_slice_eq(kv[0].key, "k ey"));
-    n = ioma_kv_parse("a=1&b=x+y&c=3", 13, kv, 8, arena, 0);   /* no arena: the pair needing it is skipped */
-    CHECK(n == 2 && ioma_slice_eq(kv[1].key, "c"));
-    n = ioma_kv_parse("a=1&b=2&c=3", 11, kv, 1, arena, sizeof arena);
+    n = ioxd_kv_parse("k%20ey=v&x=y", 12, kv, 8, arena, sizeof arena);
+    CHECK(n == 2 && ioxd_slice_eq(kv[0].key, "k ey"));
+    n = ioxd_kv_parse("a=1&b=x+y&c=3", 13, kv, 8, arena, 0);   /* no arena: the pair needing it is skipped */
+    CHECK(n == 2 && ioxd_slice_eq(kv[1].key, "c"));
+    n = ioxd_kv_parse("a=1&b=2&c=3", 11, kv, 1, arena, sizeof arena);
     CHECK(n == 1);
 
     int v;
-    CHECK(ioma_kv_parse("page=12", 7, kv, 8, arena, sizeof arena) == 1 && ioma_to_int(kv[0].value, &v) && v == 12);
+    CHECK(ioxd_kv_parse("page=12", 7, kv, 8, arena, sizeof arena) == 1 && ioxd_to_int(kv[0].value, &v) && v == 12);
 }
 
 /* The JSON writer into memory: what a document looks like, byte for byte. */
-static bool json_is(const char *want, void (*write)(ioma_json *))
+static bool json_is(const char *want, void (*write)(ioxd_json *))
 {
     char   buf[512];
     size_t len;
-    ioma_json j = ioma_json_mem(buf, sizeof buf, &len);
+    ioxd_json j = ioxd_json_mem(buf, sizeof buf, &len);
     write(&j);
     return !j.failed && len == strlen(want) && memcmp(buf, want, len) == 0;
 }
-static void doc_nested(ioma_json *j)
+static void doc_nested(ioxd_json *j)
 {
-    ioma_json_object(j);
-    ioma_json_key(j, "id");    ioma_json_int(j, 42);
-    ioma_json_key(j, "name");  ioma_json_cstr(j, "Zo\xc3\xab \"Z\" O'Neil\n\t\x01");
-    ioma_json_key(j, "tags");  ioma_json_array(j); ioma_json_cstr(j, "a"); ioma_json_cstr(j, "b"); ioma_json_end(j);
-    ioma_json_key(j, "empty"); ioma_json_object(j); ioma_json_end(j);
-    ioma_json_key(j, "none");  ioma_json_null(j);
-    ioma_json_key(j, "ok");    ioma_json_bool(j, true);
-    ioma_json_key(j, "raw");   ioma_json_raw(j, S("[1,2]"));
-    ioma_json_end(j);
+    ioxd_json_object(j);
+    ioxd_json_key(j, "id");    ioxd_json_int(j, 42);
+    ioxd_json_key(j, "name");  ioxd_json_cstr(j, "Zo\xc3\xab \"Z\" O'Neil\n\t\x01");
+    ioxd_json_key(j, "tags");  ioxd_json_array(j); ioxd_json_cstr(j, "a"); ioxd_json_cstr(j, "b"); ioxd_json_end(j);
+    ioxd_json_key(j, "empty"); ioxd_json_object(j); ioxd_json_end(j);
+    ioxd_json_key(j, "none");  ioxd_json_null(j);
+    ioxd_json_key(j, "ok");    ioxd_json_bool(j, true);
+    ioxd_json_key(j, "raw");   ioxd_json_raw(j, S("[1,2]"));
+    ioxd_json_end(j);
 }
-static void doc_numbers(ioma_json *j)
+static void doc_numbers(ioxd_json *j)
 {
-    ioma_json_array(j);
-    ioma_json_int(j, 0); ioma_json_int(j, -7); ioma_json_int(j, INT64_MIN); ioma_json_int(j, INT64_MAX);
-    ioma_json_uint(j, UINT64_MAX);
-    ioma_json_double(j, 0.1); ioma_json_double(j, 2.5); ioma_json_double(j, -0.0); ioma_json_double(j, 1e21);
-    ioma_json_double(j, 9007199254740993.0); ioma_json_double(j, 1.0 / 3.0);
-    ioma_json_double(j, INFINITY); ioma_json_double(j, NAN);
-    ioma_json_end(j);
+    ioxd_json_array(j);
+    ioxd_json_int(j, 0); ioxd_json_int(j, -7); ioxd_json_int(j, INT64_MIN); ioxd_json_int(j, INT64_MAX);
+    ioxd_json_uint(j, UINT64_MAX);
+    ioxd_json_double(j, 0.1); ioxd_json_double(j, 2.5); ioxd_json_double(j, -0.0); ioxd_json_double(j, 1e21);
+    ioxd_json_double(j, 9007199254740993.0); ioxd_json_double(j, 1.0 / 3.0);
+    ioxd_json_double(j, INFINITY); ioxd_json_double(j, NAN);
+    ioxd_json_end(j);
 }
-static void doc_top_level(ioma_json *j) { ioma_json_cstr(j, "just a string"); }
-static void doc_array_of_arrays(ioma_json *j)
+static void doc_top_level(ioxd_json *j) { ioxd_json_cstr(j, "just a string"); }
+static void doc_array_of_arrays(ioxd_json *j)
 {
-    ioma_json_array(j);
-    ioma_json_array(j); ioma_json_int(j, 1); ioma_json_end(j);
-    ioma_json_array(j); ioma_json_end(j);
-    ioma_json_end(j);
+    ioxd_json_array(j);
+    ioxd_json_array(j); ioxd_json_int(j, 1); ioxd_json_end(j);
+    ioxd_json_array(j); ioxd_json_end(j);
+    ioxd_json_end(j);
 }
 
 static void test_json(void)
@@ -236,19 +236,19 @@ static void test_json(void)
 
     char   small[8];
     size_t len;
-    ioma_json j = ioma_json_mem(small, sizeof small, &len);
-    CHECK(ioma_json_object(&j) && ioma_json_key(&j, "k"));      /* {"k": is 5 bytes */
-    CHECK(!ioma_json_cstr(&j, "too long for what is left") && j.failed);
-    CHECK(!ioma_json_int(&j, 1));                                /* failed stays failed */
+    ioxd_json j = ioxd_json_mem(small, sizeof small, &len);
+    CHECK(ioxd_json_object(&j) && ioxd_json_key(&j, "k"));      /* {"k": is 5 bytes */
+    CHECK(!ioxd_json_cstr(&j, "too long for what is left") && j.failed);
+    CHECK(!ioxd_json_int(&j, 1));                                /* failed stays failed */
 
     char   deep[512];
-    j = ioma_json_mem(deep, sizeof deep, &len);
+    j = ioxd_json_mem(deep, sizeof deep, &len);
     bool ok = true;
-    for (int i = 0; i < IOMA_JSON_DEPTH; i++)
-        ok = ok && ioma_json_array(&j);
-    CHECK(ok && !ioma_json_array(&j));                           /* one level too many */
-    j = ioma_json_mem(deep, sizeof deep, &len);
-    CHECK(!ioma_json_end(&j));                                   /* nothing open */
+    for (int i = 0; i < IOXD_JSON_DEPTH; i++)
+        ok = ok && ioxd_json_array(&j);
+    CHECK(ok && !ioxd_json_array(&j));                           /* one level too many */
+    j = ioxd_json_mem(deep, sizeof deep, &len);
+    CHECK(!ioxd_json_end(&j));                                   /* nothing open */
 }
 
 int main(void)

@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include "ioma.h"
+#include "ioxd.h"
 
-void ioma__router_build(void);                    /* the segment tree and the flat chains, once */
-void ioma__dispatch(ioma_ctx *ctx);               /* the request's endpoint, behind its chain    */
+void ioxd__router_build(void);                    /* the segment tree and the flat chains, once */
+void ioxd__dispatch(ioxd_ctx *ctx);               /* the request's endpoint, behind its chain    */

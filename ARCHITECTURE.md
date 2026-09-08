@@ -1,6 +1,6 @@
-# How libioma works
+# How libioxd works
 
-libioma is an HTTP/1.1 server library in C. It runs one worker per CPU core, each worker owns
+libioxd is an HTTP/1.1 server library in C. It runs one worker per CPU core, each worker owns
 its own io_uring, and every connection is served by a small coroutine that suspends while the
 kernel does the I/O. There are no locks and nothing is shared between workers.
 
@@ -14,12 +14,12 @@ process
  │   └─ pools: conn objects, coroutine stacks
 ```
 
-`include/ioma.h` is the whole public API. Under `lib/` there are two planes, one concern per file:
+`include/ioxd.h` is the whole public API. Under `lib/` there are two planes, one concern per file:
 `io/` is the I/O plane - `uring.c` (the ring), `coro.c` + `switch_x86_64.S` (coroutines),
 `bufring.c` (the buffer ring), `conn.c` (a connection and its awaits), `proactor.c` (the worker
 loop), with `proactor.h` as the interface the other plane uses - and `http/` is the HTTP plane -
 `engine.c` (parse, body, reply, the serve loop), `router.c` (routes and middleware), `api.c`
-(handler helpers), `run.c` (`ioma_run`). Each plane has an `internal.h` for what its files share.
+(handler helpers), `run.c` (`ioxd_run`). Each plane has an `internal.h` for what its files share.
 
 ---
 
@@ -29,7 +29,7 @@ io_uring is two ring buffers shared with the kernel. You write **submission entr
 "do this") into one ring, the kernel writes **completion entries** (CQEs, "this finished, result
 N") into the other. One syscall, `io_uring_enter`, both submits and waits.
 
-libioma talks to it directly (`uring.c`), the way ioxide does, with three setup flags:
+libioxd talks to it directly (`uring.c`), the way ioxide does, with three setup flags:
 
 - **SINGLE_ISSUER** — only this thread submits, so the kernel skips its SQ locking.
 - **DEFER_TASKRUN** — completion work runs batched inside our `enter` call, never as an interrupt
@@ -76,8 +76,8 @@ A **stackful coroutine** is a function running on its own stack that can pause i
 variables intact. That is what lets a handler be written as plain sequential code:
 
 ```c
-ioma_pipe_read(pipe, &live);          /* pauses here until data arrives */
-ioma_pipe_send(pipe, reply, len);     /* pauses here until the send completes */
+ioxd_pipe_read(pipe, &live);          /* pauses here until data arrives */
+ioxd_pipe_send(pipe, reply, len);     /* pauses here until the send completes */
 ```
 
 ### The switch
@@ -126,7 +126,7 @@ stages a SEND SQE and parks; the SQE rides the next `enter` together with the re
 
 ### Routing a completion
 
-Every SQE carries a 64-bit `user_data`. libioma stores a pointer in it with a 3-bit **tag** in the
+Every SQE carries a 64-bit `user_data`. libioxd stores a pointer in it with a 3-bit **tag** in the
 low bits (everything it points at is 8-byte aligned):
 
 | tag | points at | meaning |
@@ -152,7 +152,7 @@ therefore never recycled while a completion for it is still coming.
 
 ### The two awaits
 
-`ioma__await_item` hands the next queued buffer over whole - the pipe's reader owns it from then
+`ioxd__await_item` hands the next queued buffer over whole - the pipe's reader owns it from then
 until it returns it to the ring - and parks if the queue is empty. `await_send` stages a SEND SQE
 (`MSG_WAITALL`, so the kernel finishes short sends itself) and parks until its CQE; the pipe's
 writer is the only caller. Nothing above the pipe touches either.
@@ -167,8 +167,8 @@ kernel balances connections over the listeners (`SO_REUSEPORT`), and worker *i* 
 
 ## 4. Pipes: the reader and the writer
 
-The connection's bytes reach the HTTP engine, or a handler of your own under `ioma_run_pipes`,
-through a pipe (`io/pipe.h`; `ioma_pipe` in the public header): a reader over the buffers the
+The connection's bytes reach the HTTP engine, or a handler of your own under `ioxd_run_pipes`,
+through a pipe (`io/pipe.h`; `ioxd_pipe` in the public header): a reader over the buffers the
 kernel filled and a writer over a slab. Every call that has to wait suspends the coroutine and
 the loop resumes it on the completion, so one piece of code drives any connection the I/O plane
 runs - the shape of .NET's PipeReader and PipeWriter, with coroutines in place of tasks.
@@ -200,10 +200,10 @@ raw pipe writes straight.
    copy). `-2` means "incomplete": read more and parse again, so a request split at any byte works.
 2. **Body, on demand**: one pass over the headers picks out `Content-Length`,
    `Transfer-Encoding` and `Connection` (a length test rejects almost every header before a byte
-   is compared), but the body stays on the wire. `ioma_body_all` keeps it whole in the reader - in place
+   is compared), but the body stays on the wire. `ioxd_body_all` keeps it whole in the reader - in place
    after the head when it all arrived in one receive, gathered otherwise, a chunked one slid
-   together chunk by chunk; `ioma_body_read_until` streams it, any
-   size, filling the caller's buffer; `ioma_body_read_next_chunk` hands over one chunk exactly as the
+   together chunk by chunk; `ioxd_body_read_until` streams it, any
+   size, filling the caller's buffer; `ioxd_body_read_next_chunk` hands over one chunk exactly as the
    sender framed it. All three chunked paths share one small parser (a raw stage after the head, a
    size-line reader, a data mover) that survives a split at any byte. Whatever a handler leaves
    unread is drained after it returns, up to a limit, past which the reply says close.
@@ -212,7 +212,7 @@ raw pipe writes straight.
    the request and the response; the response holds the reply being shaped (status, content
    type, headers); the bytes go into the pipe's writer, an 8 KB slab with a lead in front of it
    for the head and a chunk's size line, and slack behind it for a chunk's CRLF.
-5. **Write**: the handler calls `ioma_write` / `ioma_printf`; bytes land in the buffer. If it
+5. **Write**: the handler calls `ioxd_write` / `ioxd_printf`; bytes land in the buffer. If it
    fills, the framework sends what it has — head first, framed chunked on HTTP/1.1 or until close
    on HTTP/1.0 (or with a length the handler declared) — and the handler suspends on that send.
 6. **Finish**: after the chain returns, whatever is buffered goes out. The usual case is that
@@ -231,7 +231,7 @@ the handler. Three key/value arrays hang off it, read directly: `headers` (names
 at parse time, so a plain compare works), `params` (the query, split and percent-decoded into a
 small per-request arena only when a value needs it, otherwise a zero-copy view), and `route_params` (the
 `:name` captures the router filled in, in pattern order). A `scratch` arena is there for building
-a body (`ioma_textf`).
+a body (`ioxd_textf`).
 
 ---
 
@@ -239,7 +239,7 @@ a body (`ioma_textf`).
 
 Endpoints are registered in groups before the workers start: a group is a path prefix plus
 middleware, groups nest, and the root (`NULL`) is the group with no prefix whose middleware
-`ioma_use` adds. `ioma_run` resolves the whole table once, and after that it is read-only, so
+`ioxd_use` adds. `ioxd_run` resolves the whole table once, and after that it is read-only, so
 every worker reads it without a lock.
 
 The resolution turns each endpoint's full path (the prefixes of its groups, outermost first, then
@@ -251,20 +251,20 @@ comes to nothing - including when it reaches the end without the request's metho
 path with only a GET lets a POST fall through to a capture route that has one. Captured segments
 land in `req->route_params`, named from the endpoint that matched. A path the tree knows without
 the method is a 405 with an `allow` header; a path it does not know goes to the fallback
-(`ioma_default`, a plain 404 unless replaced). Nothing is scanned and nothing is compiled per
+(`ioxd_default`, a plain 404 unless replaced). Nothing is scanned and nothing is compiled per
 request; the tree is the map.
 
 Middleware is an onion: each layer receives the context and a `next`; it does work, calls
-`ioma_next_run` to continue, and can do more on the way back out, or it replies and returns to
+`ioxd_next_run` to continue, and can do more on the way back out, or it replies and returns to
 short-circuit the request. Each endpoint's chain is flattened at resolution - the root's
 middleware, then each group's from outermost to innermost, then the endpoint's own - into one
 array, so dispatch is a call through it with no walking of groups. The fallbacks run behind the
 root's middleware only.
 
-The `IOMA_` macros are the same registrations as a script: `IOMA_GROUP(prefix, middleware...)`
+The `IOXD_` macros are the same registrations as a script: `IOXD_GROUP(prefix, middleware...)`
 opens a group for the block that follows (a run-once `for`, the group popped when it ends),
-`IOMA_GET(path, handler, middleware...)` and its siblings register into the open group, and
-`IOMA_USE` adds middleware to it. The middleware lists travel in small structs ended by a null,
+`IOXD_GET(path, handler, middleware...)` and its siblings register into the open group, and
+`IOXD_USE` adds middleware to it. The middleware lists travel in small structs ended by a null,
 so every argument is type-checked and a wrong signature is a compile error.
 
 ## 7. One keep-alive request, end to end
@@ -284,14 +284,14 @@ Two switches in, two out — tens of nanoseconds. The cost of a request is the k
 
 ## 8. JSON, written as you go
 
-`lib/json/json.c` is a forward-only writer, the shape of .NET's `Utf8JsonWriter`: `ioma_json_object`,
-`ioma_json_key`, `ioma_json_int`, `ioma_json_string`, `ioma_json_end` and so on, each putting its
-bytes straight into a sink - the reply through `ioma_reserve`/`ioma_advance`, a raw pipe, or a
+`lib/json/json.c` is a forward-only writer, the shape of .NET's `Utf8JsonWriter`: `ioxd_json_object`,
+`ioxd_json_key`, `ioxd_json_int`, `ioxd_json_string`, `ioxd_json_end` and so on, each putting its
+bytes straight into a sink - the reply through `ioxd_reserve`/`ioxd_advance`, a raw pipe, or a
 memory buffer - with no tree and no allocation. Strings are escaped as they are copied, a safe run
 at a time; integers go through a digit loop; a double takes the shortest of 15, 16 or 17
 significant digits that reads back as the same value, with the decimal point forced to '.'
 whatever the locale says. Nesting and the commas it owes are two bits per level, so a document
-deeper than `IOMA_JSON_DEPTH` fails cleanly. A reply larger than the slab streams out chunked
+deeper than `IOXD_JSON_DEPTH` fails cleanly. A reply larger than the slab streams out chunked
 while the writer keeps going, which is the whole point of writing as you go.
 
 ## Tunables
@@ -303,6 +303,6 @@ while the writer keeps going, which is the whole point of writing as you go.
 | `RX_QUEUE` | 64 | slices a connection may hold undelivered |
 | `STACK_SIZE` | 64 KB | per coroutine, plus a guard page |
 | `CORO_POOL_MAX`, `CONN_POOL_MAX` | 512, 1024 | idle stacks / conns kept warm per worker (not connection limits) |
-| `IOMA_REQ_CAP` | 16 KB | a request must fit here, else 413/431 |
+| `IOXD_REQ_CAP` | 16 KB | a request must fit here, else 413/431 |
 
 Override any of them with `-D` at build time.

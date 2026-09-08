@@ -26,7 +26,7 @@ static int await_op(struct io_uring_sqe *sqe, op_t *op)
 /* Ask the kernel to cancel the op carrying that user_data. The acknowledgement CQE is ignored. */
 static void submit_cancel(proactor_t *p, uint64_t target_user_data)
 {
-    struct io_uring_sqe *sqe = ioma__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__sqe(p);
     sqe->opcode    = IORING_OP_ASYNC_CANCEL;
     sqe->fd        = -1;
     sqe->addr      = target_user_data;
@@ -37,7 +37,7 @@ static void submit_cancel(proactor_t *p, uint64_t target_user_data)
 
 /* Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two owners hold it:
  * the handler coroutine and the multishot recv, so refs starts at 2. */
-conn_t *ioma__conn_new(proactor_t *p, int fd)
+conn_t *ioxd__conn_new(proactor_t *p, int fd)
 {
     conn_t *c = p->conn_free;
     if (c) {
@@ -83,7 +83,7 @@ static void conn_unref(conn_t *c)
 }
 
 /* Free the pool at worker teardown. */
-void ioma__conn_pool_drain(proactor_t *p)
+void ioxd__conn_pool_drain(proactor_t *p)
 {
     while (p->conn_free) {
         conn_t *c = p->conn_free;
@@ -96,9 +96,9 @@ void ioma__conn_pool_drain(proactor_t *p)
 /* ── the recv side ─────────────────────────────────────────────────────────────────────── */
 
 /* Arm the multishot recv: one SQE, then a CQE per arrival, each in a buffer the kernel picks. */
-void ioma__arm_recv(proactor_t *p, conn_t *c)
+void ioxd__arm_recv(proactor_t *p, conn_t *c)
 {
-    struct io_uring_sqe *sqe = ioma__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__sqe(p);
     sqe->opcode    = IORING_OP_RECV;
     sqe->fd        = c->fd;
     sqe->flags     = IOSQE_BUFFER_SELECT | (p->ring.fixed_files ? IOSQE_FIXED_FILE : 0);
@@ -128,7 +128,7 @@ static void note_starved(proactor_t *p)
     p->starved_since_log++;
     if (now.tv_sec < p->starved_log_at)
         return;
-    fprintf(stderr, "ioma: [w%d] recv found no provided buffer %llu times (%llu in total, %u connections parked): "
+    fprintf(stderr, "ioxd: [w%d] recv found no provided buffer %llu times (%llu in total, %u connections parked): "
                     "raise BUF_COUNT (-DBUF_COUNT=..., now %d)\n",
             p->id, (unsigned long long)p->starved_since_log, (unsigned long long)p->starved_total, p->nstarved + 1, BUF_COUNT);
     p->starved_since_log = 0;
@@ -164,7 +164,7 @@ static void starved_remove(proactor_t *p, conn_t *c)
 
 /* A recv CQE: queue the data and wake the reader, or record the end of input and drop the recv's
  * ref. -ENOBUFS is not an error: the buffer group ran dry, so park and re-arm later. */
-void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
+void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 {
     bool     more    = flags & IORING_CQE_F_MORE;
     bool     has_buf = flags & IORING_CQE_F_BUFFER;
@@ -187,7 +187,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 
     if (result <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
         if (has_buf)
-            ioma__bufring_return(&p->bufs, buf_id);
+            ioxd__bufring_return(&p->bufs, buf_id);
         if (!c->eof) {
             c->eof = true;
             c->err = result;
@@ -199,11 +199,11 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (c->closed) {
-        ioma__bufring_return(&p->bufs, buf_id);                          /* the handler is gone; nobody will read it */
+        ioxd__bufring_return(&p->bufs, buf_id);                          /* the handler is gone; nobody will read it */
     } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
         /* The handler is not draining. Rather than let one peer hoard the buffer group, end its
          * input: the next read sees -ENOBUFS. */
-        ioma__bufring_return(&p->bufs, buf_id);
+        ioxd__bufring_return(&p->bufs, buf_id);
         if (!c->eof) {
             c->eof = true;
             c->err = -ENOBUFS;
@@ -213,7 +213,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
         wake_reader(c);
     } else {
         struct rx_item *item = &c->rx[c->rx_tail++ & RX_MASK];
-        item->ptr = ioma__bufring_at(&p->bufs, buf_id);
+        item->ptr = ioxd__bufring_at(&p->bufs, buf_id);
         item->len = (uint32_t)result;
         item->buf_id = buf_id;
         wake_reader(c);
@@ -221,7 +221,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 
     if (!more) {                                     /* the kernel ended the multishot: re-arm    */
         if (!c->closed && !c->eof) {
-            ioma__arm_recv(p, c);
+            ioxd__arm_recv(p, c);
         } else {
             c->recv = RECV_DONE;
             conn_unref(c);
@@ -239,7 +239,7 @@ static void close_socket(proactor_t *p, int fd)
         close(fd);
         return;
     }
-    struct io_uring_sqe *sqe = ioma__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__sqe(p);
     sqe->opcode     = IORING_OP_CLOSE;
     sqe->file_index = (uint32_t)fd + 1;              /* slot + 1; 0 would mean "a real fd" */
     sqe->user_data  = TAG_IGNORE;
@@ -262,22 +262,22 @@ static void conn_close(conn_t *c)
         c->refs--;                                   /* the recv side's reference; ours, dropped last, keeps c alive */
     }
     while (c->rx_head != c->rx_tail)
-        ioma__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
+        ioxd__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
 
     close_socket(p, c->fd);
     conn_unref(c);
 }
 
 /* The connection's coroutine: run the worker's handler to completion, then close. */
-void ioma__conn_main(void *arg)
+void ioxd__conn_main(void *arg)
 {
     conn_t          *c = arg;
-    char             gather[IOMA_PIPE_GATHER];
-    char             slab[IOMA_PIPE_LEAD + IOMA_PIPE_CAP + IOMA_PIPE_SLACK];
-    struct ioma_pipe pipe;
-    ioma__pipe_init(&pipe, c, gather, sizeof gather, slab, IOMA_PIPE_LEAD, IOMA_PIPE_CAP, IOMA_PIPE_SLACK);
+    char             gather[IOXD_PIPE_GATHER];
+    char             slab[IOXD_PIPE_LEAD + IOXD_PIPE_CAP + IOXD_PIPE_SLACK];
+    struct ioxd_pipe pipe;
+    ioxd__pipe_init(&pipe, c, gather, sizeof gather, slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
     c->p->handler(&pipe);
-    ioma__pipe_close(&pipe);
+    ioxd__pipe_close(&pipe);
     conn_close(c);
 }
 
@@ -285,9 +285,9 @@ void ioma__conn_main(void *arg)
 
 /* Copy the next delivered slice into buf, parking while the queue is empty. Returns the byte
  * count, 0 when the peer closed, or -errno. A fully consumed buffer goes back to the ring. */
-/* The next received buffer, whole: the caller owns it until ioma__bufring_return. Suspends until one
+/* The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends until one
  * arrives; 1 with the item, 0 at the end of input, <0 an error. */
-int ioma__await_item(conn_t *c, struct rx_item *out)
+int ioxd__await_item(conn_t *c, struct rx_item *out)
 {
     for (;;) {
         if (c->rx_head != c->rx_tail) {
@@ -298,7 +298,7 @@ int ioma__await_item(conn_t *c, struct rx_item *out)
         if (c->eof)
             return c->err;
         c->waiter = coro_current();
-        coro_yield();                                /* ioma__on_recv wakes us */
+        coro_yield();                                /* ioxd__on_recv wakes us */
     }
 }
 
@@ -310,7 +310,7 @@ int await_send(conn_t *c, const void *buf, size_t len)
     size_t         left = len;
     while (left > 0) {
         op_t op;
-        struct io_uring_sqe *sqe = ioma__sqe(c->p);
+        struct io_uring_sqe *sqe = ioxd__sqe(c->p);
         sqe->opcode    = IORING_OP_SEND;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;

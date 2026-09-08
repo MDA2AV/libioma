@@ -5,4 +5,4 @@
 
 #include "io/pipe.h"
 
-void ioma__serve(struct ioma_pipe *pipe);         /* requests on the connection until it ends */
+void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection until it ends */

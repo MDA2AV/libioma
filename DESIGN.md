@@ -1,6 +1,6 @@
 # ioxide's TCP core, read for a minimal stackful C runtime
 
-> Note: this is the design record for **ioma** (github.com/MDA2AV/ioma). Paths like `ioxide/...` and `ringzero/...` refer to the author's sibling repos (github.com/MDA2AV/ioxide, github.com/MDA2AV/ringzero); ioma itself is the `stackful/`→`ioma/` runtime described in section 3 and shipped in this repository.
+> Note: this is the design record for **ioxd** (github.com/MDA2AV/ioxd). Paths like `ioxide/...` and `ringzero/...` refer to the author's sibling repos (github.com/MDA2AV/ioxide, github.com/MDA2AV/ringzero); ioxd itself is the `stackful/`→`ioxd/` runtime described in section 3 and shipped in this repository.
 
 
 Scope: `ioxide/src/ioxide` — `io_uring/Ring.cs`, `Native/*`, `Reactor/*`, `Reactor/Transport/Tcp/*`,

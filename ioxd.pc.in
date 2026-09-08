@@ -1,11 +1,11 @@
 prefix=@PREFIX@
 exec_prefix=${prefix}
 libdir=${exec_prefix}/lib
-includedir=${prefix}/include/ioma
+includedir=${prefix}/include/ioxd
 
-Name: ioma
+Name: ioxd
 Description: HTTP/1.1 server framework on a thread-per-core io_uring runtime
 Version: @VERSION@
-URL: https://github.com/MDA2AV/ioma
-Libs: -L${libdir} -lioma -pthread
+URL: https://github.com/MDA2AV/libioxd
+Libs: -L${libdir} -lioxd -pthread
 Cflags: -I${includedir} -pthread

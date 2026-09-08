@@ -2,16 +2,16 @@ obj/
 *.o
 
 # libraries and examples
-libioma.a
-libioma.so
-libioma.so.*
-ioma-hello
-ioma.pc
+libioxd.a
+libioxd.so
+libioxd.so.*
+ioxd-hello
+ioxd.pc
 
 # old binaries
-ioma
-ioma-tiny
-ioma-trace
+ioxd
+ioxd-tiny
+ioxd-trace
 stackful
 stackful-tiny
 stackful-trace
@@ -25,6 +25,6 @@ compile_commands.json
 
 # IDE
 .idea/
-tests/ioma-test-server
-tests/ioma-unit
-tests/ioma-pipe-server
+tests/ioxd-test-server
+tests/ioxd-unit
+tests/ioxd-pipe-server

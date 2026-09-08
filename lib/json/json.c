@@ -1,9 +1,9 @@
 /*
- * json/json.c - the forward-only JSON writer of ioma.h. Every value goes straight to the sink:
+ * json/json.c - the forward-only JSON writer of ioxd.h. Every value goes straight to the sink:
  * a run of safe bytes at a time, an escape at a time, a number formatted into a small stack
  * buffer. The sink is the reply, a raw pipe, or a buffer; the writer never allocates.
  */
-#include "ioma.h"
+#include "ioxd.h"
 
 #include <locale.h>
 #include <math.h>
@@ -14,27 +14,27 @@
 #define RUN_MAX 1024                                  /* bytes asked of the sink at a time */
 
 /* n bytes of the sink to write into, or nullptr; the caller then advances by what it wrote. */
-static char *reserve(ioma_json *j, size_t n)
+static char *reserve(ioxd_json *j, size_t n)
 {
     switch (j->kind) {
-    case IOMA_JSON_TO_REPLY: return ioma_reserve(j->to.ctx, n);
-    case IOMA_JSON_TO_PIPE:  return ioma_pipe_reserve(j->to.pipe, n);
-    case IOMA_JSON_TO_MEM:   return *j->to.mem.len + n <= j->to.mem.cap ? j->to.mem.p + *j->to.mem.len : nullptr;
+    case IOXD_JSON_TO_REPLY: return ioxd_reserve(j->to.ctx, n);
+    case IOXD_JSON_TO_PIPE:  return ioxd_pipe_reserve(j->to.pipe, n);
+    case IOXD_JSON_TO_MEM:   return *j->to.mem.len + n <= j->to.mem.cap ? j->to.mem.p + *j->to.mem.len : nullptr;
     }
     return nullptr;
 }
 
-static void advance(ioma_json *j, size_t n)
+static void advance(ioxd_json *j, size_t n)
 {
     switch (j->kind) {
-    case IOMA_JSON_TO_REPLY: ioma_advance(j->to.ctx, n); break;
-    case IOMA_JSON_TO_PIPE:  ioma_pipe_advance(j->to.pipe, n); break;
-    case IOMA_JSON_TO_MEM:   *j->to.mem.len += n; break;
+    case IOXD_JSON_TO_REPLY: ioxd_advance(j->to.ctx, n); break;
+    case IOXD_JSON_TO_PIPE:  ioxd_pipe_advance(j->to.pipe, n); break;
+    case IOXD_JSON_TO_MEM:   *j->to.mem.len += n; break;
     }
 }
 
 /* Raw bytes to the sink, in runs the slab can take; false marks the writer failed. */
-static bool put(ioma_json *j, const char *p, size_t n)
+static bool put(ioxd_json *j, const char *p, size_t n)
 {
     while (n) {
         size_t run = n < RUN_MAX ? n : RUN_MAX;
@@ -51,7 +51,7 @@ static bool put(ioma_json *j, const char *p, size_t n)
     return true;
 }
 
-static bool put_cstr(ioma_json *j, const char *s)
+static bool put_cstr(ioxd_json *j, const char *s)
 {
     return put(j, s, strlen(s));
 }
@@ -63,7 +63,7 @@ static bool needs_escape(unsigned char c)
 }
 
 /* A string, quoted and escaped: safe runs are copied whole, escapes one at a time. */
-static bool put_string(ioma_json *j, const char *p, size_t n)
+static bool put_string(ioxd_json *j, const char *p, size_t n)
 {
     static const char hex[] = "0123456789abcdef";
     if (!put(j, "\"", 1))
@@ -106,7 +106,7 @@ static bool put_string(ioma_json *j, const char *p, size_t n)
 }
 
 /* Before a value: the comma its level owes, unless it follows a key. */
-static bool separator(ioma_json *j)
+static bool separator(ioxd_json *j)
 {
     if (j->failed)
         return false;
@@ -123,24 +123,24 @@ static bool separator(ioma_json *j)
 
 /* ── the sinks ─────────────────────────────────────────────────────────────────────────── */
 
-ioma_json ioma_json_reply(ioma_ctx *ctx)
+ioxd_json ioxd_json_reply(ioxd_ctx *ctx)
 {
-    ioma_content_type(ctx, "application/json");
-    ioma_json j = { .kind = IOMA_JSON_TO_REPLY };
+    ioxd_content_type(ctx, "application/json");
+    ioxd_json j = { .kind = IOXD_JSON_TO_REPLY };
     j.to.ctx = ctx;
     return j;
 }
 
-ioma_json ioma_json_pipe(struct ioma_pipe *pipe)
+ioxd_json ioxd_json_pipe(struct ioxd_pipe *pipe)
 {
-    ioma_json j = { .kind = IOMA_JSON_TO_PIPE };
+    ioxd_json j = { .kind = IOXD_JSON_TO_PIPE };
     j.to.pipe = pipe;
     return j;
 }
 
-ioma_json ioma_json_mem(char *buf, size_t cap, size_t *len)
+ioxd_json ioxd_json_mem(char *buf, size_t cap, size_t *len)
 {
-    ioma_json j = { .kind = IOMA_JSON_TO_MEM };
+    ioxd_json j = { .kind = IOXD_JSON_TO_MEM };
     j.to.mem.p   = buf;
     j.to.mem.cap = cap;
     j.to.mem.len = len;
@@ -151,11 +151,11 @@ ioma_json ioma_json_mem(char *buf, size_t cap, size_t *len)
 /* ── the values ────────────────────────────────────────────────────────────────────────── */
 
 /* Open a container: its own level starts empty. */
-static bool open_level(ioma_json *j, char bracket)
+static bool open_level(ioxd_json *j, char bracket)
 {
     if (!separator(j))
         return false;
-    if (j->depth == IOMA_JSON_DEPTH) {
+    if (j->depth == IOXD_JSON_DEPTH) {
         j->failed = true;
         return false;
     }
@@ -169,19 +169,19 @@ static bool open_level(ioma_json *j, char bracket)
     return put(j, &bracket, 1);
 }
 
-bool ioma_json_object(ioma_json *j)
+bool ioxd_json_object(ioxd_json *j)
 {
     return open_level(j, '{');
 }
 
-bool ioma_json_array(ioma_json *j)
+bool ioxd_json_array(ioxd_json *j)
 {
     return open_level(j, '[');
 }
 
 /* Close the innermost container. Which bracket is remembered by what was written: an object's
  * level is one that took keys - tracked as a bit too. */
-bool ioma_json_end(ioma_json *j)
+bool ioxd_json_end(ioxd_json *j)
 {
     if (j->failed || j->depth == 0)
         return false;
@@ -191,7 +191,7 @@ bool ioma_json_end(ioma_json *j)
     return put(j, object ? "}" : "]", 1);
 }
 
-bool ioma_json_key(ioma_json *j, const char *name)
+bool ioxd_json_key(ioxd_json *j, const char *name)
 {
     if (!separator(j))
         return false;
@@ -201,12 +201,12 @@ bool ioma_json_key(ioma_json *j, const char *name)
     return true;
 }
 
-bool ioma_json_string(ioma_json *j, ioma_slice s)
+bool ioxd_json_string(ioxd_json *j, ioxd_slice s)
 {
     return separator(j) && put_string(j, s.p, s.len);
 }
 
-bool ioma_json_cstr(ioma_json *j, const char *s)
+bool ioxd_json_cstr(ioxd_json *j, const char *s)
 {
     return separator(j) && put_string(j, s, strlen(s));
 }
@@ -222,14 +222,14 @@ static char *digits(char *tmp_end, uint64_t v)
     return p;
 }
 
-bool ioma_json_uint(ioma_json *j, uint64_t v)
+bool ioxd_json_uint(ioxd_json *j, uint64_t v)
 {
     char  tmp[24];
     char *p = digits(tmp + sizeof tmp, v);
     return separator(j) && put(j, p, (size_t)(tmp + sizeof tmp - p));
 }
 
-bool ioma_json_int(ioma_json *j, int64_t v)
+bool ioxd_json_int(ioxd_json *j, int64_t v)
 {
     char     tmp[24];
     uint64_t magnitude = v < 0 ? (uint64_t)(-(v + 1)) + 1 : (uint64_t)v;   /* INT64_MIN has no positive twin */
@@ -241,10 +241,10 @@ bool ioma_json_int(ioma_json *j, int64_t v)
 
 /* The shortest decimal that reads back as the same double: 15, 16 or 17 significant digits, the
  * first that round-trips. snprintf follows the locale's decimal point; JSON wants '.'. */
-bool ioma_json_double(ioma_json *j, double v)
+bool ioxd_json_double(ioxd_json *j, double v)
 {
     if (!isfinite(v))
-        return ioma_json_null(j);
+        return ioxd_json_null(j);
     char tmp[32];
     int  n = 0;
     for (int precision = 15; precision <= 17; precision++) {
@@ -265,17 +265,17 @@ bool ioma_json_double(ioma_json *j, double v)
     return separator(j) && put(j, tmp, (size_t)n);
 }
 
-bool ioma_json_bool(ioma_json *j, bool v)
+bool ioxd_json_bool(ioxd_json *j, bool v)
 {
     return separator(j) && put_cstr(j, v ? "true" : "false");
 }
 
-bool ioma_json_null(ioma_json *j)
+bool ioxd_json_null(ioxd_json *j)
 {
     return separator(j) && put_cstr(j, "null");
 }
 
-bool ioma_json_raw(ioma_json *j, ioma_slice json)
+bool ioxd_json_raw(ioxd_json *j, ioxd_slice json)
 {
     return separator(j) && put(j, json.p, json.len);
 }

@@ -29,14 +29,14 @@ struct bufring {
     bool                      returned;   /* any return since the loop's last starved sweep     */
 };
 
-void ioma__bufring_init      (struct bufring *b, struct uring *ring, int worker);   /* map, register, offer every buffer */
-void ioma__bufring_return    (struct bufring *b, uint16_t buf_id);                  /* stage a buffer's return           */
-void ioma__bufring_publish   (struct bufring *b);                                   /* the staged returns, one release   */
-void ioma__bufring_unregister(struct bufring *b, struct uring *ring);               /* before uring_exit                 */
-void ioma__bufring_unmap     (struct bufring *b);                                   /* after uring_exit                  */
+void ioxd__bufring_init      (struct bufring *b, struct uring *ring, int worker);   /* map, register, offer every buffer */
+void ioxd__bufring_return    (struct bufring *b, uint16_t buf_id);                  /* stage a buffer's return           */
+void ioxd__bufring_publish   (struct bufring *b);                                   /* the staged returns, one release   */
+void ioxd__bufring_unregister(struct bufring *b, struct uring *ring);               /* before uring_exit                 */
+void ioxd__bufring_unmap     (struct bufring *b);                                   /* after uring_exit                  */
 
 /* Where a buffer's bytes are. */
-static inline uint8_t *ioma__bufring_at(const struct bufring *b, uint16_t buf_id)
+static inline uint8_t *ioxd__bufring_at(const struct bufring *b, uint16_t buf_id)
 {
     return b->slab + (size_t)buf_id * BUF_SIZE;
 }

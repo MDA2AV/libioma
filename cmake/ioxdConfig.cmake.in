@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+# ioxd links pthreads publicly, so a consumer must re-find it before the targets load.
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
+include("${CMAKE_CURRENT_LIST_DIR}/ioxdTargets.cmake")
