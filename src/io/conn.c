@@ -278,7 +278,7 @@ void ioma__conn_main(void *arg)
 
 /* Copy the next delivered slice into buf, parking while the queue is empty. Returns the byte
  * count, 0 when the peer closed, or -errno. A fully consumed buffer goes back to the ring. */
-/* The next received buffer, whole: the caller owns it until ioma__return_buf. Suspends until one
+/* The next received buffer, whole: the caller owns it until ioma__bufring_return. Suspends until one
  * arrives; 1 with the item, 0 at the end of input, <0 an error. */
 int ioma__await_item(conn_t *c, struct rx_item *out)
 {
