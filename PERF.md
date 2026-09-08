@@ -33,6 +33,9 @@ profiles score.
 
 The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
 `BUF_SIZE`/`BUF_COUNT`/`RING_ENTRIES`/`RX_QUEUE`/`STACK_SIZE`/`CORO_POOL_MAX`/`CONN_POOL_MAX` are
+A recv that finds the ring empty is logged, at most once a second per worker, with counts:
+`ioma: [w3] recv found no provided buffer N times ...: raise BUF_COUNT`. That line is the signal to raise
+`-DBUF_COUNT` (a power of two, up to 65536; each buffer is `BUF_SIZE` bytes of the per-worker slab).
 in `src/io/proactor.h`. Both ring features fall back at runtime on kernels that lack them.
 
 ### How to do PGO

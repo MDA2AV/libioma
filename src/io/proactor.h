@@ -24,6 +24,7 @@
 #ifndef BUF_COUNT
 #define BUF_COUNT    4096                 /* provided recv buffers per worker, power of two     */
 #endif
+static_assert(((unsigned)BUF_COUNT & ((unsigned)BUF_COUNT - 1U)) == 0 && BUF_COUNT <= 65536, "BUF_COUNT: a power of two, at most 65536 (16-bit buffer ids)");
 #ifndef BUF_SIZE
 #define BUF_SIZE     2048                 /* bytes per recv buffer (a request rarely needs more) */
 #endif
@@ -86,6 +87,9 @@ struct proactor {
     bool                      buf_dirty;          /* staged buffer returns awaiting one publish */
     conn_t                  **starved;    /* connections parked on -ENOBUFS                    */
     unsigned                  nstarved, cap_starved;
+    uint64_t                  starved_total;      /* recvs that found the ring empty, ever       */
+    uint64_t                  starved_since_log;  /* ... since the last log line                 */
+    time_t                    starved_log_at;     /* the next second a log line may go out       */
     coro_t                   *ready_head, *ready_tail;   /* spawned, not yet started           */
     unsigned                  live;       /* open connections                                  */
     uint64_t                  accepted;

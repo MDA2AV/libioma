@@ -63,7 +63,8 @@ arrive. Instead each worker registers a **buffer ring**: `BUF_COUNT` slots of `B
 the handler has consumed it, the worker hands it back by writing its id into the ring again.
 
 Returns are staged and the ring tail is published once per loop iteration, so a batch of returned
-buffers costs one atomic store. If the ring runs dry a recv ends with `-ENOBUFS`; the connection is
+buffers costs one atomic store. If the ring runs dry a recv ends with `-ENOBUFS`; the worker logs it
+(once a second at most, with counts, so a starved ring is visible and `BUF_COUNT` can be raised) and the connection is
 parked and re-armed as soon as any buffer comes back.
 
 ---

@@ -6,8 +6,10 @@
 #include "io/internal.h"
 
 #include <errno.h>
+#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Stage a one-shot op and park until its CQE. The loop fills op->res and resumes us. */
@@ -114,6 +116,23 @@ static void wake_reader(conn_t *c)
     }
 }
 
+/* Count a recv that found the buffer ring empty, and say so on stderr at most once a second per
+ * worker: starvation otherwise shows only as latency, and the cure is a larger -DBUF_COUNT. */
+static void note_starved(proactor_t *p)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
+    p->starved_total++;
+    p->starved_since_log++;
+    if (now.tv_sec < p->starved_log_at)
+        return;
+    fprintf(stderr, "ioma: [w%d] recv found no provided buffer %llu times (%llu in total, %u connections parked): "
+                    "raise BUF_COUNT (-DBUF_COUNT=..., now %d)\n",
+            p->id, (unsigned long long)p->starved_since_log, (unsigned long long)p->starved_total, p->nstarved + 1, BUF_COUNT);
+    p->starved_since_log = 0;
+    p->starved_log_at    = now.tv_sec + 1;
+}
+
 /* Park a connection whose recv ended on -ENOBUFS until a buffer comes back. */
 static void starved_push(proactor_t *p, conn_t *c)
 {
@@ -159,6 +178,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
             return;
         }
         c->recv = RECV_STARVED;
+        note_starved(p);
         starved_push(p, c);
         return;
     }
