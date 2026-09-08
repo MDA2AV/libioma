@@ -53,17 +53,17 @@ include(GNUInstallDirs)
 
 # --- the library (static by default; -DBUILD_SHARED_LIBS=ON for a .so) ---
 add_library(ioma
-        src/io/uring.c
-        src/io/coro.c
-        src/io/switch_x86_64.S
-        src/io/bufring.c
-        src/io/conn.c
-        src/io/proactor.c
-        src/io/pipe.c
-        src/http/engine.c
-        src/http/api.c
-        src/http/router.c
-        src/http/run.c
+        lib/io/uring.c
+        lib/io/coro.c
+        lib/io/switch_x86_64.S
+        lib/io/bufring.c
+        lib/io/conn.c
+        lib/io/proactor.c
+        lib/io/pipe.c
+        lib/http/engine.c
+        lib/http/api.c
+        lib/http/router.c
+        lib/http/run.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioma::ioma ALIAS ioma)
 
@@ -72,7 +72,7 @@ target_include_directories(ioma
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ioma>
         PRIVATE
-            src
+            lib
             third_party/picohttpparser)
 target_compile_definitions(ioma PRIVATE _GNU_SOURCE)
 target_compile_options(ioma PRIVATE -Wall -Wextra)

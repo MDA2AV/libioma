@@ -24,8 +24,8 @@ AR      ?= ar
 LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -flto -ffat-lto-objects)
 CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra $(STD)
-CPP     := -D_GNU_SOURCE -Iinclude -Isrc -Ithird_party/picohttpparser
-HDRS    := $(wildcard include/*.h src/*/*.h)
+CPP     := -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
+HDRS    := $(wildcard include/*.h lib/*/*.h)
 PTHREAD := -pthread
 
 VERSION := 0.1.0
@@ -57,10 +57,10 @@ libioma.so: $(PICOBJ)
 	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD)
 
 # --- static objects (used by libioma.a and the examples) ---
-obj/%.o: src/%.c $(HDRS)
+obj/%.o: lib/%.c $(HDRS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -c $< -o $@
-obj/io/switch_x86_64.o: src/io/switch_x86_64.S
+obj/io/switch_x86_64.o: lib/io/switch_x86_64.S
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(CPP) -c $< -o $@
 obj/picohttpparser.o: third_party/picohttpparser/picohttpparser.c
@@ -68,10 +68,10 @@ obj/picohttpparser.o: third_party/picohttpparser/picohttpparser.c
 	$(CC) $(CFLAGS) -w -Ithird_party/picohttpparser -c $< -o $@
 
 # --- position-independent objects (used by libioma.so) ---
-obj/pic/%.o: src/%.c $(HDRS)
+obj/pic/%.o: lib/%.c $(HDRS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -fPIC -c $< -o $@
-obj/pic/io/switch_x86_64.o: src/io/switch_x86_64.S
+obj/pic/io/switch_x86_64.o: lib/io/switch_x86_64.S
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(CPP) -fPIC -c $< -o $@
 obj/pic/picohttpparser.o: third_party/picohttpparser/picohttpparser.c

@@ -6,7 +6,7 @@ buffer group on every request and overflows the per-connection queue at the firs
 
     gcc -O2 -g -Wall -Iinclude -Ithird_party/picohttpparser -pthread \\
         -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4 \\
-        playground/hello/main.c src/*.c src/*.S \\
+        playground/hello/main.c lib/*/*.c lib/io/*.S \\
         third_party/picohttpparser/picohttpparser.c -o ioma-tiny
 
 At shutdown the server must report "0 still open" on every worker.
