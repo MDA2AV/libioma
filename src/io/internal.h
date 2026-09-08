@@ -14,9 +14,7 @@
 
 /* ── constants ─────────────────────────────────────────────────────────────────────────── */
 
-#define BGID     1                                /* the one provided-buffer group per worker */
 #define RX_MASK  (RX_QUEUE  - 1U)
-#define BUF_MASK (BUF_COUNT - 1U)
 
 #ifndef CONN_POOL_MAX
 #define CONN_POOL_MAX 1024                        /* idle conn_t kept warm per worker         */
@@ -54,13 +52,6 @@ typedef struct op {
 
 /* proactor.c */
 struct io_uring_sqe *ioma__sqe(proactor_t *p);   /* claim an SQE; flushes without waiting if the SQ is full */
-
-/* bufring.c */
-void ioma__return_buf(proactor_t *p, uint16_t buf_id);   /* stage a buffer's return; published per batch  */
-void ioma__bufring_publish(proactor_t *p);            /* publish staged returns: one atomic release    */
-void ioma__bufring_init(proactor_t *p);           /* bufring.c: map, register, fill          */
-void ioma__bufring_unregister(proactor_t *p);     /* bufring.c: before uring_exit            */
-void ioma__bufring_unmap(proactor_t *p);          /* bufring.c: after uring_exit             */
 
 /* ── connections (conn.c) ──────────────────────────────────────────────────────────────── */
 

@@ -33,7 +33,7 @@ static void cur_done(ioma_pipereader *pr)
     if (!pr->has_cur || pr->cur_pos < pr->cur.len || (pr->run_in_cur && pr->run_len))
         return;
     if (!pr->cur_is_pinned)
-        ioma__return_buf(pr->conn->p, pr->cur.buf_id);
+        ioma__bufring_return(&pr->conn->p->bufs, pr->cur.buf_id);
     pr->has_cur       = false;
     pr->cur_is_pinned = false;
     pr->cur_pos       = 0;
@@ -77,7 +77,7 @@ static bool gather(ioma_pipereader *pr)
 /* A buffer that cannot be used: back to the ring, and the reader is done. */
 static int refuse(ioma_pipereader *pr, const struct rx_item *item)
 {
-    ioma__return_buf(pr->conn->p, item->buf_id);
+    ioma__bufring_return(&pr->conn->p->bufs, item->buf_id);
     pr->error = IOMA_PIPE_FULL;
     return IOMA_PIPE_FULL;
 }
@@ -111,7 +111,7 @@ static int more(ioma_pipereader *pr)
     }
     memcpy(pr->buf + pr->buf_end, item.ptr, item.len);
     pr->buf_end += item.len;
-    ioma__return_buf(pr->conn->p, item.buf_id);
+    ioma__bufring_return(&pr->conn->p->bufs, item.buf_id);
     return 1;
 }
 
@@ -238,7 +238,7 @@ void ioma_pipereader_release(ioma_pipereader *pr)
         if (pr->cur_is_pinned)
             pr->cur_is_pinned = false;                   /* it lives on as the current buffer */
         else
-            ioma__return_buf(pr->conn->p, pr->pinned.buf_id);
+            ioma__bufring_return(&pr->conn->p->bufs, pr->pinned.buf_id);
         pr->has_pinned = false;
     }
     cur_done(pr);
@@ -247,9 +247,9 @@ void ioma_pipereader_release(ioma_pipereader *pr)
 void ioma_pipereader_close(ioma_pipereader *pr)
 {
     if (pr->has_cur && !pr->cur_is_pinned)
-        ioma__return_buf(pr->conn->p, pr->cur.buf_id);
+        ioma__bufring_return(&pr->conn->p->bufs, pr->cur.buf_id);
     if (pr->has_pinned)
-        ioma__return_buf(pr->conn->p, pr->pinned.buf_id);
+        ioma__bufring_return(&pr->conn->p->bufs, pr->pinned.buf_id);
     pr->has_cur = pr->has_pinned = pr->cur_is_pinned = false;
 }
 

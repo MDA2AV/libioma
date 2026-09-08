@@ -185,7 +185,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 
     if (result <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
         if (has_buf)
-            ioma__return_buf(p, buf_id);
+            ioma__bufring_return(&p->bufs, buf_id);
         if (!c->eof) {
             c->eof = true;
             c->err = result;
@@ -197,11 +197,11 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (c->closed) {
-        ioma__return_buf(p, buf_id);                          /* the handler is gone; nobody will read it */
+        ioma__bufring_return(&p->bufs, buf_id);                          /* the handler is gone; nobody will read it */
     } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
         /* The handler is not draining. Rather than let one peer hoard the buffer group, end its
          * input: the next read sees -ENOBUFS. */
-        ioma__return_buf(p, buf_id);
+        ioma__bufring_return(&p->bufs, buf_id);
         if (!c->eof) {
             c->eof = true;
             c->err = -ENOBUFS;
@@ -211,7 +211,7 @@ void ioma__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
         wake_reader(c);
     } else {
         struct rx_item *item = &c->rx[c->rx_tail++ & RX_MASK];
-        item->ptr = p->slab + (size_t)buf_id * BUF_SIZE;
+        item->ptr = ioma__bufring_at(&p->bufs, buf_id);
         item->len = (uint32_t)result;
         item->buf_id = buf_id;
         wake_reader(c);
@@ -260,7 +260,7 @@ static void conn_close(conn_t *c)
         c->refs--;                                   /* the recv side's reference; ours, dropped last, keeps c alive */
     }
     while (c->rx_head != c->rx_tail)
-        ioma__return_buf(p, c->rx[c->rx_head++ & RX_MASK].buf_id);
+        ioma__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
 
     close_socket(p, c->fd);
     conn_unref(c);
@@ -307,7 +307,7 @@ int await_recv(conn_t *c, void *buf, size_t len)
             item->ptr += n;
             item->len -= (uint32_t)n;
             if (item->len == 0) {
-                ioma__return_buf(c->p, item->buf_id);
+                ioma__bufring_return(&c->p->bufs, item->buf_id);
                 c->rx_head++;
             }
             return (int)n;

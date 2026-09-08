@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "io/bufring.h"
 #include "io/conn.h"
 #include "io/coro.h"
 #include "io/uring.h"
@@ -21,13 +22,6 @@
 /* tunables (override with -D) */
 #ifndef RING_ENTRIES
 #define RING_ENTRIES 4096                 /* SQ depth; the CQ is twice that                     */
-#endif
-#ifndef BUF_COUNT
-#define BUF_COUNT    4096                 /* provided recv buffers per worker, power of two     */
-#endif
-static_assert(((unsigned)BUF_COUNT & ((unsigned)BUF_COUNT - 1U)) == 0 && BUF_COUNT <= 65536, "BUF_COUNT: a power of two, at most 65536 (16-bit buffer ids)");
-#ifndef BUF_SIZE
-#define BUF_SIZE     2048                 /* bytes per recv buffer (a request rarely needs more) */
 #endif
 #ifndef STACK_SIZE
 #define STACK_SIZE   (64UL * 1024)        /* per coroutine, plus a guard page                   */
@@ -50,11 +44,7 @@ struct proactor {
     /* owned by the worker thread */
     struct uring              ring;
     int                       listen_fd;
-    struct io_uring_buf_ring *buf_ring;   /* kernel-shared ring of buffer descriptors          */
-    uint8_t                  *slab;       /* BUF_COUNT x BUF_SIZE                              */
-    unsigned                  buf_tail;   /* local tail, published to buf_ring->tail           */
-    bool                      buffers_returned;   /* since the last starved sweep              */
-    bool                      buf_dirty;          /* staged buffer returns awaiting one publish */
+    struct bufring            bufs;       /* the provided buffers recvs deliver into           */
     conn_t                  **starved;    /* connections parked on -ENOBUFS                    */
     unsigned                  nstarved, cap_starved;
     uint64_t                  starved_total;      /* recvs that found the ring empty, ever       */

@@ -118,9 +118,9 @@ static void run_ready(proactor_t *p)
  * connection never spins the loop. */
 static void rearm_starved(proactor_t *p)
 {
-    if (p->nstarved == 0 || !p->buffers_returned)
+    if (p->nstarved == 0 || !p->bufs.returned)
         return;
-    p->buffers_returned = false;
+    p->bufs.returned = false;
     for (unsigned i = 0; i < p->nstarved; i++)
         ioma__arm_recv(p, p->starved[i]);            /* keeps the ref it already holds */
     p->nstarved = 0;
@@ -218,7 +218,7 @@ void proactor_run(proactor_t *p)
     unsigned slots = fixed_slots();                  /* optional: sockets live in a file table  */
     if (slots)
         uring_register_files_sparse(&p->ring, slots);
-    ioma__bufring_init(p);
+    ioma__bufring_init(&p->bufs, &p->ring, p->id);
     p->listen_fd = listener_open(p->port);
     arm_accept(p);
     fprintf(stderr, "[w%d] listening on 0.0.0.0:%u (cpu %d, %u x %u B recv buffers, ring %u%s%s%s)\n",
@@ -231,7 +231,7 @@ void proactor_run(proactor_t *p)
     while (!*p->stop) {
         run_ready(p);
         rearm_starved(p);
-        ioma__bufring_publish(p);
+        ioma__bufring_publish(&p->bufs);
 
         rc = uring_submit_wait(&p->ring, 1, &wait_at_most);    /* one syscall per batch */
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {
@@ -251,9 +251,9 @@ void proactor_run(proactor_t *p)
     /* Sockets, then the ring (which cancels every in-flight op and drops its buffer references),
      * then the memory the kernel could still have referenced. */
     close(p->listen_fd);
-    ioma__bufring_unregister(p);
+    ioma__bufring_unregister(&p->bufs, &p->ring);
     uring_exit(&p->ring);
-    ioma__bufring_unmap(p);
+    ioma__bufring_unmap(&p->bufs);
     free(p->starved);
     ioma__conn_pool_drain(p);
     coro_pool_drain();
