@@ -10,6 +10,7 @@
 #include <netinet/tcp.h>
 #include <pthread.h>
 #include <sched.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
