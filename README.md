@@ -14,7 +14,7 @@ Run `make` in the repo root. It produces `libioxd.a`, `libioxd.so` and the demo 
 
 ## Run
 
-`./ioxd-hello` is the smallest server: two routes, `GET /hello/:name` and a `POST /repeat/:times`
+`./ioxd-hello` is the smallest server: three routes, `GET /hello/:name`, a `GET /users/:id` that writes JSON, and a `POST /repeat/:times`
 that reads the body and streams it back, one worker per core on port 8080. Ctrl-C stops it. A server exercising every feature of the request and response model
 is `tests/server.c`, the fixture the test suites run against.
 

@@ -1,8 +1,9 @@
 /*
- * playground/hello - a small libioxd server: two routes, one worker per core.
+ * playground/hello - a small libioxd server: three routes, one worker per core.
  *
  *     make && ./ioxd-hello
  *     curl http://127.0.0.1:8080/hello/diogo
+ *     curl http://127.0.0.1:8080/users/42
  *     curl -d 'knock' http://127.0.0.1:8080/repeat/25
  *
  * Against an installed libioxd:  cc main.c $(pkg-config --cflags --libs ioxd) -o hello
@@ -41,9 +42,39 @@ static void repeat(ioxd_ctx *ctx)
     }
 }
 
+/* GET /users/:id - a JSON document, written as you go: each call puts its bytes straight into the
+ * reply, escaped, with the commas and nesting tracked for you; nothing is built up in memory
+ * first. ioxd_json_reply sets the content type. A document larger than the slab streams out
+ * chunked while the writer keeps going. */
+static void user(ioxd_ctx *ctx)
+{
+    int64_t id;
+    if (!ioxd_to_i64(ctx->req.route_params[0].value, &id)) {
+        ctx->res.status = 400;
+        ioxd_text(ctx, "the id must be an integer\n");
+        return;
+    }
+    ioxd_json j = ioxd_json_reply(ctx);
+    ioxd_json_object(&j);
+        ioxd_json_key(&j, "id");      ioxd_json_int(&j, id);
+        ioxd_json_key(&j, "name");    ioxd_json_cstr(&j, "Zo\xc3\xab \"Z\" O'Neil");   /* escaped on the way out */
+        ioxd_json_key(&j, "active");  ioxd_json_bool(&j, id % 2 == 0);
+        ioxd_json_key(&j, "score");   ioxd_json_double(&j, 0.1 * (double)id);
+        ioxd_json_key(&j, "address"); ioxd_json_object(&j);
+            ioxd_json_key(&j, "city"); ioxd_json_cstr(&j, "Porto");
+            ioxd_json_key(&j, "zip");  ioxd_json_null(&j);
+        ioxd_json_end(&j);
+        ioxd_json_key(&j, "tags");    ioxd_json_array(&j);
+            ioxd_json_cstr(&j, "new");
+            ioxd_json_cstr(&j, "c23");
+        ioxd_json_end(&j);
+    ioxd_json_end(&j);
+}
+
 int main(void)
 {
     IOXD_GET ("/hello/:name",   hello);
+    IOXD_GET ("/users/:id",     user);
     IOXD_POST("/repeat/:times", repeat);
     return ioxd_run(0, 8080);
 }
