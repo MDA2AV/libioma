@@ -2,6 +2,7 @@
  * run.c - ioma_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
  */
 #include "http/internal.h"
+#include "io/pipe.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -53,7 +54,9 @@ static void raise_nofile(void)
 }
 
 /* Start the workers (workers <= 0: one per available core) and block until a stop signal. */
-int ioma_run(int workers, int port)
+/* Worker threads, one proactor each, serving `port` with `handler` on every connection until
+ * SIGINT/SIGTERM. What ioma_run and ioma_run_pipes share. */
+static int run_workers(int workers, int port, handler_fn handler)
 {
     if (workers <= 0)
         workers = cpu_count();
@@ -71,8 +74,6 @@ int ioma_run(int workers, int port)
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    ioma__router_build();                          /* the routes, resolved once, shared read-only */
-
     proactor_t *ws = calloc((size_t)workers, sizeof *ws);
     pthread_t  *th = calloc((size_t)workers, sizeof *th);
     if (!ws || !th) {
@@ -86,7 +87,7 @@ int ioma_run(int workers, int port)
         ws[i].id      = i;
         ws[i].cpu     = i;
         ws[i].port    = (uint16_t)port;
-        ws[i].handler = ioma__serve;
+        ws[i].handler = handler;
         ws[i].stop    = &g_stop;
         if (pthread_create(&th[i], nullptr, worker_thread, &ws[i]) != 0) {
             perror("pthread_create");
@@ -100,4 +101,38 @@ int ioma_run(int workers, int port)
     free(th);
     free(ws);
     return 0;
+}
+
+int ioma_run(int workers, int port)
+{
+    ioma__router_build();                          /* the routes, resolved once, shared read-only */
+    return run_workers(workers, port, ioma__serve);
+}
+
+/* ── pipes ─────────────────────────────────────────────────────────────────────────────── */
+
+#ifndef IOMA_PIPE_BUF
+#define IOMA_PIPE_BUF  16384                      /* a pipe's gathering buffer (kept + live bytes) */
+#endif
+#ifndef IOMA_PIPE_SLAB
+#define IOMA_PIPE_SLAB 8192                       /* a pipe's write slab                          */
+#endif
+
+static ioma_pipe_handler g_pipe_handler;
+
+/* The connection handler behind ioma_run_pipes: a pipe over the connection, the handler on it. */
+static void serve_pipe(conn_t *conn)
+{
+    char             gather[IOMA_PIPE_BUF];
+    char             slab[IOMA_PIPE_SLAB];
+    struct ioma_pipe pipe;
+    ioma__pipe_init(&pipe, conn, gather, sizeof gather, slab, sizeof slab);
+    g_pipe_handler(&pipe);
+    ioma__pipe_close(&pipe);
+}
+
+int ioma_run_pipes(int workers, int port, ioma_pipe_handler fn)
+{
+    g_pipe_handler = fn;
+    return run_workers(workers, port, serve_pipe);
 }

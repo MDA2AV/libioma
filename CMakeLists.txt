@@ -59,6 +59,7 @@ add_library(ioma
         src/io/bufring.c
         src/io/conn.c
         src/io/proactor.c
+        src/io/pipe.c
         src/http/engine.c
         src/http/api.c
         src/http/router.c
@@ -97,6 +98,8 @@ if(IOMA_EXAMPLES)
     target_link_libraries(ioma-hello PRIVATE ioma::ioma)
     add_executable(ioma-test-server tests/server.c)
     target_link_libraries(ioma-test-server PRIVATE ioma::ioma)
+    add_executable(ioma-pipe-server tests/pipe-server.c)
+    target_link_libraries(ioma-pipe-server PRIVATE ioma::ioma)
     add_executable(ioma-unit tests/unit.c)
     target_link_libraries(ioma-unit PRIVATE ioma::ioma)
     enable_testing()

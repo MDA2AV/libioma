@@ -36,12 +36,13 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include/ioma
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := io/uring io/coro io/bufring io/conn io/proactor http/engine http/api http/router http/run
+UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 
 EXAMPLES := ioma-hello
 TESTSRV  := tests/ioma-test-server
+PIPESRV  := tests/ioma-pipe-server
 UNIT     := tests/ioma-unit
 
 .PHONY: all lib examples check clean install uninstall
@@ -88,14 +89,21 @@ $(TESTSRV): tests/server.c libioma.a
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioma.a -o $@ $(PTHREAD)
 $(UNIT): tests/unit.c libioma.a
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioma.a -o $@ $(PTHREAD)
+$(PIPESRV): tests/pipe-server.c libioma.a
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioma.a -o $@ $(PTHREAD)
 
 CHECK_PORT ?= 8099
-check: $(TESTSRV) $(UNIT)
+PIPE_PORT  ?= 8100
+check: $(TESTSRV) $(UNIT) $(PIPESRV)
 	@./$(UNIT) || exit 1; \
 	 IOMA_WORKERS=2 IOMA_PORT=$(CHECK_PORT) ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
 	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(CHECK_PORT) " && break; sleep 0.1; done; \
 	 python3 tests/smoke.py $(CHECK_PORT); s=$$?; python3 tests/stress.py $(CHECK_PORT); t=$$?; \
-	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t))
+	 kill -INT $$pid; wait $$pid 2>/dev/null; \
+	 ./$(PIPESRV) $(PIPE_PORT) >/dev/null 2>&1 & pid=$$!; \
+	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(PIPE_PORT) " && break; sleep 0.1; done; \
+	 python3 tests/pipes.py $(PIPE_PORT); u=$$?; \
+	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t | u))
 
 # --- pkg-config ---
 ioma.pc: ioma.pc.in
@@ -118,4 +126,4 @@ uninstall:
 	rm -f $(DESTDIR)$(PCDIR)/ioma.pc
 
 clean:
-	rm -rf obj libioma.a libioma.so $(EXAMPLES) $(TESTSRV) $(UNIT) ioma.pc
+	rm -rf obj libioma.a libioma.so $(EXAMPLES) $(TESTSRV) $(PIPESRV) $(UNIT) ioma.pc

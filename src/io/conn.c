@@ -278,6 +278,23 @@ void ioma__conn_main(void *arg)
 
 /* Copy the next delivered slice into buf, parking while the queue is empty. Returns the byte
  * count, 0 when the peer closed, or -errno. A fully consumed buffer goes back to the ring. */
+/* The next received buffer, whole: the caller owns it until ioma__return_buf. Suspends until one
+ * arrives; 1 with the item, 0 at the end of input, <0 an error. */
+int ioma__await_item(conn_t *c, struct rx_item *out)
+{
+    for (;;) {
+        if (c->rx_head != c->rx_tail) {
+            *out = c->rx[c->rx_head & RX_MASK];
+            c->rx_head++;
+            return 1;
+        }
+        if (c->eof)
+            return c->err;
+        c->waiter = coro_current();
+        coro_yield();                                /* ioma__on_recv wakes us */
+    }
+}
+
 int await_recv(conn_t *c, void *buf, size_t len)
 {
     if (len == 0)

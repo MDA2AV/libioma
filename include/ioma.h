@@ -269,6 +269,41 @@ ioma_endpoint *ioma__endpoint(const char *method, struct ioma_endpoint_args args
 #define IOMA_DELETE(...)        IOMA_ROUTE("DELETE", __VA_ARGS__)
 #define IOMA_DEFAULT(fn)        ioma_default(fn)
 
+/* ── pipes ─────────────────────────────────────────────────────────────────────────────── */
+
+/* A connection as a pipe: a reader over the bytes the kernel received and a writer over a slab.
+ * Every call that must wait suspends the connection's coroutine, and the worker's loop resumes
+ * it on the completion, so a handler reads and writes in straight-line code. The HTTP engine is
+ * one such handler; ioma_run_pipes runs one of yours on raw TCP connections instead. */
+typedef struct ioma_pipe ioma_pipe;
+typedef void (*ioma_pipe_handler)(ioma_pipe *pipe);
+int ioma_run_pipes(int workers, int port, ioma_pipe_handler fn);      /* like ioma_run, without HTTP */
+
+/* Reading. The live bytes are the ones received and not yet consumed, always handed out as one
+ * contiguous span - in place in the kernel's buffer when they lie within one. read returns them
+ * once some are unexamined, otherwise it waits for more; examine says how many were looked at
+ * without being consumed, so the next read waits for more rather than returning the same bytes;
+ * drop consumes; keep consumes but leaves the bytes where they are, contiguous with earlier kept
+ * bytes and valid until release; copy is the plain read into your own buffer. read and copy
+ * return 0 at the end of input, IOMA_PIPE_GONE on a dead peer, IOMA_PIPE_FULL when kept plus
+ * live bytes would exceed the pipe's buffer. */
+#define IOMA_PIPE_GONE (-1)
+#define IOMA_PIPE_FULL (-2)
+int         ioma_pipe_read   (ioma_pipe *pipe, ioma_slice *live);
+void        ioma_pipe_examine(ioma_pipe *pipe, size_t n);
+void        ioma_pipe_drop   (ioma_pipe *pipe, size_t n);
+const char *ioma_pipe_keep   (ioma_pipe *pipe, size_t n);
+void        ioma_pipe_release(ioma_pipe *pipe);
+int         ioma_pipe_copy   (ioma_pipe *pipe, void *dst, size_t n);
+
+/* Writing: a slab, sent on flush. reserve n bytes to write into directly and advance by what was
+ * written, or write to copy in; send is write then flush. -1 once the peer is gone. */
+void  *ioma_pipe_reserve(ioma_pipe *pipe, size_t n);
+void   ioma_pipe_advance(ioma_pipe *pipe, size_t n);
+int    ioma_pipe_write  (ioma_pipe *pipe, const void *data, size_t n);
+int    ioma_pipe_flush  (ioma_pipe *pipe);
+int    ioma_pipe_send   (ioma_pipe *pipe, const void *data, size_t n);
+
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
 /* Start `workers` proactor threads (<= 0: one per core) serving HTTP on `port`, and block until
