@@ -4,6 +4,7 @@
  */
 #include <ioma.h>
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -186,13 +187,78 @@ static void test_kv_parse(void)
     CHECK(ioma_kv_parse("page=12", 7, kv, 8, arena, sizeof arena) == 1 && ioma_to_int(kv[0].value, &v) && v == 12);
 }
 
+/* The JSON writer into memory: what a document looks like, byte for byte. */
+static bool json_is(const char *want, void (*write)(ioma_json *))
+{
+    char   buf[512];
+    size_t len;
+    ioma_json j = ioma_json_mem(buf, sizeof buf, &len);
+    write(&j);
+    return !j.failed && len == strlen(want) && memcmp(buf, want, len) == 0;
+}
+static void doc_nested(ioma_json *j)
+{
+    ioma_json_object(j);
+    ioma_json_key(j, "id");    ioma_json_int(j, 42);
+    ioma_json_key(j, "name");  ioma_json_cstr(j, "Zo\xc3\xab \"Z\" O'Neil\n\t\x01");
+    ioma_json_key(j, "tags");  ioma_json_array(j); ioma_json_cstr(j, "a"); ioma_json_cstr(j, "b"); ioma_json_end(j);
+    ioma_json_key(j, "empty"); ioma_json_object(j); ioma_json_end(j);
+    ioma_json_key(j, "none");  ioma_json_null(j);
+    ioma_json_key(j, "ok");    ioma_json_bool(j, true);
+    ioma_json_key(j, "raw");   ioma_json_raw(j, S("[1,2]"));
+    ioma_json_end(j);
+}
+static void doc_numbers(ioma_json *j)
+{
+    ioma_json_array(j);
+    ioma_json_int(j, 0); ioma_json_int(j, -7); ioma_json_int(j, INT64_MIN); ioma_json_int(j, INT64_MAX);
+    ioma_json_uint(j, UINT64_MAX);
+    ioma_json_double(j, 0.1); ioma_json_double(j, 2.5); ioma_json_double(j, -0.0); ioma_json_double(j, 1e21);
+    ioma_json_double(j, 9007199254740993.0); ioma_json_double(j, 1.0 / 3.0);
+    ioma_json_double(j, INFINITY); ioma_json_double(j, NAN);
+    ioma_json_end(j);
+}
+static void doc_top_level(ioma_json *j) { ioma_json_cstr(j, "just a string"); }
+static void doc_array_of_arrays(ioma_json *j)
+{
+    ioma_json_array(j);
+    ioma_json_array(j); ioma_json_int(j, 1); ioma_json_end(j);
+    ioma_json_array(j); ioma_json_end(j);
+    ioma_json_end(j);
+}
+
+static void test_json(void)
+{
+    CHECK(json_is("{\"id\":42,\"name\":\"Zo\xc3\xab \\\"Z\\\" O'Neil\\n\\t\\u0001\",\"tags\":[\"a\",\"b\"],\"empty\":{},\"none\":null,\"ok\":true,\"raw\":[1,2]}", doc_nested));
+    CHECK(json_is("[0,-7,-9223372036854775808,9223372036854775807,18446744073709551615,0.1,2.5,-0,1e+21,9007199254740992,0.3333333333333333,null,null]", doc_numbers));
+    CHECK(json_is("\"just a string\"", doc_top_level));
+    CHECK(json_is("[[1],[]]", doc_array_of_arrays));
+
+    char   small[8];
+    size_t len;
+    ioma_json j = ioma_json_mem(small, sizeof small, &len);
+    CHECK(ioma_json_object(&j) && ioma_json_key(&j, "k"));      /* {"k": is 5 bytes */
+    CHECK(!ioma_json_cstr(&j, "too long for what is left") && j.failed);
+    CHECK(!ioma_json_int(&j, 1));                                /* failed stays failed */
+
+    char   deep[512];
+    j = ioma_json_mem(deep, sizeof deep, &len);
+    bool ok = true;
+    for (int i = 0; i < IOMA_JSON_DEPTH; i++)
+        ok = ok && ioma_json_array(&j);
+    CHECK(ok && !ioma_json_array(&j));                           /* one level too many */
+    j = ioma_json_mem(deep, sizeof deep, &len);
+    CHECK(!ioma_json_end(&j));                                   /* nothing open */
+}
+
 int main(void)
 {
     test_integers();
+    test_json();
     test_doubles();
     test_bools();
     test_strings();
     test_kv_parse();
-    printf("unit: %d checks, %d failed\n", checks, failures);
+    printf("unit: %d checks, %d failed\n", checks, failures);   /* test_json ran first, above */
     return failures ? 1 : 0;
 }

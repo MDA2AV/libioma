@@ -270,6 +270,57 @@ ioma_endpoint *ioma__endpoint(const char *method, struct ioma_endpoint_args args
 #define IOMA_DELETE(...)        IOMA_ROUTE("DELETE", __VA_ARGS__)
 #define IOMA_DEFAULT(fn)        ioma_default(fn)
 
+/* ── JSON, written as you go ───────────────────────────────────────────────────────────── */
+
+/* A forward-only JSON writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation. The
+ * bytes go straight into the reply - or a raw pipe, or a buffer - escaped as they are written,
+ * and stream out as the slab fills. Nesting and commas are tracked, so a handler just says what
+ * it means:
+ *
+ *     ioma_json j = ioma_json_reply(ctx);                  // content-type: application/json
+ *     ioma_json_object(&j);
+ *         ioma_json_key(&j, "id");    ioma_json_int(&j, id);
+ *         ioma_json_key(&j, "name");  ioma_json_string(&j, name);
+ *         ioma_json_key(&j, "tags");  ioma_json_array(&j);
+ *             ioma_json_cstr(&j, "new");
+ *         ioma_json_end(&j);
+ *     ioma_json_end(&j);
+ *
+ * Strings are taken as UTF-8 and passed through; '"', '\' and control characters are escaped.
+ * Every call returns false once the sink is gone (the peer left; the buffer is full) or the
+ * nesting passed IOMA_JSON_DEPTH, and the rest is dropped, so checking the last call is enough. */
+#define IOMA_JSON_DEPTH 64
+typedef struct ioma_json {
+    enum { IOMA_JSON_TO_REPLY, IOMA_JSON_TO_PIPE, IOMA_JSON_TO_MEM } kind;
+    union {
+        ioma_ctx         *ctx;
+        struct ioma_pipe *pipe;
+        struct { char *p; size_t cap, *len; } mem;
+    } to;
+    uint64_t has_value;                         /* per level: a value is there, so a comma is due */
+    uint64_t is_object;                         /* per level: it closes with '}' rather than ']'  */
+    unsigned depth;
+    bool     after_key;                         /* the next value follows a key: no comma        */
+    bool     failed;
+} ioma_json;
+
+ioma_json ioma_json_reply(ioma_ctx *ctx);                        /* into the reply; sets its content type */
+ioma_json ioma_json_pipe (struct ioma_pipe *pipe);               /* into a raw pipe's slab                */
+ioma_json ioma_json_mem  (char *buf, size_t cap, size_t *len);   /* into memory; *len is what was written */
+
+bool ioma_json_object(ioma_json *j);                             /* {                          */
+bool ioma_json_array (ioma_json *j);                             /* [                          */
+bool ioma_json_end   (ioma_json *j);                             /* } or ], whichever is open  */
+bool ioma_json_key   (ioma_json *j, const char *name);           /* "name":                    */
+bool ioma_json_string(ioma_json *j, ioma_slice s);               /* "...", escaped             */
+bool ioma_json_cstr  (ioma_json *j, const char *s);
+bool ioma_json_int   (ioma_json *j, int64_t v);
+bool ioma_json_uint  (ioma_json *j, uint64_t v);
+bool ioma_json_double(ioma_json *j, double v);                   /* the shortest that reads back the same; nan and inf become null */
+bool ioma_json_bool  (ioma_json *j, bool v);
+bool ioma_json_null  (ioma_json *j);
+bool ioma_json_raw   (ioma_json *j, ioma_slice json);            /* already JSON: copied as is */
+
 /* ── pipes ─────────────────────────────────────────────────────────────────────────────── */
 
 /* A connection as a pipe: a reader over the bytes the kernel received and a writer over a slab.

@@ -282,6 +282,18 @@ Two switches in, two out — tens of nanoseconds. The cost of a request is the k
 
 ---
 
+## 8. JSON, written as you go
+
+`lib/json/json.c` is a forward-only writer, the shape of .NET's `Utf8JsonWriter`: `ioma_json_object`,
+`ioma_json_key`, `ioma_json_int`, `ioma_json_string`, `ioma_json_end` and so on, each putting its
+bytes straight into a sink - the reply through `ioma_reserve`/`ioma_advance`, a raw pipe, or a
+memory buffer - with no tree and no allocation. Strings are escaped as they are copied, a safe run
+at a time; integers go through a digit loop; a double takes the shortest of 15, 16 or 17
+significant digits that reads back as the same value, with the decimal point forced to '.'
+whatever the locale says. Nesting and the commas it owes are two bits per level, so a document
+deeper than `IOMA_JSON_DEPTH` fails cleanly. A reply larger than the slab streams out chunked
+while the writer keeps going, which is the whole point of writing as you go.
+
 ## Tunables
 
 | name | default | what |

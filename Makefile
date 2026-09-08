@@ -36,7 +36,7 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include/ioma
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run
+UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run json/json
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 

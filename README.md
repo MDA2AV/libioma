@@ -39,7 +39,8 @@ under a group at `/api` answers at `/api/users/:id`, wrapped by the middleware o
 is `NULL`, with `ioma_use` for middleware on everything. `ioma_run` resolves it all once into a segment tree and flat
 chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port.
 Underneath, a connection is a pipe: `ioma_run_pipes` hands a handler of your own the reader and writer the
-HTTP engine uses, for raw TCP, with the same suspend-and-resume. The same registrations read as a script with the `IOMA_GET`, `IOMA_GROUP` and `IOMA_USE` macros, a group's block
+HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with
+the `ioma_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills. The same registrations read as a script with the `IOMA_GET`, `IOMA_GROUP` and `IOMA_USE` macros, a group's block
 nesting the routes below it; the hello example and `tests/server.c` are written that way.
 `playground/hello/main.c` is a complete example.
 

@@ -64,6 +64,7 @@ add_library(ioma
         lib/http/api.c
         lib/http/router.c
         lib/http/run.c
+        lib/json/json.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioma::ioma ALIAS ioma)
 

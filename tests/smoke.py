@@ -303,6 +303,40 @@ except Exception:
     st, hd, body = None, {}, b""
 s.close()
 results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+# --- the JSON writer: a document written as you go, and one that streams ---
+st, hd, body = get("/json/42")
+results.append(check("GET /json/:id -> escaped document, application/json",
+                     st == 200 and hd.get("content-type") == "application/json"
+                     and body == b'{"id":42,"name":"Zo\xc3\xab \\"Z\\" O\'Neil\\n","ratio":0.1,"ok":true,"none":null,"tags":["a","b"]}'))
+st, hd, body = get("/json/x")
+results.append(check("GET /json/x -> 400 from the handler", st == 400))
+
+
+def dechunk(raw):
+    out = b""
+    while True:
+        line, _, raw = raw.partition(b"\r\n")
+        n = int(line.split(b";")[0], 16)
+        if n == 0:
+            return out
+        out += raw[:n]
+        raw = raw[n + 2:]
+
+
+s = connect()
+s.send(b"GET /json/big?n=3000 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+raw = b""
+while True:
+    piece = s.recv(65536)
+    if not piece:
+        break
+    raw += piece
+s.close()
+head, _, rest = raw.partition(b"\r\n\r\n")
+doc = __import__("json").loads(dechunk(rest))
+results.append(check("GET /json/big -> 3000 objects streamed chunked, valid JSON",
+                     b"transfer-encoding: chunked" in head.lower() and len(doc) == 3000 and doc[2999] == {"i": 2999, "sq": 2999 * 2999}))
+
 # --- groups: prefixes chain, middleware wraps outer to inner, one endpoint's own middleware ---
 st, hd, body = get("/api/ping")
 results.append(check("GET /api/ping -> group prefix, group middleware, root middleware",

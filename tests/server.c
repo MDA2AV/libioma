@@ -223,6 +223,47 @@ static void endpoint_header(ioma_ctx *ctx, ioma_next *next)
     ioma_next_run(ctx, next);
 }
 
+/* GET /json/:id - a small document, written as you go into the reply. */
+static void json_item(ioma_ctx *ctx)
+{
+    int64_t id;
+    if (!ioma_to_i64(ctx->req.route_params[0].value, &id)) {
+        ctx->res.status = 400;
+        ioma_text(ctx, "id must be an integer\n");
+        return;
+    }
+    ioma_json j = ioma_json_reply(ctx);
+    ioma_json_object(&j);
+    ioma_json_key(&j, "id");    ioma_json_int(&j, id);
+    ioma_json_key(&j, "name");  ioma_json_cstr(&j, "Zo\xc3\xab \"Z\" O'Neil\n");
+    ioma_json_key(&j, "ratio"); ioma_json_double(&j, 0.1);
+    ioma_json_key(&j, "ok");    ioma_json_bool(&j, true);
+    ioma_json_key(&j, "none");  ioma_json_null(&j);
+    ioma_json_key(&j, "tags");  ioma_json_array(&j);
+        ioma_json_cstr(&j, "a");
+        ioma_json_cstr(&j, "b");
+    ioma_json_end(&j);
+    ioma_json_end(&j);
+}
+
+/* GET /json/big?n=N - N objects in an array, far more than the slab holds: it streams, chunked. */
+static void json_big(ioma_ctx *ctx)
+{
+    int64_t n = 2000;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioma_slice_eq(ctx->req.params[i].key, "n"))
+            ioma_to_i64(ctx->req.params[i].value, &n);
+    ioma_json j = ioma_json_reply(ctx);
+    ioma_json_array(&j);
+    for (int64_t i = 0; i < n; i++) {
+        ioma_json_object(&j);
+        ioma_json_key(&j, "i");  ioma_json_int(&j, i);
+        ioma_json_key(&j, "sq"); ioma_json_int(&j, i * i);
+        ioma_json_end(&j);
+    }
+    ioma_json_end(&j);
+}
+
 /* Middleware: stamps a Server header, then runs the rest of the chain. Setting headers before
  * calling ioma_next_run means they land even on a reply that streams (afterwards the head may
  * already be on the wire); c->status and the rest are there to inspect on the way back out.
@@ -271,6 +312,8 @@ int main(void)
     IOMA_GET ("/stream",                stream);
     IOMA_POST("/upload",                upload);
     IOMA_POST("/chunks",                chunks);
+    IOMA_GET ("/json/:id",              json_item);
+    IOMA_GET ("/json/big",              json_big);          /* static beside the capture */
     IOMA_DEFAULT(not_found);
 
     /* groups: /api with middleware of its own (IOMA_USE inside a block adds to that group; listing
