@@ -270,11 +270,12 @@ so every argument is type-checked and a wrong signature is a compile error.
 
 1. Bytes arrive. The kernel copies them into a provided buffer and posts a `RECV` CQE.
 2. `enter` returns; dispatch queues the slice on the connection and resumes its coroutine.
-3. `await_recv` copies the slice into `serve`'s buffer and returns the buffer to the ring.
+3. The reader hands `serve` the slice in place - no copy; the buffer stays the request's until it is done.
 4. picohttpparser parses; the route runs; the response is serialized into the head buffer.
 5. `await_send` stages a SEND SQE and yields back to the loop.
 6. The loop finishes the batch and calls `enter` once: the SEND is submitted and the loop waits.
-7. The SEND CQE (`OP` tag) resumes the coroutine; `serve` loops to `await_recv` and parks.
+7. The SEND CQE (`OP` tag) resumes the coroutine; `serve` releases the request's bytes, the buffer
+   goes back to the ring, and the next `read` parks.
 
 Two switches in, two out — tens of nanoseconds. The cost of a request is the kernel's, not ours.
 
