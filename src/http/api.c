@@ -4,6 +4,7 @@
  * Nothing here touches the runtime.
  */
 #include "http/internal.h"
+#include "ioma.h"
 
 #include <errno.h>
 #include <limits.h>

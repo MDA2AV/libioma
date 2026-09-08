@@ -5,13 +5,17 @@
  * drain what was left, then send what was written. All of it runs on the connection's coroutine,
  * so await_recv and await_send simply suspend it and the loop resumes it.
  */
+#include "http/engine.h"
 #include "http/internal.h"
+#include "http/router.h"
 #include "io/pipe.h"
 #include "picohttpparser.h"
 
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef IOMA_REQ_CAP

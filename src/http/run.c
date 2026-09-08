@@ -1,13 +1,16 @@
 /*
  * run.c - ioma_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
  */
-#include "http/internal.h"
+#include "http/engine.h"
+#include "http/router.h"
 #include "io/pipe.h"
 #include "io/proactor.h"
 
 #include <pthread.h>
 #include <sched.h>
 #include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
 #include <unistd.h>

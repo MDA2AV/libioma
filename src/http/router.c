@@ -4,8 +4,10 @@
  * and every worker shares it without a lock. A request costs one walk down the tree and one call
  * through its endpoint's flat middleware chain.
  */
-#include "http/internal.h"
+#include "http/router.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 

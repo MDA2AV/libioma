@@ -1,22 +1,10 @@
 /*
- * http/internal.h - what the HTTP plane's files share with each other. Private; not installed.
- * The plane sits on the I/O plane's interface: io/conn.h, connections and the awaits (run.c also
- * takes io/proactor.h, the worker itself).
+ * http/internal.h - the helpers the HTTP plane's files share and no module owns. Private; not
+ * installed. Each module's own entries are in its header (engine.h, router.h).
  */
 #pragma once
 
-#include "ioma.h"
-#include "io/conn.h"
-
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-void ioma__serve(conn_t *conn);                   /* engine.c: the per-connection HTTP loop  */
-void ioma__dispatch(ioma_ctx *ctx);               /* router.c: middleware chain + endpoint   */
-void ioma__router_build(void);                    /* router.c: resolve the routes, once      */
-
-/* The value of a hex digit, or -1. */
+/* The value of a hex digit, or -1. Percent-decoding (api.c) and chunk sizes (engine.c). */
 static inline int ioma__hexval(unsigned char c)
 {
     if (c >= '0' && c <= '9')
