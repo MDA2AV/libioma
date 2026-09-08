@@ -33,30 +33,43 @@ The HTTP response keeps its head-building on top (first flush builds the head in
 `ioma_write`, `ioma_printf`, `ioma_flush` become thin calls; `ioma_reserve`/`ioma_advance` are new
 on the context, for handlers that format straight into the reply.
 
-**`ioma_reader`** - the connection's received bytes as segments, consumed in place.
+**`ioma_reader`** - the connection's received bytes, one contiguous span at a time.
 
-    struct ioma_segment { const char *p; size_t len; };
-    int    ioma_reader_read   (r, const struct ioma_segment **segs, size_t *n);  /* what is buffered; waits for more when nothing is; 0 at EOF, -1 on error */
-    void   ioma_reader_advance(r, size_t consumed, size_t examined);              /* consumed: returned to the ring; examined: do not wake me until more than this arrives */
-    int    ioma_reader_copy   (r, void *dst, size_t n);                          /* the Stream-style read: up to n bytes into dst */
+    int    ioma_reader_read   (r, ioma_slice *span);        /* what is buffered, contiguous; waits for more when the caller examined it all; 0 at EOF, -1 on error */
+    void   ioma_reader_advance(r, size_t consumed, size_t examined);   /* consumed: gone (provided buffers returned to the ring); examined: do not wake me until more than this arrives */
+    int    ioma_reader_copy   (r, void *dst, size_t n);     /* the Stream-style read: up to n bytes into dst */
 
-The segments are the provided buffers as the kernel filled them (2 KB each, in order). A parser
-that needs contiguity coalesces: parse in place when the data sits in one segment, copy into a
-scratch buffer when it spans. `consumed`/`examined` are Pipelines' contract and what makes
-"read until a full head is here" cheap: the reader does not wake the coroutine for a partial
-head it already examined.
+Why one span and not a list of segments. io_uring hands data over as provided buffers, each a
+pointer and a length, and the reader keeps them as such internally (the rx queue does already).
+But every consumer needs contiguous bytes: picohttpparser takes one buffer, the chunk parser
+takes one buffer, and the request model hands handlers `ioma_slice`s, which are contiguous by
+definition - a header value split across two provided buffers cannot be a slice without a
+copy. A segment-aware parser would not remove that copy, only move it, and the parser would be
+ours to write and to keep fast. So the reader coalesces, and it does so lazily:
+
+- when everything buffered lies in one provided buffer - a whole request head in one receive,
+  the common case - `read` returns that buffer's bytes in place: zero copy, the buffer stays
+  owned by the connection until `advance` consumes past it;
+- when the data spans buffers, `read` copies the pieces into the connection's request buffer
+  (16 KB, on the coroutine's stack: no allocation) and returns that. Spanning requests pay the
+  copy they pay today; nothing else does.
+
+That is Kestrel's `IsSingleSegment` fast path, kept inside the reader rather than in every
+parser, and `advance(consumed, examined)` is Pipelines' contract: `consumed` releases buffers,
+`examined` keeps `read` from returning the same incomplete head twice - it suspends until more
+arrives instead.
 
 **`ioma_stream`** - one connection's reader and writer together, what a handler of a non-HTTP
 protocol would receive.
 
 ## The HTTP engine on top
 
-- `read_head`: `reader_read`; if the head ends inside the first segment, `phr_parse_request`
-  runs on the segment itself - no copy - and the request's slices point into the provided
-  buffer, which stays owned by the connection until the reply is finished (then `advance`
-  returns it). If the head spans segments, coalesce into the request buffer as today.
-- Body reads (`ioma_body_all`, `read_until`, `read_next_chunk`) walk segments through the same
-  chunk parser; the whole read still needs contiguous output, so it copies when the body spans.
+- `read_head`: `reader_read` gives a span; `phr_parse_request` runs on it. In the common case
+  that is the provided buffer itself - no copy - and the request's slices point into it; the
+  buffer stays owned by the connection until the reply is finished, when `advance` returns it.
+  A head that spans receives arrives coalesced in the request buffer, as today.
+- Body reads (`ioma_body_all`, `read_until`, `read_next_chunk`) run the chunk parser on spans
+  the same way; the whole read wants contiguous output and gets it from the same coalescing.
 - Pipelining falls out: the bytes after a request are simply not consumed.
 - The reply: unchanged behaviour, on the writer.
 
@@ -77,6 +90,7 @@ protocol would receive.
    `ioma_reserve`/`ioma_advance` public. Small, no behaviour change, measurable.
 2. Reader with `copy` only (Stream semantics) and the engine's `read_head` and body stage on it,
    still copying. Same behaviour, same numbers expected. Removes `await_recv` from the engine.
-3. Segments + `advance(consumed, examined)`, then the zero-copy head parse. This is the step with
-   a payoff and the risk; it gets the fragmentation validator and the raw-socket smoke tests.
+3. Spans + `advance(consumed, examined)`, then the zero-copy single-buffer path. This is the
+   step with a payoff and the risk; it gets the fragmentation validator and the raw-socket
+   smoke tests.
 4. `ioma_stream` public, with a raw TCP entry point, once the HTTP engine is a clean client of it.
