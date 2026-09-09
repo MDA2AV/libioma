@@ -9,7 +9,7 @@
 /* A store from a directory: <dir>/<host>/cert.pem (the chain) and key.pem for each hostname,
  * `default` for no SNI or no match, `_.example.com` for *.example.com. `default` is required -
  * without it nothing can answer a name we do not have. NULL, with the reason on stderr, when
- * nothing loads or the build has no TLS. Then: ioxd_listen(port, store). */
+ * nothing loads or the build has no TLS. Then: ioxd_bind(port, store). */
 ioxd_tls *ioxd_tls_new(const char *dir);
 
 /* Read the directory again and switch to what it holds. A host that fails to load - unreadable,

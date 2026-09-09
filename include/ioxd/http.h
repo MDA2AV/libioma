@@ -166,22 +166,22 @@ int  ioxd_flush         (ioxd_ctx *ctx);                 /* send what is in the 
 
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
-/* Start `workers` proactor threads (<= 0: one per core) serving HTTP on `port` and on every
- * listener added below, and block until SIGINT/SIGTERM. Returns 0 on clean shutdown, non-zero
- * when a worker failed, when the port could not be bound, or when the limits above differ
- * between this header and the library (the context would not match). May be called again
- * after it returns. */
-int ioxd__run(int workers, int port, size_t ctx_size);
-static inline int ioxd_run(int workers, int port)
-{
-    return ioxd__run(workers, port, sizeof(ioxd_ctx));
-}
-
-/* More ports: each ioxd_listen before the run adds one, plain when tls is NULL, TLS 1.3 terminated
- * in the kernel otherwise (a certificate store from ioxd_tls_new; TLS.md). ioxd_run's own port
- * joins them as a plain one; 0 there means only the listeners added. At most 8. -1 if refused. */
+/* Bind a port: plain HTTP when tls is NULL, TLS 1.3 terminated in the kernel otherwise, with the
+ * certificate store from ioxd_tls_new (TLS.md). Every bound port serves the same routes; bind as
+ * many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full. */
 typedef struct ioxd_tls ioxd_tls;
-int ioxd_listen(int port, ioxd_tls *tls);
+int ioxd_bind(int port, ioxd_tls *tls);
+
+/* Start `workers` proactor threads (<= 0: one per core) serving HTTP on every bound port, and
+ * block until SIGINT/SIGTERM. Returns 0 on clean shutdown, non-zero when nothing was bound, when a
+ * port could not be opened, when a worker failed, or when the limits above differ between this
+ * header and the library (the context would not match). May be called again after it returns;
+ * the ports stay bound. */
+int ioxd__run(int workers, size_t ctx_size);
+static inline int ioxd_run(int workers)
+{
+    return ioxd__run(workers, sizeof(ioxd_ctx));
+}
 
 /* The reason phrase for a status code ("OK", "Not Found", ...); "Unknown" if unlisted. */
 const char *ioxd_reason(int status);

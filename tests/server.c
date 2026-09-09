@@ -522,14 +522,15 @@ int main(void)
     int workers = (int)env_number("IOXD_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOXD_PORT", 8080);
     int p = port > 0 && port < 65536 ? port : 8080;
-    ioxd_listen(p + 1, NULL);                                  /* a second plain port: the same routes */
+    ioxd_bind(p, NULL);
+    ioxd_bind(p + 1, NULL);                                    /* a second plain port: the same routes */
     const char *certs = getenv("IOXD_CERTS");                  /* NOLINT(concurrency-mt-unsafe): a TLS port, given a certificate directory */
     if (certs && *certs) {
         g_tls = ioxd_tls_new(certs);
         if (g_tls) {
-            ioxd_listen(p + 2, g_tls);
+            ioxd_bind(p + 2, g_tls);
             IOXD_POST("/tls/reload", tls_reload);              /* only a build with certificates has it */
         }
     }
-    return ioxd_run(workers, p);
+    return ioxd_run(workers);
 }

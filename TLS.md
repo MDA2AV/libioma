@@ -1,7 +1,7 @@
 # TLS: one way, in the kernel (design, branch `streams`)
 
 **Status.** Built: `lib/tls/store.c` (the store, SNI, `ioxd_tls_reload`, `ioxd_tls_free`) and
-`lib/tls/handshake.c` (the prologue and the handoff); `ioxd_listen(port, ioxd_tls_new(dir))`.
+`lib/tls/handshake.c` (the prologue and the handoff); `ioxd_bind(port, ioxd_tls_new(dir))`.
 Built by default; `make TLS=0` or `-DIOXD_TLS=OFF` leaves it out, and `ioxd_tls_new` then says so
 and returns NULL. Verified by the smoke suite through
 Python's `ssl` (default certificate, SNI, the `_.example.com` wildcard, an unknown name, a POST
@@ -110,12 +110,13 @@ treats as end of input. Browsers do not send KeyUpdate; that is the accepted lim
 
 ## Where it plugs in
 
-Listeners become explicit, one per port and per worker, so plain and TLS can coexist and more than
-one port can be served (ioxide's multi-port):
+Ports are bound one by one, each plain or with a store, and every worker opens all of them, so
+plain and TLS coexist and more than one port can be served (ioxide's multi-port):
 
     ioxd_tls *tls = ioxd_tls_new("/etc/ioxd/certs");     // reads the tree
-    ioxd_listen(8443, tls);                              // TLS, besides ioxd_run's plain port
-    ioxd_run(0, 8080);                                   // workers over every listener
+    ioxd_bind(8080, NULL);                               // plain
+    ioxd_bind(8443, tls);                                // TLS
+    ioxd_run(0);                                         // workers over every bound port
 
 Per connection, `ioxd__conn_main` runs the pipe's handler, and `run.c` puts the prologue in front
 of it when the listener has a TLS store; a close_notify goes out when the handler is done. The

@@ -23,7 +23,7 @@ own. Under `lib/` there are three planes, one concern per file: `io/` is the I/O
 `conn.c` (a connection and its awaits), `pipe.c` (the reader and the writer), `proactor.c` (the
 worker loop), with `proactor.h` as the interface the other planes use; `http/` is the HTTP plane -
 `engine.c` (parse, body, reply, the serve loop), `router.c` (routes and middleware), `api.c`
-(handler helpers), `run.c` (`ioxd_run`, `ioxd_listen`, `ioxd_run_pipes`); and `tls/` is the TLS
+(handler helpers), `run.c` (`ioxd_bind`, `ioxd_run`, `ioxd_run_pipes`); and `tls/` is the TLS
 prologue - `store.c` (certificates, SNI, reload) and `handshake.c` (the OpenSSL handshake and the
 handoff to the kernel). `json/json.c` is the JSON writer, which depends on neither plane. Each
 `io/` and `http/` each have an `internal.h` for what their files share and no module owns; `tls/` has none - `store.h` and `handshake.h` are what its two files need from each other, and the runner includes the latter.

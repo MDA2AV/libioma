@@ -16,7 +16,7 @@
  * one such handler; ioxd_run_pipes runs one of yours on raw TCP connections instead. */
 typedef struct ioxd_pipe ioxd_pipe;
 typedef void (*ioxd_pipe_handler)(ioxd_pipe *pipe);
-int ioxd_run_pipes(int workers, int port, ioxd_pipe_handler fn);      /* like ioxd_run, without HTTP */
+int ioxd_run_pipes(int workers, ioxd_pipe_handler fn);      /* like ioxd_run, over the ports ioxd_bind bound, without HTTP */
 
 /* Reading. The live bytes are the ones received and not yet consumed, always handed out as one
  * contiguous span - in place in the kernel's buffer when they lie within one. read returns 1

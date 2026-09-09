@@ -41,8 +41,8 @@ body into its slab with `ioxd_write`, `ioxd_text` or `ioxd_printf`; the framewor
 in front of it, in one send when it fits and streamed when it does not. Endpoints live in groups: a group is a path prefix plus middleware, groups nest, and `ioxd_get(api, "/users/:id", user)`
 under a group at `/api` answers at `/api/users/:id`, wrapped by the middleware of every group above it; the root
 is `NULL`, with `ioxd_use` for middleware on everything. `ioxd_run` resolves it all once into a segment tree and flat
-chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port; more ports come
-from `ioxd_listen` before it - plain with a `NULL`, or TLS with a certificate store from
+chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) over every port
+bound before it with `ioxd_bind(port, NULL)` - or `ioxd_bind(port, store)` for TLS, the store from
 `ioxd_tls_new("<dir>")`, a directory of `<host>/cert.pem` and `key.pem` ([`TLS.md`](TLS.md)).
 Underneath, a connection is a pipe: `ioxd_run_pipes` hands a handler of your own the reader and writer the
 HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with

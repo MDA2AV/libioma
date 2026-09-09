@@ -58,35 +58,29 @@ static void raise_nofile(void)
     }
 }
 
-/* Start the workers (workers <= 0: one per available core) and block until a stop signal. */
-/* Worker threads, one proactor each, serving `port` with `handler` on every connection until
- * SIGINT/SIGTERM. What ioxd_run and ioxd_run_pipes share. */
-/* The listeners added before the run; ioxd_run's own port joins them. */
+/* The ports bound before the run, each with its store or none; every worker opens all of them. */
 static struct listener g_listeners[IOXD_MAX_LISTENERS];
 static int             g_n_listeners;
 
-int ioxd_listen(int port, ioxd_tls *tls)
+int ioxd_bind(int port, ioxd_tls *tls)
 {
     if (port < 1 || port > 65535 || g_n_listeners == IOXD_MAX_LISTENERS) {
-        fprintf(stderr, "ioxd_listen: port %d refused (1..65535, at most %d listeners)\n", port, IOXD_MAX_LISTENERS);
+        fprintf(stderr, "ioxd_bind: port %d refused (1..65535, at most %d ports)\n", port, IOXD_MAX_LISTENERS);
         return -1;
     }
     g_listeners[g_n_listeners++] = (struct listener){ .port = (uint16_t)port, .tls = tls };
     return 0;
 }
 
-static int run_workers(int workers, int port, handler_fn handler)
+/* Worker threads (workers <= 0: one per available core), one proactor each, running `handler`
+ * on every connection of every bound port until SIGINT/SIGTERM. What ioxd_run and ioxd_run_pipes
+ * share. */
+static int run_workers(int workers, handler_fn handler)
 {
     if (workers <= 0)
         workers = cpu_count();
-    int added = 0;                        /* listeners this call added: taken out again before returning */
-    if (port != 0) {
-        if (ioxd_listen(port, nullptr) < 0)
-            return 2;
-        added = 1;
-    }
     if (g_n_listeners == 0) {
-        fprintf(stderr, "ioxd_run: nothing to listen on\n");
+        fprintf(stderr, "ioxd_run: nothing bound: ioxd_bind a port first\n");
         return 2;
     }
 
@@ -106,7 +100,6 @@ static int run_workers(int workers, int port, handler_fn handler)
         perror("calloc");
         free(ws);
         free(th);
-        g_n_listeners -= added;
         return 1;
     }
 
@@ -140,7 +133,6 @@ static int run_workers(int workers, int port, handler_fn handler)
             rc = 1;
     free(th);
     free(ws);
-    g_n_listeners -= added;               /* so a second ioxd_run does not serve this port twice */
     return rc;
 }
 
@@ -163,7 +155,7 @@ static void serve_http(struct ioxd_pipe *pipe)
 /* ioxd_run, through the header's inline: the caller's sizeof(ioxd_ctx) must be ours, or the
  * limits that size it (IOXD_MAX_HEADERS and friends) were redefined on one side and every
  * handler would read the context at the wrong offsets. */
-int ioxd__run(int workers, int port, size_t ctx_size)
+int ioxd__run(int workers, size_t ctx_size)
 {
     if (ctx_size != sizeof(ioxd_ctx)) {
         fprintf(stderr, "ioxd_run: the application's ioxd_ctx is %zu bytes, the library's %zu: "
@@ -171,7 +163,7 @@ int ioxd__run(int workers, int port, size_t ctx_size)
         return 1;
     }
     ioxd__router_build();                          /* the routes, resolved once, shared read-only */
-    return run_workers(workers, port, serve_http);
+    return run_workers(workers, serve_http);
 }
 
 static ioxd_pipe_handler g_pipe_handler;
@@ -185,8 +177,8 @@ static void serve_pipe(struct ioxd_pipe *pipe)
         ioxd__tls_close_notify(pipe);
 }
 
-int ioxd_run_pipes(int workers, int port, ioxd_pipe_handler fn)
+int ioxd_run_pipes(int workers, ioxd_pipe_handler fn)
 {
     g_pipe_handler = fn;
-    return run_workers(workers, port, serve_pipe);
+    return run_workers(workers, serve_pipe);
 }

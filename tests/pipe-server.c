@@ -115,5 +115,6 @@ static void echo(ioxd_pipe *pipe)
 int main(int argc, char **argv)
 {
     int port = argc > 1 ? (int)strtol(argv[1], NULL, 10) : 8100;
-    return ioxd_run_pipes(2, port, echo);
+    ioxd_bind(port, NULL);
+    return ioxd_run_pipes(2, echo);
 }
