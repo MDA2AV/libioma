@@ -21,12 +21,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "ioxd/config.h"
 #include "io/bufring.h"
 #include "io/conn.h"
 #include "io/coro.h"
 #include "io/uring.h"
 
-/* tunables (override with -D) */
+/* defaults (override with -D, or at run time with ioxd_configure) */
 #ifndef RING_ENTRIES
 #define RING_ENTRIES 4096                 /* SQ depth; the CQ is twice that                     */
 #endif
@@ -70,6 +71,7 @@ struct proactor {
     int                    n_listeners;
     handler_fn             handler;
     volatile sig_atomic_t *stop;
+    ioxd_config            cfg;           /* every field filled in: the run resolved the defaults */
 
     /* owned by the worker thread */
     struct uring              ring;

@@ -24,6 +24,10 @@
 
 #include <stddef.h>
 
+#ifndef CORO_POOL_MAX
+#define CORO_POOL_MAX 512           /* warm stacks kept per worker by default (ioxd_config.idle_stacks) */
+#endif
+
 /* Private to libioxd: hidden symbols cannot be interposed, so nothing outside the library can
  * substitute a scheduler primitive (the .S hides swap_ctx the same way). */
 #define CORO_API __attribute__((visibility("hidden")))
@@ -53,3 +57,6 @@ CORO_API coro_t *coro_current(void);
 
 /* Unmap the per-thread free list of pooled stacks. Call at worker teardown, on the worker thread. */
 CORO_API void coro_pool_drain(void);
+
+/* How many idle stacks this thread keeps warm (CORO_POOL_MAX until told). Before the first create. */
+CORO_API void coro_pool_limit(unsigned max_idle);

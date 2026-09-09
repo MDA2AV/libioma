@@ -18,7 +18,7 @@ static_assert(((unsigned)RX_QUEUE & ((unsigned)RX_QUEUE - 1U)) == 0 && RX_QUEUE 
               "RX_QUEUE: a power of two (RX_MASK is a bit mask over it)");
 #define RX_MASK       (RX_QUEUE - 1U)
 #ifndef CONN_POOL_MAX
-#define CONN_POOL_MAX 1024                /* idle conn_t kept warm per worker                   */
+#define CONN_POOL_MAX 1024                /* idle conn_t kept warm per worker by default (ioxd_config.idle_connections) */
 #endif
 
 typedef struct proactor proactor_t;

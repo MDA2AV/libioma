@@ -429,9 +429,26 @@ static void test_json(void)
     test_json_locale();
 }
 
+/* ioxd_configure: a zero keeps a default, a bad value is refused and changes nothing. */
+static void test_config(void)
+{
+    CHECK(ioxd_configure(&(ioxd_config){ 0 }) == 0);
+    CHECK(ioxd_configure(&(ioxd_config){ .ring_entries = 1024, .recv_buffers = 8192, .recv_buffer_size = 4096,
+                                         .stack_size = 256UL * 1024, .idle_stacks = 1, .idle_connections = 1 }) == 0);
+    CHECK(ioxd_configure(&(ioxd_config){ .ring_entries = 3000 }) == -1);            /* not a power of two */
+    CHECK(ioxd_configure(&(ioxd_config){ .ring_entries = 65536 }) == -1);
+    CHECK(ioxd_configure(&(ioxd_config){ .recv_buffers = 65536 }) == -1);           /* the kernel refuses it */
+    CHECK(ioxd_configure(&(ioxd_config){ .recv_buffers = 12 }) == -1);
+    CHECK(ioxd_configure(&(ioxd_config){ .recv_buffer_size = 16 }) == -1);
+    CHECK(ioxd_configure(&(ioxd_config){ .stack_size = 4096 }) == -1);              /* the engine's frames alone are 44 KB */
+    CHECK(ioxd_configure(&(ioxd_config){ .recv_buffers = 8, .recv_buffer_size = 64 }) == 0);   /* the starved test build */
+    CHECK(ioxd_configure(&(ioxd_config){ 0 }) == 0);                                /* back to the defaults */
+}
+
 int main(void)
 {
     test_integers();
+    test_config();
     test_json();
     test_doubles();
     test_bools();

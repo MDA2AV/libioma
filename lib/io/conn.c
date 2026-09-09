@@ -96,7 +96,7 @@ static void conn_unref(conn_t *c)
         return;
     proactor_t *p = c->p;
     p->live--;
-    if (p->conn_free_count < CONN_POOL_MAX) {
+    if (p->conn_free_count < p->cfg.idle_connections) {
         c->pool_next = p->conn_free;
         p->conn_free = c;
         p->conn_free_count++;
@@ -153,8 +153,8 @@ static void note_starved(proactor_t *p)
     if (now.tv_sec < p->starved_log_at)
         return;
     fprintf(stderr, "ioxd: [w%d] recv found no provided buffer %llu times (%llu in total, %u connections parked): "
-                    "raise BUF_COUNT (-DBUF_COUNT=..., now %d)\n",
-            p->id, (unsigned long long)p->starved_since_log, (unsigned long long)p->starved_total, p->nstarved + 1, BUF_COUNT);
+                    "raise recv_buffers (ioxd_configure; now %u)\n",
+            p->id, (unsigned long long)p->starved_since_log, (unsigned long long)p->starved_total, p->nstarved + 1, p->bufs.count);
     p->starved_since_log = 0;
     p->starved_log_at    = now.tv_sec + 1;
 }

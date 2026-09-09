@@ -35,9 +35,12 @@ profiles score.
 
 The `-D` switches: `FIXED_FILES=0` disables the registered file table and `NO_REG_RING` the
 registered ring fd - both features fall back at runtime on kernels that lack them anyway. The rest
-are the tunables, each defined where it is used: `BUF_SIZE` and `BUF_COUNT` in `lib/io/bufring.h`,
-`RX_QUEUE` and `CONN_POOL_MAX` in `lib/io/conn.h`, `CORO_POOL_MAX` (and `CORO_GUARD`) in
-`lib/io/coro.c`, `RING_ENTRIES`, `STACK_SIZE` and `FIXED_FILES` itself in `lib/io/proactor.h`.
+are the tunables' defaults, each defined where it is used: `BUF_SIZE` and `BUF_COUNT` in
+`lib/io/bufring.h`, `RX_QUEUE` and `CONN_POOL_MAX` in `lib/io/conn.h`, `CORO_POOL_MAX` and
+`CORO_GUARD` in `lib/io/coro.h` and `lib/io/coro.c`, `RING_ENTRIES`, `STACK_SIZE` and
+`FIXED_FILES` itself in `lib/io/proactor.h`. An application sets the ring, the buffers, the stack
+and the pools per worker at run time instead, with `ioxd_configure` (`ioxd/config.h`), so a
+deployment tunes them without rebuilding the library; `RX_QUEUE` and `FIXED_FILES` stay build-time.
 
 A recv that finds the ring empty is logged, at most once a second per worker, with counts:
 `ioxd: [w3] recv found no provided buffer N times (M in total, K connections parked): raise

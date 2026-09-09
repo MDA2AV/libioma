@@ -519,6 +519,14 @@ int main(void)
         IOXD_GET("/rooted", rooted);
     }
 
+    ioxd_config cfg = {                                        /* the runtime's knobs, from the environment */
+        .ring_entries     = (unsigned)env_number("IOXD_RING_ENTRIES", 0),
+        .recv_buffers     = (unsigned)env_number("IOXD_RECV_BUFFERS", 0),
+        .recv_buffer_size = (unsigned)env_number("IOXD_RECV_BUFFER_SIZE", 0),
+        .stack_size       = (size_t)env_number("IOXD_STACK_SIZE", 0),
+    };
+    if (ioxd_configure(&cfg) < 0)
+        return 1;
     int workers = (int)env_number("IOXD_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOXD_PORT", 8080);
     int p = port > 0 && port < 65536 ? port : 8080;

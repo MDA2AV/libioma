@@ -105,6 +105,7 @@ int main(int argc, char **argv)
     IOXD_GET ("/users/:id",     user_endpoint);
     IOXD_POST("/repeat/:times", repeat);
 
+    ioxd_configure(&(ioxd_config){ .recv_buffers = 8192 });   /* the runtime's knobs, per worker; a zero keeps its default */
     ioxd_bind(8080, NULL);
     if (argc > 1) {
         ioxd_certs *tls = ioxd_certs_load(argv[1]);

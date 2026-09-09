@@ -12,9 +12,6 @@ extern void swap_ctx(void **save_sp, void *load_sp);     /* switch_x86_64.S */
 static thread_local coro_t *cur;        /* the running coroutine; nullptr on the loop stack   */
 static thread_local void   *loop_sp;    /* the loop's stack pointer while a coroutine runs */
 
-#ifndef CORO_POOL_MAX
-#define CORO_POOL_MAX 512           /* warm stacks kept per worker, reused instead of munmap/mmap */
-#endif
 #ifndef CORO_GUARD
 #define CORO_GUARD (64UL * 1024)    /* PROT_NONE below every stack. Big enough that a frame cannot
                                      * step over it into the neighbour below: ioxd__conn_main's is
@@ -23,8 +20,14 @@ static thread_local void   *loop_sp;    /* the loop's stack pointer while a coro
 #endif
 /* Pooled stacks keep their pages: no madvise(MADV_DONTNEED) on the way in. The trade is deliberate,
  * a warm stack for the next connection against the RSS of an idle one, and the pool is capped. */
-static thread_local coro_t *pool_head;  /* free list of whole stack blocks, linked via ->next */
-static thread_local int     pool_count;
+static thread_local coro_t  *pool_head;  /* free list of whole stack blocks, linked via ->next */
+static thread_local unsigned pool_count;
+static thread_local unsigned pool_max = CORO_POOL_MAX;
+
+void coro_pool_limit(unsigned max_idle)
+{
+    pool_max = max_idle;
+}
 
 /* The running coroutine, or nullptr on the loop stack. */
 coro_t *coro_current(void)
@@ -53,8 +56,8 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 
     coro_t *c;
     if (pool_head) {
-        /* Every caller passes STACK_SIZE, so the pool holds one size. A mismatch would mean a
-         * second size is in play and this reuse would hand back the wrong stack. */
+        /* Every caller passes the worker's configured size, so the pool holds one size. A mismatch
+         * would mean a second size is in play and this reuse would hand back the wrong stack. */
         if (pool_head->size != total) {
             fprintf(stderr, "ioxd: coroutine stack size %zu does not match the pooled %zu\n",
                     total, pool_head->size);
@@ -106,7 +109,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 static void coro_destroy(coro_t *c)
 {
     c->sp = nullptr;                /* the frame it named is gone; a stale sp must not be switched to */
-    if (pool_count < CORO_POOL_MAX) {
+    if (pool_count < pool_max) {
         c->next = pool_head;
         pool_head = c;
         pool_count++;

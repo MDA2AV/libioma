@@ -71,7 +71,7 @@ the handler has consumed it, the worker hands it back by writing its id into the
 
 Returns are staged and the ring tail is published once per loop iteration, so a batch of returned
 buffers costs one atomic store. If the ring runs dry a recv ends with `-ENOBUFS`; the worker logs it
-(once a second at most, with counts, so a starved ring is visible and `BUF_COUNT` can be raised) and the connection is
+(once a second at most, with counts, so a starved ring is visible and `recv_buffers` can be raised) and the connection is
 parked and re-armed as soon as any buffer comes back.
 
 ---
@@ -235,7 +235,7 @@ that buffer: it is not returned to the ring when the live bytes move on, but hel
 Only one buffer can be pinned, so a run that would need a second is copied into the gathering
 buffer instead, and `ioxd_pipereader_run` says where it ended up. At most two kernel buffers are
 held at a time, the pinned one and the live one, so a slow handler pins one 2 KB buffer per request
-in flight; the starvation log says when `BUF_COUNT` should grow. The counts are clamped rather than
+in flight; the starvation log says when `recv_buffers` should grow. The counts are clamped rather than
 trusted: `drop` consumes at most what is live, `keep` refuses an n past it (and refuses, as
 `IOXD_PIPE_FULL`, kept plus live bytes that would outgrow the gathering buffer).
 
@@ -422,17 +422,24 @@ generated function is the code one would write by hand, with no table and nothin
 
 ## Tunables
 
-| name | default | what |
+The first six are set at run time, per worker, with `ioxd_configure(&(ioxd_config){ ... })`
+before `ioxd_run` (`ioxd/config.h`; a zero field keeps its default, a bad value is refused with a
+line on stderr); the build-time name is the default. The rest are build-time only.
+
+| `ioxd_config` field | default (`-D` name) | what |
 |---|---|---|
-| `RING_ENTRIES` | 4096 | SQ depth (CQ is twice that) |
-| `BUF_COUNT` × `BUF_SIZE` | 4096 × 2 KB | provided recv buffers per worker |
+| `ring_entries` | 4096 (`RING_ENTRIES`) | SQ depth (CQ is twice that); a power of two, at most 32768 |
+| `recv_buffers` × `recv_buffer_size` | 4096 × 2 KB (`BUF_COUNT`, `BUF_SIZE`) | provided recv buffers per worker: a power of two at most 32768, and 64 B to 1 MB each |
+| `stack_size` | 128 KB (`STACK_SIZE`) | per coroutine, above a 64 KB guard (`CORO_GUARD`); at least 64 KB |
+| `idle_stacks`, `idle_connections` | 512, 1024 (`CORO_POOL_MAX`, `CONN_POOL_MAX`) | idle stacks / conns kept warm per worker (not connection limits) |
+
+| build-time only | default | what |
+|---|---|---|
 | `RX_QUEUE` | 64 | slices a connection may hold undelivered |
-| `STACK_SIZE` | 128 KB | per coroutine, plus a 64 KB guard (`CORO_GUARD`) |
-| `CORO_POOL_MAX`, `CONN_POOL_MAX` | 512, 1024 | idle stacks / conns kept warm per worker (not connection limits) |
 | `FIXED_FILES` | 16384 | registered file slots per worker, and so its connection ceiling; 0 disables the table |
 | `IOXD_PIPE_GATHER` | 16 KB | the reader's gathering buffer: a head must fit here (else 431) and so must a body read whole (else 413) |
 | `IOXD_PIPE_LEAD` / `IOXD_PIPE_CAP` / `IOXD_PIPE_SLACK` | 512 / 8 KB / 8 | the writer's slab and the room in front of and behind it |
 
-Override any of them with `-D` at build time. The library's own limits - `IOXD_MAX_HEADERS` and the
-rest of the `IOXD_MAX_*` in `ioxd/http.h` - are not among them: they lay out the context, so
-`ioxd_run` checks that the application and the library agree and refuses to start otherwise.
+The library's own limits - `IOXD_MAX_HEADERS` and the rest of the `IOXD_MAX_*` in `ioxd/http.h` -
+are neither: they lay out the context, so `ioxd_run` checks that the application and the library
+agree and refuses to start otherwise.

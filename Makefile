@@ -136,10 +136,11 @@ check: $(TESTSRV) $(UNIT) $(PIPESRV) $(ROUTER)
 	    --unit ./$(UNIT) --server ./$(TESTSRV) --pipe-server ./$(PIPESRV) --tls-python $(TLS_PYTHON)
 
 # --- the same stress suite, against a build starved on purpose ---
-# 8 x 64 B receive buffers and a 4-deep per-connection queue: every request empties the buffer
-# group, so recvs park on -ENOBUFS and are re-armed as handlers give buffers back, and the queue
-# overflows at the first stall. The defines change every object, so it has its own directory.
-TINY      := -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4
+# 8 x 64 B receive buffers (ioxd_configure, through the fixture's environment) and a 4-deep
+# per-connection queue (a build-time constant, so a second object directory): every request
+# empties the buffer group, so recvs park on -ENOBUFS and are re-armed as handlers give buffers
+# back, and the queue overflows at the first stall.
+TINY      := -DRX_QUEUE=4                # the buffers come from the environment: ioxd_configure at run time
 TINYOBJ   := $(addprefix obj-tiny/,$(addsuffix .o,$(UNITS))) obj-tiny/io/switch_x86_64.o obj-tiny/picohttpparser.o
 TINYSRV   := tests/ioxd-test-server-tiny
 TINY_PORT ?= 8410
@@ -159,7 +160,7 @@ $(TINYSRV): tests/server.c libioxd-tiny.a
 	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(TINY) $(PTHREAD) $< libioxd-tiny.a -o $@ $(PTHREAD) $(LIBS)
 
 check-tiny: $(TINYSRV)
-	@sh tests/run-suites.sh --suite stress --port $(TINY_PORT) --server ./$(TINYSRV) --work obj-tiny/check
+	@IOXD_RECV_BUFFERS=8 IOXD_RECV_BUFFER_SIZE=64 sh tests/run-suites.sh --suite stress --port $(TINY_PORT) --server ./$(TINYSRV) --work obj-tiny/check
 
 # Everything: the default build's suites, then the starved build's.
 check-all: check check-tiny

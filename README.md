@@ -44,6 +44,8 @@ is `NULL`, with `ioxd_use` for middleware on everything. `ioxd_run` resolves it 
 chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) over every port
 bound before it with `ioxd_bind(port, NULL)` - or `ioxd_bind(port, store)` for TLS, the store from
 `ioxd_certs_load("<dir>")`, a directory of `<host>/cert.pem` and `key.pem` ([`TLS.md`](TLS.md)).
+The runtime's knobs - the ring, the receive buffers, the coroutine stacks, the pools, per worker - are set
+before the run with `ioxd_configure`; a zero field keeps the build's default.
 Underneath, a connection is a pipe: `ioxd_run_pipes` hands a handler of your own the reader and writer the
 HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with
 the `ioxd_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills; a struct
@@ -57,8 +59,9 @@ nesting the routes below it; the hello example and `tests/server.c` are written 
 test, then the smoke, conformance, stress and early-TLS suites against one HTTP fixture - one
 fixture for all four, since a port the suite before it left full of `TIME_WAIT` connections resets
 some of the next one's - then the pipe suite against the pipe fixture. `make check-tiny` runs the
-stress suite alone against a second build starved on purpose (`-DBUF_COUNT=8 -DBUF_SIZE=64
--DRX_QUEUE=4`), so every request empties the buffer group; `make check-all` runs both. `make tidy`
+stress suite alone against the fixture starved on purpose - eight 64-byte receive buffers through
+`ioxd_configure`, and a build with `-DRX_QUEUE=4` - so every request empties the buffer group;
+`make check-all` runs both. `make tidy`
 runs clang-tidy over the library, and `make check-tlsfuzzer TLSFUZZER=<checkout>` runs six of
 tlsfuzzer's TLS 1.3 scripts against the fixture. The suites need python3 and the `openssl` command
 (`tests/mkcerts.sh` makes the certificates); `tests/tls_early.py` needs tlslite-ng and skips itself

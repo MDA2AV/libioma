@@ -22,24 +22,28 @@ static void *map_pages(size_t bytes)
 
 /* The kernel named a buffer we never offered: the slab pointer it implies is outside the mapping,
  * so there is nothing safe to do with it. */
-[[noreturn]] void ioxd__bufring_bad_id(uint16_t buf_id)
+[[noreturn]] void ioxd__bufring_bad_id(const struct bufring *b, uint16_t buf_id)
 {
-    fprintf(stderr, "ioxd: provided buffer id %u is outside the ring (BUF_COUNT %d)\n", buf_id, BUF_COUNT);
+    fprintf(stderr, "ioxd: provided buffer id %u is outside the ring (%u buffers)\n", buf_id, b->count);
     abort();
 }
 
-/* Map the slab and the ring, register the ring as buffer group BGID, and offer every buffer. */
-void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
+/* Map the slab and the ring, register the ring as buffer group BGID, and offer every buffer.
+ * count is a power of two no larger than 32768: ioxd_configure checked it. */
+void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker, unsigned count, unsigned size)
 {
-    b->ring     = map_pages((size_t)BUF_COUNT * sizeof(struct io_uring_buf));
-    b->slab     = map_pages((size_t)BUF_COUNT * BUF_SIZE);
+    b->count    = count;
+    b->size     = size;
+    b->mask     = count - 1;
+    b->ring     = map_pages((size_t)count * sizeof(struct io_uring_buf));
+    b->slab     = map_pages((size_t)count * size);
     b->dirty    = false;
     b->returned = 0;
 
     struct io_uring_buf_reg reg;
     memset(&reg, 0, sizeof reg);
     reg.ring_addr    = (uint64_t)(uintptr_t)b->ring;
-    reg.ring_entries = BUF_COUNT;
+    reg.ring_entries = count;
     reg.bgid         = BGID;
     int rc = uring_register(ring, IORING_REGISTER_PBUF_RING, &reg, 1);
     if (rc < 0) {
@@ -49,13 +53,13 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
 
     /* Fill every slot, then publish the tail once. bufs[0] overlaps the ring header and the tail
      * sits in bufs[0].resv, so writing only addr/len/bid leaves it untouched. */
-    for (unsigned i = 0; i < BUF_COUNT; i++) {
+    for (unsigned i = 0; i < count; i++) {
         struct io_uring_buf *slot = &b->ring->bufs[i];
         slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, (uint16_t)i);
-        slot->len  = BUF_SIZE;
+        slot->len  = size;
         slot->bid  = (uint16_t)i;
     }
-    b->tail = BUF_COUNT;
+    b->tail = count;
     __atomic_store_n(&b->ring->tail, (uint16_t)b->tail, __ATOMIC_RELEASE);
 }
 
@@ -63,9 +67,9 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
  * release for many returns, and the kernel is not re-reading a hot tail per request. */
 void ioxd__bufring_return(struct bufring *b, uint16_t buf_id)
 {
-    struct io_uring_buf *slot = &b->ring->bufs[b->tail & BUF_MASK];
+    struct io_uring_buf *slot = &b->ring->bufs[b->tail & b->mask];
     slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, buf_id);
-    slot->len  = BUF_SIZE;
+    slot->len  = b->size;
     slot->bid  = buf_id;
     b->tail++;
     b->returned++;                                /* how many recvs the loop may re-arm     */
@@ -94,6 +98,6 @@ void ioxd__bufring_unregister(struct bufring *b, struct uring *ring)
 /* Unmap the ring and the slab. Call after uring_exit, once no in-flight op can reference them. */
 void ioxd__bufring_unmap(struct bufring *b)
 {
-    munmap(b->ring, (size_t)BUF_COUNT * sizeof(struct io_uring_buf));
-    munmap(b->slab, (size_t)BUF_COUNT * BUF_SIZE);
+    munmap(b->ring, (size_t)b->count * sizeof(struct io_uring_buf));
+    munmap(b->slab, (size_t)b->count * b->size);
 }

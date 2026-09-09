@@ -24,6 +24,7 @@
 #pragma once
 
 #include "ioxd/slice.h"    /* slices, conversions, key/value parsing              */
+#include "ioxd/config.h"   /* the runtime's knobs, set before the run              */
 #include "ioxd/http.h"     /* request, response, context, body, reply, ioxd_run   */
 #include "ioxd/router.h"   /* groups, endpoints, middleware; the script macros    */
 #include "ioxd/json.h"     /* JSON written as you go; structs described once      */

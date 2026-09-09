@@ -203,7 +203,7 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
 /* Queue a new coroutine; the loop starts it on its next iteration. */
 void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg)
 {
-    coro_t *c = coro_create(fn, arg, STACK_SIZE);
+    coro_t *c = coro_create(fn, arg, p->cfg.stack_size);
     if (p->ready_tail)
         p->ready_tail->next = c;
     else
@@ -354,7 +354,8 @@ void proactor_run(proactor_t *p)
     if (p->cpu >= 0)
         pin_to(p->cpu);
 
-    int rc = uring_init(&p->ring, RING_ENTRIES);     /* on this thread: DEFER_TASKRUN ties it here */
+    coro_pool_limit(p->cfg.idle_stacks);
+    int rc = uring_init(&p->ring, p->cfg.ring_entries);   /* on this thread: DEFER_TASKRUN ties it here */
     if (rc < 0) {
         fprintf(stderr, "[w%d] io_uring_setup: %s%s\n", p->id, ioxd__errstr(-rc),
                 rc == -EPERM ? " (io_uring is disabled: see /proc/sys/kernel/io_uring_disabled)" : "");
@@ -367,7 +368,7 @@ void proactor_run(proactor_t *p)
     unsigned slots = fixed_slots();                  /* optional: sockets live in a file table  */
     if (slots && uring_register_files_sparse(&p->ring, slots) == 0)
         p->file_slots = slots;                       /* the ceiling accept_room holds us to     */
-    ioxd__bufring_init(&p->bufs, &p->ring, p->id);
+    ioxd__bufring_init(&p->bufs, &p->ring, p->id, p->cfg.recv_buffers, p->cfg.recv_buffer_size);
     char   ports[IOXD_MAX_LISTENERS * 12] = "";
     size_t at = 0;
     for (int i = 0; i < p->n_listeners; i++) {
@@ -381,7 +382,7 @@ void proactor_run(proactor_t *p)
         at += (size_t)n < sizeof ports - at ? (size_t)n : sizeof ports - at - 1;   /* truncated: stop growing */
     }
     fprintf(stderr, "[w%d] listening on %s (cpu %d, %u x %u B recv buffers, ring %u%s%s%s)\n",
-            p->id, ports, p->cpu, BUF_COUNT, BUF_SIZE, p->ring.sq_entries,
+            p->id, ports, p->cpu, p->bufs.count, p->bufs.size, p->ring.sq_entries,
             p->ring.has_sq_array ? "" : ", no sqarray",
             p->ring.enter_flags ? ", registered ring" : "",
             p->ring.fixed_files ? ", fixed files" : "");
