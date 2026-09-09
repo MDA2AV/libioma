@@ -8,9 +8,9 @@ runtime works is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ## Manual
 
-The API is documented as man pages under [`manual/`](manual/index.html): one page per public header
+The API is documented as man pages at [mda2av.github.io/libioxd](https://mda2av.github.io/libioxd/) (the `manual/` directory, deployed by a workflow on every push): one page per public header
 (`ioxd_http(3)`, `ioxd_router(3)`, ...), generated from the headers themselves by `make manual`, an
-overview in `ioxd(7)`, and every public name in one list. Open `manual/index.html` in a browser.
+overview in `ioxd(7)`, and every public name in one list; `manual/index.html` is the same site, offline.
 
 ## Build
 
