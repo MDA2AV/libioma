@@ -163,13 +163,13 @@ static int run_workers(int workers, handler_fn handler)
     return rc;
 }
 
-static int prologue(struct ioxd_pipe *pipe)
+static int prologue(ioxd_pipe *pipe)
 {
     struct listener *l = pipe->in.conn->listener;
     return l->certs ? ioxd__handshake_prologue(pipe, l->certs) : 0;
 }
 
-static void serve_http(struct ioxd_pipe *pipe)
+static void serve_http(ioxd_pipe *pipe)
 {
     if (prologue(pipe) != 0)
         return;
@@ -191,7 +191,7 @@ int ioxd__run_http(int workers, size_t ctx_size)
 
 static ioxd_pipe_handler g_pipe_handler;
 
-static void serve_pipe(struct ioxd_pipe *pipe)
+static void serve_pipe(ioxd_pipe *pipe)
 {
     if (prologue(pipe) != 0)
         return;

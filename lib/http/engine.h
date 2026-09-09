@@ -5,7 +5,7 @@
 
 #include "io/pipe.h"
 
-void ioxd__engine_serve(struct ioxd_pipe *pipe);         /* requests on the connection until it ends */
+void ioxd__engine_serve(ioxd_pipe *pipe);         /* requests on the connection until it ends */
 
 /* ── engine.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -28,7 +28,7 @@ void ioxd__engine_serve(struct ioxd_pipe *pipe);         /* requests on the conn
  *     lay out exactly like a phr_header (name, name_len, value, value_len).
  *     [static_assert(sizeof(ioxd_kv) == sizeof(struct phr_header), "ioxd_kv must mirror]
  *   - The engine's per-request state, behind ctx->priv.  [struct serve_state {]
- *   - the connection: the head is kept in its reader  [struct ioxd_pipe *pipe;]
+ *   - the connection: the head is kept in its reader  [ioxd_pipe *pipe;]
  *   - body bytes handed out so far  [size_t       body_read;]
  *   - the whole body has been taken off the wire  [bool         body_done;]
  *   - ioxd_body_all kept it  [bool         body_whole;]

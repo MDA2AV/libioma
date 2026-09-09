@@ -125,7 +125,7 @@ static int install(conn_t *c, int direction, const unsigned char *secret, uint64
     return rc;
 }
 
-static int flush_outbound(struct ioxd_pipe *pipe, BIO *wbio)
+static int flush_outbound(ioxd_pipe *pipe, BIO *wbio)
 {
     char buf[4096];
     int  n;
@@ -140,7 +140,7 @@ static size_t record_len(const unsigned char *rec)
     return 5 + ((size_t)rec[3] << 8 | rec[4]);
 }
 
-static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec, size_t *len)
+static int take_record(ioxd_pipe *pipe, bool draining, unsigned char *rec, size_t *len)
 {
     ioxd_pipereader *pr = &pipe->in;
     size_t have = 0, need = 5;
@@ -171,7 +171,7 @@ static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec
     return 1;
 }
 
-static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
+static int feed_inbound(ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
 {
     size_t len;
     if (take_record(pipe, false, rec, &len) <= 0)
@@ -179,7 +179,7 @@ static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
     return BIO_write(rbio, rec, (int)len) == (int)len ? 0 : -1;
 }
 
-static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio, unsigned char *plain,
+static long drain_records(ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio, unsigned char *plain,
                           size_t *plain_len, const char **why)
 {
     unsigned char *rec     = plain + PLAIN_MAX;
@@ -229,7 +229,7 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
     }
 }
 
-int ioxd__handshake_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
+int ioxd__handshake_prologue(ioxd_pipe *pipe, ioxd_certs *certs)
 {
     pthread_once(&ex_once, make_ex_index);
     conn_t        *c = pipe->in.conn;
@@ -317,7 +317,7 @@ out:
     return why ? -1 : 0;
 }
 
-void ioxd__handshake_close_notify(struct ioxd_pipe *pipe)
+void ioxd__handshake_close_notify(ioxd_pipe *pipe)
 {
     unsigned char alert[2] = { 1, 0 };
     struct iovec  iov      = { alert, sizeof alert };
@@ -336,14 +336,14 @@ void ioxd__handshake_close_notify(struct ioxd_pipe *pipe)
 
 #else
 
-int ioxd__handshake_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
+int ioxd__handshake_prologue(ioxd_pipe *pipe, ioxd_certs *certs)
 {
     (void)pipe;
     (void)certs;
     return -1;
 }
 
-void ioxd__handshake_close_notify(struct ioxd_pipe *pipe)
+void ioxd__handshake_close_notify(ioxd_pipe *pipe)
 {
     (void)pipe;
 }

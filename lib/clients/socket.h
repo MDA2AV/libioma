@@ -12,10 +12,10 @@
 
 /* Connect to sa from the calling coroutine, which parks on the connect: the pipe, its buffers
  * on the heap, or nullptr with errno-style reason in *err. */
-struct ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa, socklen_t len, int *err);
+ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa, socklen_t len, int *err);
 
 /* Flush what the writer holds, give the reader's buffers back, close the socket, free the pipe. */
-void ioxd__socket_close(struct ioxd_pipe *pipe);
+void ioxd__socket_close(ioxd_pipe *pipe);
 
 /* ── socket.c: the notes ────────────────────────────────────────────────────────────────── */
 

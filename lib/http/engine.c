@@ -32,7 +32,7 @@ static_assert(offsetof(ioxd_kv, key)    == offsetof(struct phr_header, name) &&
                "ioxd_kv must mirror phr_header");
 
 struct serve_state {
-    struct ioxd_pipe *pipe;
+    ioxd_pipe *pipe;
     size_t       body_read;
     bool         body_done;
     bool         body_whole;
@@ -906,7 +906,7 @@ static int fill_request(ioxd_request *req, char *params_arena, size_t arena_cap)
     return 0;
 }
 
-static void init_body_state(struct serve_state *state, struct ioxd_pipe *pipe, const ioxd_request *req)
+static void init_body_state(struct serve_state *state, ioxd_pipe *pipe, const ioxd_request *req)
 {
     *state = (struct serve_state){ .pipe = pipe };
     state->body_done = !req->chunked && req->content_length == 0;
@@ -928,7 +928,7 @@ static void init_response(ioxd_response *res, ioxd_pipewriter *pw)
     ioxd__pipewriter_reset(pw);
 }
 
-void ioxd__engine_serve(struct ioxd_pipe *pipe)
+void ioxd__engine_serve(ioxd_pipe *pipe)
 {
     char params[IOXD_PARAM_CAP];
 

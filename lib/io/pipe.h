@@ -103,8 +103,8 @@ struct ioxd_pipe {
     ioxd_pipereader in;
     ioxd_pipewriter out;
 };
-void ioxd__pipe_init (struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
-void ioxd__pipe_close(struct ioxd_pipe *p);
+void ioxd__pipe_init (ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
+void ioxd__pipe_close(ioxd_pipe *p);
 
 /* ── pipe.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -118,7 +118,7 @@ void ioxd__pipe_close(struct ioxd_pipe *p);
  *   - ── the writer ──────────────────────────────────────────────────────────────────────────
  *     [void ioxd__pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t l]
  *   - ── the pipe ────────────────────────────────────────────────────────────────────────────
- *     [void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gat]
+ *     [void ioxd__pipe_init(ioxd_pipe *p, conn_t *conn, char *gather, size_t gat]
  */
 
 /* live_span:

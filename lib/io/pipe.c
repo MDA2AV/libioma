@@ -405,13 +405,13 @@ int ioxd__pipewriter_send(ioxd_pipewriter *pw, const void *data, size_t n)
     return ioxd__pipewriter_write(pw, data, n) < 0 ? -1 : ioxd__pipewriter_flush(pw);
 }
 
-void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
+void ioxd__pipe_init(ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
 {
     ioxd__pipereader_init(&p->in, conn, gather, gather_cap);
     ioxd__pipewriter_init(&p->out, conn, slab, lead, cap, slack);
 }
 
-void ioxd__pipe_close(struct ioxd_pipe *p)
+void ioxd__pipe_close(ioxd_pipe *p)
 {
     ioxd__pipewriter_flush(&p->out);
     ioxd__pipereader_close(&p->in);

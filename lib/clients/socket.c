@@ -44,7 +44,7 @@ static int connect_socket(proactor_t *p, int fd, const struct sockaddr *sa, sock
     return ioxd__io_await(sqe, &op);
 }
 
-struct ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa, socklen_t len, int *err)
+ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa, socklen_t len, int *err)
 {
     int fd = make_socket(p, sa->sa_family);
     if (fd < 0) {
@@ -73,7 +73,7 @@ struct ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa,
     return &cp->pipe;
 }
 
-void ioxd__socket_close(struct ioxd_pipe *pipe)
+void ioxd__socket_close(ioxd_pipe *pipe)
 {
     struct client_pipe *cp = (struct client_pipe *)pipe;
     ioxd__pipe_close(pipe);
@@ -103,7 +103,7 @@ ioxd_pipe *ioxd_connect(const char *host, int port)
         return nullptr;
     }
     int err;
-    struct ioxd_pipe *pipe = ioxd__socket_connect(p, sa, len, &err);
+    ioxd_pipe *pipe = ioxd__socket_connect(p, sa, len, &err);
     if (!pipe)
         errno = err;
     return pipe;

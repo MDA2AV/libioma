@@ -140,7 +140,7 @@ ioxd_json ioxd_json_reply(ioxd_ctx *ctx)
     return j;
 }
 
-ioxd_json ioxd_json_pipe(struct ioxd_pipe *pipe)
+ioxd_json ioxd_json_pipe(ioxd_pipe *pipe)
 {
     ioxd_json j = { .kind = IOXD_JSON_TO_PIPE };
     j.to.pipe = pipe;
