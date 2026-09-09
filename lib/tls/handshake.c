@@ -318,7 +318,8 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
         why = "early application data does not fit";
         goto out;
     }
-    ioxd__recv_resume(c);
+    if (!ioxd__recv_resume(c))
+        why = "input ended after the handshake";        /* or the worker is draining: nothing to serve */
 out:
     if (why)
         fprintf(stderr, "ioxd_tls: connection dropped: %s\n", why);
