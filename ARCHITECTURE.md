@@ -8,7 +8,7 @@ kernel does the I/O. There are no locks and nothing is shared between workers.
 process
  ├─ worker 0 (thread pinned to CPU 0)          ├─ worker 1 (CPU 1) ...
  │   ├─ io_uring            one ring, one syscall per batch
- │   ├─ SO_REUSEPORT listener   the kernel spreads connections across workers
+ │   ├─ SO_REUSEPORT listeners  one per port; the kernel spreads connections across workers
  │   ├─ provided buffer ring    where the kernel puts received bytes
  │   ├─ coroutine per connection   runs serve(): parse → handler → reply
  │   └─ pools: conn objects, coroutine stacks

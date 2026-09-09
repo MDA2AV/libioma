@@ -303,6 +303,13 @@ except Exception:
     st, hd, body = None, {}, b""
 s.close()
 results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+# --- a second listener: the port after ours serves the same routes ---
+s = socket.create_connection(("127.0.0.1", PORT + 1), timeout=5)
+s.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+st, hd, body = read_response(s)
+s.close()
+results.append(check("GET /health on the second listener -> 200 ok", st == 200 and body == b"ok"))
+
 # --- the JSON writer: a document written as you go, and one that streams ---
 st, hd, body = get("/json/42")
 results.append(check("GET /json/:id -> escaped document, application/json",

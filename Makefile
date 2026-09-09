@@ -93,7 +93,7 @@ $(PIPESRV): tests/pipe-server.c libioxd.a
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD)
 
 CHECK_PORT ?= 8099
-PIPE_PORT  ?= 8100
+PIPE_PORT  ?= 8101                       # the fixture takes CHECK_PORT and the one after
 check: $(TESTSRV) $(UNIT) $(PIPESRV)
 	@./$(UNIT) || exit 1; \
 	 IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \

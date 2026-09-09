@@ -21,6 +21,7 @@
 
 typedef struct proactor proactor_t;
 typedef struct conn     conn_t;
+struct listener;                          /* io/proactor.h: the port it was accepted on */
 
 /* A slice the kernel delivered into a provided buffer, waiting for the handler to read it. */
 struct rx_item {
@@ -38,6 +39,7 @@ enum recv_state {
 struct conn {
     int             fd;                   /* the socket, or its file slot under fixed files    */
     proactor_t     *p;
+    struct listener *listener;            /* the port it came in on: plain or TLS               */
     coro_t         *waiter;               /* coroutine parked waiting for bytes, or nullptr      */
     struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
     unsigned        rx_head, rx_tail;
@@ -56,7 +58,7 @@ int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, e
 int ioxd__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
-conn_t *ioxd__conn_new(proactor_t *p, int fd);           /* from the pool, or fresh              */
+conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the pool, or fresh  */
 void    ioxd__conn_main(void *arg);                      /* the connection's coroutine body      */
 void    ioxd__arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
 void    ioxd__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */

@@ -38,7 +38,8 @@ body into its slab with `ioxd_write`, `ioxd_text` or `ioxd_printf`; the framewor
 in front of it, in one send when it fits and streamed when it does not. Endpoints live in groups: a group is a path prefix plus middleware, groups nest, and `ioxd_get(api, "/users/:id", user)`
 under a group at `/api` answers at `/api/users/:id`, wrapped by the middleware of every group above it; the root
 is `NULL`, with `ioxd_use` for middleware on everything. `ioxd_run` resolves it all once into a segment tree and flat
-chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port.
+chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) and a port; more ports, plain or TLS, come
+from `ioxd_listen` before it.
 Underneath, a connection is a pipe: `ioxd_run_pipes` hands a handler of your own the reader and writer the
 HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with
 the `ioxd_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills; a struct

@@ -34,17 +34,30 @@ typedef struct proactor proactor_t;
 struct ioxd_pipe;
 typedef void (*handler_fn)(struct ioxd_pipe *pipe);   /* a connection, as a pipe */
 
+#ifndef IOXD_MAX_LISTENERS
+#define IOXD_MAX_LISTENERS 8                  /* ports one server may serve                        */
+#endif
+
+/* A listening port. Every worker opens its own socket on it (SO_REUSEPORT), so the kernel spreads
+ * the port's connections across workers; an accept CQE carries the listener it came from. */
+struct listener {
+    proactor_t *p;
+    int         fd;                       /* the socket, or its file slot under fixed files    */
+    uint16_t    port;
+    void       *tls;                      /* the port's certificate store, or nullptr: plain   */
+};
+
 struct proactor {
     /* set by the creator */
     int                    id;
     int                    cpu;           /* pin the thread here; -1 = don't                   */
-    uint16_t               port;
+    struct listener        listeners[IOXD_MAX_LISTENERS];   /* port and tls set by the creator  */
+    int                    n_listeners;
     handler_fn             handler;
     volatile sig_atomic_t *stop;
 
     /* owned by the worker thread */
     struct uring              ring;
-    int                       listen_fd;
     struct bufring            bufs;       /* the provided buffers recvs deliver into           */
     conn_t                  **starved;    /* connections parked on -ENOBUFS                    */
     unsigned                  nstarved, cap_starved;

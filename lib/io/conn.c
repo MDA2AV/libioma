@@ -37,7 +37,7 @@ static void submit_cancel(proactor_t *p, uint64_t target_user_data)
 
 /* Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two owners hold it:
  * the handler coroutine and the multishot recv, so refs starts at 2. */
-conn_t *ioxd__conn_new(proactor_t *p, int fd)
+conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd)
 {
     conn_t *c = p->conn_free;
     if (c) {
@@ -52,6 +52,7 @@ conn_t *ioxd__conn_new(proactor_t *p, int fd)
     }
     c->fd        = fd;
     c->p         = p;
+    c->listener  = l;
     c->waiter    = nullptr;
     c->rx_head   = 0;
     c->rx_tail   = 0;

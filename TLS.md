@@ -62,9 +62,8 @@ Listeners become explicit, one per port and per worker, so plain and TLS can coe
 one port can be served (ioxide's multi-port):
 
     ioxd_tls *tls = ioxd_tls_new("/etc/ioxd/certs");     // reads the tree, starts watching
-    ioxd_listen(8080, NULL);                             // plain
-    ioxd_listen(8443, tls);                              // TLS
-    ioxd_run(0);                                         // workers over every listener
+    ioxd_listen(8443, tls);                              // TLS, besides ioxd_run's plain port
+    ioxd_run(0, 8080);                                   // workers over every listener
 
 Per connection, `conn_main` runs the prologue when its listener has a TLS context, then the same
 handler as always. `ctx->req` gains the negotiated server name and the fact that the connection is

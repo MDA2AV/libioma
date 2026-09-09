@@ -36,31 +36,32 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p)
 /* ── accept ────────────────────────────────────────────────────────────────────────────── */
 
 /* Arm the multishot accept: one SQE, then a CQE per new connection. */
-static void arm_accept(proactor_t *p)
+static void arm_accept(struct listener *l)
 {
-    struct io_uring_sqe *sqe = ioxd__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__sqe(l->p);
     sqe->opcode    = IORING_OP_ACCEPT;
-    sqe->fd        = p->listen_fd;
+    sqe->fd        = l->fd;
     sqe->ioprio    = IORING_ACCEPT_MULTISHOT;
-    sqe->user_data = UD(p, TAG_ACCEPT);
-    if (p->ring.fixed_files)
+    sqe->user_data = UD(l, TAG_ACCEPT);
+    if (l->p->ring.fixed_files)
         sqe->file_index = IORING_FILE_INDEX_ALLOC;   /* land each socket in a free slot, not an fd */
 }
 
 /* An accept CQE: wrap the new fd in a conn, arm its recv, spawn its handler coroutine. */
-static void on_accept(proactor_t *p, int result, unsigned flags)
+static void on_accept(struct listener *l, int result, unsigned flags)
 {
-    trace("[w%d] accept result=%d more=%d\n", p->id, result, !!(flags & IORING_CQE_F_MORE));
+    proactor_t *p = l->p;
+    trace("[w%d] accept :%u result=%d more=%d\n", p->id, l->port, result, !!(flags & IORING_CQE_F_MORE));
     if (result >= 0) {
-        conn_t *c = ioxd__conn_new(p, result);         /* TCP_NODELAY came with the listener */
+        conn_t *c = ioxd__conn_new(p, l, result);      /* TCP_NODELAY came with the listener */
         ioxd__arm_recv(p, c);
         proactor_spawn(p, ioxd__conn_main, c);
         p->accepted++;
     } else {
-        fprintf(stderr, "[w%d] accept: %s\n", p->id, strerror(-result));
+        fprintf(stderr, "[w%d] accept :%u: %s\n", p->id, l->port, strerror(-result));
     }
     if (!(flags & IORING_CQE_F_MORE))
-        arm_accept(p);
+        arm_accept(l);
 }
 
 /* ── completions ───────────────────────────────────────────────────────────────────────── */
@@ -82,7 +83,7 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
         ioxd__on_recv(p, ptr, cqe->res, cqe->flags);
         break;
     case TAG_ACCEPT:
-        on_accept(p, cqe->res, cqe->flags);
+        on_accept(ptr, cqe->res, cqe->flags);
         break;
     default:                                         /* TAG_IGNORE: cancel acknowledgements */
         break;
@@ -129,7 +130,7 @@ static void rearm_starved(proactor_t *p)
 
 /* ── listener ──────────────────────────────────────────────────────────────────────────── */
 
-/* A SO_REUSEPORT listener on port, one per worker so the kernel spreads connections. TCP_NODELAY
+/* A SO_REUSEPORT socket on port; every worker opens its own, so the kernel spreads connections. TCP_NODELAY
  * is set here because Linux accepted sockets inherit it: no setsockopt per accept. */
 static int listener_open(uint16_t port)
 {
@@ -220,10 +221,16 @@ void proactor_run(proactor_t *p)
     if (slots)
         uring_register_files_sparse(&p->ring, slots);
     ioxd__bufring_init(&p->bufs, &p->ring, p->id);
-    p->listen_fd = listener_open(p->port);
-    arm_accept(p);
-    fprintf(stderr, "[w%d] listening on 0.0.0.0:%u (cpu %d, %u x %u B recv buffers, ring %u%s%s%s)\n",
-            p->id, p->port, p->cpu, BUF_COUNT, BUF_SIZE, p->ring.sq_entries,
+    char ports[IOXD_MAX_LISTENERS * 12] = "", *at = ports;
+    for (int i = 0; i < p->n_listeners; i++) {
+        struct listener *l = &p->listeners[i];
+        l->p  = p;
+        l->fd = listener_open(l->port);
+        arm_accept(l);
+        at += snprintf(at, sizeof ports - (size_t)(at - ports), "%s:%u%s", i ? " " : "", l->port, l->tls ? "/tls" : "");
+    }
+    fprintf(stderr, "[w%d] listening on %s (cpu %d, %u x %u B recv buffers, ring %u%s%s%s)\n",
+            p->id, ports, p->cpu, BUF_COUNT, BUF_SIZE, p->ring.sq_entries,
             p->ring.has_sq_array ? "" : ", no sqarray",
             p->ring.enter_flags ? ", registered ring" : "",
             p->ring.fixed_files ? ", fixed files" : "");
@@ -251,7 +258,8 @@ void proactor_run(proactor_t *p)
 
     /* Sockets, then the ring (which cancels every in-flight op and drops its buffer references),
      * then the memory the kernel could still have referenced. */
-    close(p->listen_fd);
+    for (int i = 0; i < p->n_listeners; i++)
+        close(p->listeners[i].fd);
     ioxd__bufring_unregister(&p->bufs, &p->ring);
     uring_exit(&p->ring);
     ioxd__bufring_unmap(&p->bufs);

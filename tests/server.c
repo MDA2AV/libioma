@@ -329,5 +329,7 @@ int main(void)
 
     int workers = (int)env_number("IOXD_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOXD_PORT", 8080);
-    return ioxd_run(workers, port > 0 && port < 65536 ? port : 8080);
+    int p = port > 0 && port < 65536 ? port : 8080;
+    ioxd_listen(p + 1, NULL);                                  /* a second plain port: the same routes */
+    return ioxd_run(workers, p);
 }

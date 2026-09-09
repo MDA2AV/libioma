@@ -60,12 +60,28 @@ static void raise_nofile(void)
 /* Start the workers (workers <= 0: one per available core) and block until a stop signal. */
 /* Worker threads, one proactor each, serving `port` with `handler` on every connection until
  * SIGINT/SIGTERM. What ioxd_run and ioxd_run_pipes share. */
+/* The listeners added before the run; ioxd_run's own port joins them. */
+static struct listener g_listeners[IOXD_MAX_LISTENERS];
+static int             g_n_listeners;
+
+int ioxd_listen(int port, ioxd_tls *tls)
+{
+    if (port < 1 || port > 65535 || g_n_listeners == IOXD_MAX_LISTENERS) {
+        fprintf(stderr, "ioxd_listen: port %d refused (1..65535, at most %d listeners)\n", port, IOXD_MAX_LISTENERS);
+        return -1;
+    }
+    g_listeners[g_n_listeners++] = (struct listener){ .port = (uint16_t)port, .tls = tls };
+    return 0;
+}
+
 static int run_workers(int workers, int port, handler_fn handler)
 {
     if (workers <= 0)
         workers = cpu_count();
-    if (port < 1 || port > 65535) {
-        fprintf(stderr, "ioxd_run: 1<=port<=65535 required\n");
+    if (port != 0 && ioxd_listen(port, nullptr) < 0)
+        return 2;
+    if (g_n_listeners == 0) {
+        fprintf(stderr, "ioxd_run: nothing to listen on\n");
         return 2;
     }
 
@@ -90,15 +106,19 @@ static int run_workers(int workers, int port, handler_fn handler)
     for (int i = 0; i < workers; i++) {
         ws[i].id      = i;
         ws[i].cpu     = i;
-        ws[i].port    = (uint16_t)port;
         ws[i].handler = handler;
+        ws[i].n_listeners = g_n_listeners;
+        memcpy(ws[i].listeners, g_listeners, sizeof g_listeners);
         ws[i].stop    = &g_stop;
         if (pthread_create(&th[i], nullptr, worker_thread, &ws[i]) != 0) {
             perror("pthread_create");
             return 1;
         }
     }
-    fprintf(stderr, "ioxd: %d workers on :%d\n", workers, port);
+    fprintf(stderr, "ioxd: %d workers on", workers);
+    for (int i = 0; i < g_n_listeners; i++)
+        fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].tls ? "/tls" : "");
+    fputc('\n', stderr);
 
     for (int i = 0; i < workers; i++)
         pthread_join(th[i], nullptr);
