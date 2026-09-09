@@ -385,11 +385,11 @@ static void add_server(ioxd_ctx *ctx, ioxd_next *next)
 /* POST /tls/reload - the certificate store read again, registered only when the fixture has one.
  * smoke.py rewrites a host's cert.pem and key.pem and calls this, then checks the new certificate
  * is what the handshake serves. */
-static ioxd_tls *g_tls;
+static ioxd_certs *g_certs;
 
 static void tls_reload(ioxd_ctx *ctx)
 {
-    if (!g_tls || ioxd_tls_reload(g_tls) != 0) {
+    if (!g_certs || ioxd_certs_reload(g_certs) != 0) {
         ctx->res.status = 500;
         ioxd_text(ctx, "reload failed\n");
         return;
@@ -526,9 +526,9 @@ int main(void)
     ioxd_bind(p + 1, NULL);                                    /* a second plain port: the same routes */
     const char *certs = getenv("IOXD_CERTS");                  /* NOLINT(concurrency-mt-unsafe): a TLS port, given a certificate directory */
     if (certs && *certs) {
-        g_tls = ioxd_tls_new(certs);
-        if (g_tls) {
-            ioxd_bind(p + 2, g_tls);
+        g_certs = ioxd_certs_load(certs);
+        if (g_certs) {
+            ioxd_bind(p + 2, g_certs);
             IOXD_POST("/tls/reload", tls_reload);              /* only a build with certificates has it */
         }
     }

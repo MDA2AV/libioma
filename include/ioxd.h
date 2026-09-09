@@ -17,7 +17,7 @@
  *     }
  *     int main(void) {
  *         IOXD_GET("/users/:id", user);                       // or ioxd_route(NULL, "GET", "/users/:id", user)
- *         ioxd_bind(8080, NULL);                              // plain; ioxd_bind(8443, ioxd_tls_new("certs")) for TLS
+ *         ioxd_bind(8080, NULL);                              // plain; ioxd_bind(8443, ioxd_certs_load("certs")) for TLS
  *         return ioxd_run(0);                                  // one worker per core
  *     }
  */

@@ -167,10 +167,10 @@ int  ioxd_flush         (ioxd_ctx *ctx);                 /* send what is in the 
 /* ── run ───────────────────────────────────────────────────────────────────────────────── */
 
 /* Bind a port: plain HTTP when tls is NULL, TLS 1.3 terminated in the kernel otherwise, with the
- * certificate store from ioxd_tls_new (TLS.md). Every bound port serves the same routes; bind as
+ * certificate store from ioxd_certs_load (TLS.md). Every bound port serves the same routes; bind as
  * many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full. */
-typedef struct ioxd_tls ioxd_tls;
-int ioxd_bind(int port, ioxd_tls *tls);
+typedef struct ioxd_certs ioxd_certs;
+int ioxd_bind(int port, ioxd_certs *certs);
 
 /* Start `workers` proactor threads (<= 0: one per core) serving HTTP on every bound port, and
  * block until SIGINT/SIGTERM. Returns 0 on clean shutdown, non-zero when nothing was bound, when a

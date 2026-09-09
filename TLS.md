@@ -1,8 +1,8 @@
 # TLS: one way, in the kernel (design, branch `streams`)
 
-**Status.** Built: `lib/tls/store.c` (the store, SNI, `ioxd_tls_reload`, `ioxd_tls_free`) and
-`lib/tls/handshake.c` (the prologue and the handoff); `ioxd_bind(port, ioxd_tls_new(dir))`.
-Built by default; `make TLS=0` or `-DIOXD_TLS=OFF` leaves it out, and `ioxd_tls_new` then says so
+**Status.** Built: `lib/tls/store.c` (the store, SNI, `ioxd_certs_reload`, `ioxd_certs_free`) and
+`lib/tls/handshake.c` (the prologue and the handoff); `ioxd_bind(port, ioxd_certs_load(dir))`.
+Built by default; `make TLS=0` or `-DIOXD_TLS=OFF` leaves it out, and `ioxd_certs_load` then says so
 and returns NULL. Verified by the smoke suite through
 Python's `ssl` (default certificate, SNI, the `_.example.com` wildcard, an unknown name, a POST
 body and a 1 MB upload through kernel RX, keep-alive, a 3000-object reply through kernel TX, a
@@ -44,7 +44,7 @@ but not the handshake. So a TLS connection is a plain connection with a prologue
 2. **Keys into the socket.** The keylog callback hands us the TLS 1.3 traffic secrets (server for
    TX, client for RX); RFC 8446 HKDF-Expand-Label makes the key and the IV; `setsockopt(TCP_ULP,
    "tls")` attaches the ULP and `setsockopt(SOL_TLS, TLS_TX / TLS_RX)` installs them. Secrets are
-   zeroed once programmed. This is ioxide.tls's handoff, in C.
+   zeroed once programmed. This is ioxide.certs's handoff, in C.
 3. **Both directions in the kernel from then on.** The pipe's multishot recv delivers plaintext into
    the provided buffers; the writer's sends are encrypted by the kernel; `splice` from a file
    descriptor is encrypted too, which is what makes zero-copy file serving over TLS possible.
@@ -87,7 +87,7 @@ treats as end of input. Browsers do not send KeyUpdate; that is the accepted lim
 - **Layout.** A directory per listener: `<dir>/<hostname>/cert.pem` (the chain) and `key.pem`, plus
   `<dir>/default/` for no SNI or no match. Matching is exact hostname, then one wildcard level
   (`*.example.com` as the directory name `_.example.com`). `default` is required: without it there
-  is nothing to answer a name we do not have, so `ioxd_tls_new` says so and returns NULL. Only a
+  is nothing to answer a name we do not have, so `ioxd_certs_load` says so and returns NULL. Only a
   reload may go without one, and only by carrying the host that was already answering forward.
 - **What a host must be to load.** The key has to match the certificate and the chain has to parse,
   and the certificate's validity dates are checked as well: one that has expired, or that does not
@@ -98,14 +98,14 @@ treats as end of input. Browsers do not send KeyUpdate; that is the accepted lim
   callback goes on a context once, when it is built, and finds the table through the SSL that its
   handshake holds a reference to - not through the context - because a reload shares a carried-over
   context between two tables, and a published `SSL_CTX` is never written to again.
-- **Reload.** `ioxd_tls_reload(tls)` reads the directory again and switches to what it holds. It is
+- **Reload.** `ioxd_certs_reload(tls)` reads the directory again and switches to what it holds. It is
   manual: nothing watches the tree, and nothing sends it a signal. Reloads serialise against each
   other, and the table is reference-counted - every handshake takes a reference to the table it
   started with - so a handshake in flight finishes on the certificate it began with and the old
   table is freed when the last reference drops. A host that fails to load keeps the context it was
   serving, so an expired replacement changes nothing but a line on stderr; the host answering for
   unmatched SNI keeps answering. It returns -1 when nothing at all could be loaded, and what was
-  serving still is. `ioxd_tls_free(tls)` gives the store back once no handshake holds a table of
+  serving still is. `ioxd_certs_free(tls)` gives the store back once no handshake holds a table of
   it: for a store never listened on, or for after `ioxd_run` has returned.
 
 ## Where it plugs in
@@ -113,7 +113,7 @@ treats as end of input. Browsers do not send KeyUpdate; that is the accepted lim
 Ports are bound one by one, each plain or with a store, and every worker opens all of them, so
 plain and TLS coexist and more than one port can be served (ioxide's multi-port):
 
-    ioxd_tls *tls = ioxd_tls_new("/etc/ioxd/certs");     // reads the tree
+    ioxd_certs *tls = ioxd_certs_load("/etc/ioxd/certs");     // reads the tree
     ioxd_bind(8080, NULL);                               // plain
     ioxd_bind(8443, tls);                                // TLS
     ioxd_run(0);                                         // workers over every bound port
@@ -136,5 +136,5 @@ ordinary ring read. Events would be debounced (500 ms: editors and certbot touch
 several times), then each changed host confirmed with `statx` (inode, size, mtime against what is
 loaded) before the reload the store already does. A `statx` sweep every 60 s is the safety net for
 filesystems where inotify is silent (NFS, some bind mounts), and a SIGHUP would force one for
-deployments that prefer to say when. `ioxd_tls_reload` is what all of that would call; today it is
+deployments that prefer to say when. `ioxd_certs_reload` is what all of that would call; today it is
 the whole of it, and the application decides when. FILES.md shares the same watch facility.

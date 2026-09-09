@@ -237,7 +237,7 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
         }
         /* Kernel TLS reports a control record - the peer's alert, a KeyUpdate it cannot honour -
          * as -EIO. TLS.md calls that the end of input, so a close_notify reads like a FIN. */
-        end_input(c, result == -EIO && c->listener->tls ? 0 : result);
+        end_input(c, result == -EIO && c->listener->certs ? 0 : result);
         c->recv = RECV_DONE;
         wake_reader(c);                              /* a parked reader sees 0 / -errno          */
         conn_unref(c);                               /* the recv's ref; may recycle c            */

@@ -375,7 +375,7 @@ void proactor_run(proactor_t *p)
         l->p  = p;
         l->fd = listener_open(l->port);
         arm_accept(l);
-        int n = snprintf(ports + at, sizeof ports - at, "%s:%u%s", i ? " " : "", l->port, l->tls ? "/tls" : "");
+        int n = snprintf(ports + at, sizeof ports - at, "%s:%u%s", i ? " " : "", l->port, l->certs ? "/tls" : "");
         if (n < 0)
             break;
         at += (size_t)n < sizeof ports - at ? (size_t)n : sizeof ports - at - 1;   /* truncated: stop growing */

@@ -13,7 +13,7 @@ Run `make` in the repo root. It produces `libioxd.a`, `libioxd.so` and the demo 
 and OpenSSL 3 with its headers, which the TLS handshake links against. On Ubuntu 24.04
 `sudo apt install gcc-14 libssl-dev`; make and CMake pick the newest gcc they find unless told
 otherwise. TLS is built by default: `make TLS=0`, or CMake's `-DIOXD_TLS=OFF`, leaves it out and
-with it the OpenSSL dependency, and `ioxd_tls_new` then returns NULL with a line saying so.
+with it the OpenSSL dependency, and `ioxd_certs_load` then returns NULL with a line saying so.
 
 ## Run
 
@@ -43,7 +43,7 @@ under a group at `/api` answers at `/api/users/:id`, wrapped by the middleware o
 is `NULL`, with `ioxd_use` for middleware on everything. `ioxd_run` resolves it all once into a segment tree and flat
 chains, so a request costs one walk and no scan, then serves with a worker count (zero means one per core) over every port
 bound before it with `ioxd_bind(port, NULL)` - or `ioxd_bind(port, store)` for TLS, the store from
-`ioxd_tls_new("<dir>")`, a directory of `<host>/cert.pem` and `key.pem` ([`TLS.md`](TLS.md)).
+`ioxd_certs_load("<dir>")`, a directory of `<host>/cert.pem` and `key.pem` ([`TLS.md`](TLS.md)).
 Underneath, a connection is a pipe: `ioxd_run_pipes` hands a handler of your own the reader and writer the
 HTTP engine uses, for raw TCP, with the same suspend-and-resume. A JSON reply is written as you go with
 the `ioxd_json` writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation, streamed as the slab fills; a struct

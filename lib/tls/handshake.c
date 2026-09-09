@@ -255,11 +255,11 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
     }
 }
 
-int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
+int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
 {
     pthread_once(&ex_once, make_ex_index);
     conn_t        *c = pipe->in.conn;
-    struct table  *t = ioxd__tls_acquire(tls);
+    struct table  *t = ioxd__tls_acquire(certs);
     struct secrets s = {};
     unsigned char *plain = nullptr;
     const char    *why = nullptr;                     /* set on every failure: logged once */
@@ -332,14 +332,14 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
         why = "input ended after the handshake";        /* or the worker is draining: nothing to serve */
 out:
     if (why)
-        fprintf(stderr, "ioxd_tls: connection dropped: %s\n", why);
+        fprintf(stderr, "ioxd_certs: connection dropped: %s\n", why);
     explicit_bzero(&s, sizeof s);
     if (plain) {
         explicit_bzero(plain, PLAIN_MAX + RECORD_MAX);
         free(plain);
     }
     SSL_free(ssl);                                    /* and its BIOs */
-    ioxd__tls_release(tls, t);
+    ioxd__tls_release(certs, t);
     return why ? -1 : 0;
 }
 
@@ -362,10 +362,10 @@ void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
 
 #else /* built without TLS */
 
-int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
+int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
 {
     (void)pipe;
-    (void)tls;
+    (void)certs;
     return -1;
 }
 

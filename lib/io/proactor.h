@@ -51,7 +51,7 @@ struct listener {
     proactor_t *p;
     int         fd;                       /* the socket, or its file slot under fixed files    */
     uint16_t    port;
-    void       *tls;                      /* the port's certificate store, or nullptr: plain   */
+    void *certs;                      /* the port's certificate store, or nullptr: plain   */
 
     /* accept back-pressure: out of descriptors, file slots or memory, re-arming at once would
      * spin, so the accept is left unarmed until there is room again (see rearm_stalled). */
@@ -66,7 +66,7 @@ struct proactor {
     /* set by the creator */
     int                    id;
     int                    cpu;           /* pin the thread here; -1 = don't                   */
-    struct listener        listeners[IOXD_MAX_LISTENERS];   /* port and tls set by the creator  */
+    struct listener        listeners[IOXD_MAX_LISTENERS];   /* port and certs set by the creator  */
     int                    n_listeners;
     handler_fn             handler;
     volatile sig_atomic_t *stop;

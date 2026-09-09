@@ -39,7 +39,7 @@ struct table {
     SSL_CTX     *fallback;                            /* `default`: what answers when SNI matches nothing */
 };
 
-struct ioxd_tls {
+struct ioxd_certs {
     char            *dir;
     struct table    *table;
     pthread_mutex_t  lock;                            /* around the table pointer and its refs */
@@ -204,12 +204,12 @@ static struct table *load(const char *dir, const struct table *old)
 {
     DIR *d = opendir(dir);
     if (!d) {
-        fprintf(stderr, "ioxd_tls: %s: %s\n", dir, ioxd__errstr(errno));
+        fprintf(stderr, "ioxd_certs: %s: %s\n", dir, ioxd__errstr(errno));
         return nullptr;
     }
     struct table *t = calloc(1, sizeof *t);
     if (!t) {
-        perror("ioxd_tls");
+        perror("ioxd_certs");
         closedir(d);
         return nullptr;
     }
@@ -222,14 +222,14 @@ static struct table *load(const char *dir, const struct table *old)
         int  cn = snprintf(cert, sizeof cert, "%s/%s/cert.pem", dir, e->d_name);
         int  kn = snprintf(key,  sizeof key,  "%s/%s/key.pem",  dir, e->d_name);
         if (cn < 0 || (size_t)cn >= sizeof cert || kn < 0 || (size_t)kn >= sizeof key) {
-            fprintf(stderr, "ioxd_tls: %s: the path to its certificate does not fit\n", e->d_name);
+            fprintf(stderr, "ioxd_certs: %s: the path to its certificate does not fit\n", e->d_name);
             continue;
         }
         struct stat cs, ks;
         if (stat(cert, &cs) != 0 || !S_ISREG(cs.st_mode) || stat(key, &ks) != 0 || !S_ISREG(ks.st_mode))
             continue;                                 /* not a host directory */
         if (ks.st_mode & ((unsigned)S_IRGRP | (unsigned)S_IROTH))   /* once per host, on every load */
-            fprintf(stderr, "ioxd_tls: %s: mode %03o, readable past its owner\n", key,
+            fprintf(stderr, "ioxd_certs: %s: mode %03o, readable past its owner\n", key,
                     (unsigned)(ks.st_mode & 0777));
         SSL_CTX    *ctx = context_for(cert, key);
         const char *why = ctx ? not_current(ctx) : ssl_error();
@@ -238,7 +238,7 @@ static struct table *load(const char *dir, const struct table *old)
             ctx = nullptr;
         }
         if (!ctx) {
-            fprintf(stderr, "ioxd_tls: %s: %s (%s)\n", e->d_name, why, cert);
+            fprintf(stderr, "ioxd_certs: %s: %s (%s)\n", e->d_name, why, cert);
             if (old) {                                /* keep what was serving */
                 for (int i = 0; i < old->n; i++)
                     if (strcmp(old->hosts[i].name, e->d_name) == 0) {
@@ -252,7 +252,7 @@ static struct table *load(const char *dir, const struct table *old)
         struct host *grown = realloc(t->hosts, ((size_t)t->n + 1) * sizeof *grown);
         char        *name  = strdup(e->d_name);
         if (!grown || !name) {
-            perror("ioxd_tls");
+            perror("ioxd_certs");
             abort();
         }
         t->hosts = grown;
@@ -262,7 +262,7 @@ static struct table *load(const char *dir, const struct table *old)
     }
     closedir(d);
     if (t->n == 0) {
-        fprintf(stderr, "ioxd_tls: %s: no <host>/cert.pem + key.pem loaded\n", dir);
+        fprintf(stderr, "ioxd_certs: %s: no <host>/cert.pem + key.pem loaded\n", dir);
         table_free(t);
         return nullptr;
     }
@@ -273,64 +273,64 @@ static struct table *load(const char *dir, const struct table *old)
             if (strcmp(t->hosts[i].name, prev) == 0)
                 t->fallback = t->hosts[i].ctx;
         if (!t->fallback) {
-            fprintf(stderr, "ioxd_tls: %s: no `default` host (default/cert.pem + key.pem) to answer"
+            fprintf(stderr, "ioxd_certs: %s: no `default` host (default/cert.pem + key.pem) to answer"
                             " when SNI matches nothing\n", dir);
             table_free(t);
             return nullptr;
         }
-        fprintf(stderr, "ioxd_tls: no `default` host; %s still answers when SNI matches nothing\n", prev);
+        fprintf(stderr, "ioxd_certs: no `default` host; %s still answers when SNI matches nothing\n", prev);
     }
     return t;
 }
 
-ioxd_tls *ioxd_tls_new(const char *dir)
+ioxd_certs *ioxd_certs_load(const char *dir)
 {
     struct table *t = load(dir, nullptr);
     if (!t)
         return nullptr;
-    ioxd_tls *tls = calloc(1, sizeof *tls);
+    ioxd_certs *certs = calloc(1, sizeof *certs);
     char     *own = strdup(dir);
-    if (!tls || !own) {
-        perror("ioxd_tls");
+    if (!certs || !own) {
+        perror("ioxd_certs");
         table_free(t);
         free(own);
-        free(tls);
+        free(certs);
         return nullptr;
     }
-    tls->dir   = own;
-    tls->table = t;
-    pthread_mutex_init(&tls->lock, nullptr);
-    pthread_mutex_init(&tls->reload, nullptr);
-    fprintf(stderr, "ioxd_tls: %d host%s from %s\n", t->n, t->n == 1 ? "" : "s", dir);
-    return tls;
+    certs->dir   = own;
+    certs->table = t;
+    pthread_mutex_init(&certs->lock, nullptr);
+    pthread_mutex_init(&certs->reload, nullptr);
+    fprintf(stderr, "ioxd_certs: %d host%s from %s\n", t->n, t->n == 1 ? "" : "s", dir);
+    return certs;
 }
 
-void ioxd_tls_free(ioxd_tls *tls)
+void ioxd_certs_free(ioxd_certs *certs)
 {
-    if (!tls)
+    if (!certs)
         return;
-    ioxd__tls_release(tls, tls->table);               /* the store's own reference; the last one frees */
-    pthread_mutex_destroy(&tls->reload);
-    pthread_mutex_destroy(&tls->lock);
-    free(tls->dir);
-    free(tls);
+    ioxd__tls_release(certs, certs->table);               /* the store's own reference; the last one frees */
+    pthread_mutex_destroy(&certs->reload);
+    pthread_mutex_destroy(&certs->lock);
+    free(certs->dir);
+    free(certs);
 }
 
 /* A reference to the table serving now; released after the handshake. */
-struct table *ioxd__tls_acquire(ioxd_tls *tls)
+struct table *ioxd__tls_acquire(ioxd_certs *certs)
 {
-    pthread_mutex_lock(&tls->lock);
-    struct table *t = tls->table;
+    pthread_mutex_lock(&certs->lock);
+    struct table *t = certs->table;
     t->refs++;
-    pthread_mutex_unlock(&tls->lock);
+    pthread_mutex_unlock(&certs->lock);
     return t;
 }
 
-void ioxd__tls_release(ioxd_tls *tls, struct table *t)
+void ioxd__tls_release(ioxd_certs *certs, struct table *t)
 {
-    pthread_mutex_lock(&tls->lock);
+    pthread_mutex_lock(&certs->lock);
     int left = --t->refs;
-    pthread_mutex_unlock(&tls->lock);
+    pthread_mutex_unlock(&certs->lock);
     if (left == 0)
         table_free(t);
 }
@@ -340,39 +340,39 @@ SSL_CTX *ioxd__tls_fallback(const struct table *t)
     return t->fallback;
 }
 
-int ioxd_tls_reload(ioxd_tls *tls)
+int ioxd_certs_reload(ioxd_certs *certs)
 {
-    pthread_mutex_lock(&tls->reload);                 /* one at a time, so the table it reads stays put */
-    struct table *old   = ioxd__tls_acquire(tls);     /* and cannot be freed while load() reads it */
-    struct table *fresh = load(tls->dir, old);
+    pthread_mutex_lock(&certs->reload);                 /* one at a time, so the table it reads stays put */
+    struct table *old   = ioxd__tls_acquire(certs);     /* and cannot be freed while load() reads it */
+    struct table *fresh = load(certs->dir, old);
     if (fresh) {
-        pthread_mutex_lock(&tls->lock);
-        tls->table = fresh;
-        pthread_mutex_unlock(&tls->lock);
-        fprintf(stderr, "ioxd_tls: reloaded %d host%s from %s\n", fresh->n, fresh->n == 1 ? "" : "s", tls->dir);
-        ioxd__tls_release(tls, old);                  /* the store's own reference to the old table */
+        pthread_mutex_lock(&certs->lock);
+        certs->table = fresh;
+        pthread_mutex_unlock(&certs->lock);
+        fprintf(stderr, "ioxd_certs: reloaded %d host%s from %s\n", fresh->n, fresh->n == 1 ? "" : "s", certs->dir);
+        ioxd__tls_release(certs, old);                  /* the store's own reference to the old table */
     }
-    ioxd__tls_release(tls, old);                      /* the one this reload took */
-    pthread_mutex_unlock(&tls->reload);
+    ioxd__tls_release(certs, old);                      /* the one this reload took */
+    pthread_mutex_unlock(&certs->reload);
     return fresh ? 0 : -1;
 }
 
 #else /* built without TLS */
 
-ioxd_tls *ioxd_tls_new(const char *dir)
+ioxd_certs *ioxd_certs_load(const char *dir)
 {
-    fprintf(stderr, "ioxd_tls: %s: this build has no TLS (make TLS=1 with libssl-dev)\n", dir);
+    fprintf(stderr, "ioxd_certs: %s: this build has no TLS (make TLS=1 with libssl-dev)\n", dir);
     return nullptr;
 }
 
-void ioxd_tls_free(ioxd_tls *tls)
+void ioxd_certs_free(ioxd_certs *certs)
 {
-    (void)tls;
+    (void)certs;
 }
 
-int ioxd_tls_reload(ioxd_tls *tls)
+int ioxd_certs_reload(ioxd_certs *certs)
 {
-    (void)tls;
+    (void)certs;
     return -1;
 }
 

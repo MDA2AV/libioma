@@ -62,13 +62,13 @@ static void raise_nofile(void)
 static struct listener g_listeners[IOXD_MAX_LISTENERS];
 static int             g_n_listeners;
 
-int ioxd_bind(int port, ioxd_tls *tls)
+int ioxd_bind(int port, ioxd_certs *certs)
 {
     if (port < 1 || port > 65535 || g_n_listeners == IOXD_MAX_LISTENERS) {
         fprintf(stderr, "ioxd_bind: port %d refused (1..65535, at most %d ports)\n", port, IOXD_MAX_LISTENERS);
         return -1;
     }
-    g_listeners[g_n_listeners++] = (struct listener){ .port = (uint16_t)port, .tls = tls };
+    g_listeners[g_n_listeners++] = (struct listener){ .port = (uint16_t)port, .certs = certs };
     return 0;
 }
 
@@ -122,7 +122,7 @@ static int run_workers(int workers, handler_fn handler)
     if (started) {
         fprintf(stderr, "ioxd: %d workers on", started);
         for (int i = 0; i < g_n_listeners; i++)
-            fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].tls ? "/tls" : "");
+            fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].certs ? "/tls" : "");
         fputc('\n', stderr);
     }
 
@@ -140,7 +140,7 @@ static int run_workers(int workers, handler_fn handler)
 static int prologue(struct ioxd_pipe *pipe)
 {
     struct listener *l = pipe->in.conn->listener;
-    return l->tls ? ioxd__tls_prologue(pipe, l->tls) : 0;
+    return l->certs ? ioxd__tls_prologue(pipe, l->certs) : 0;
 }
 
 static void serve_http(struct ioxd_pipe *pipe)
@@ -148,7 +148,7 @@ static void serve_http(struct ioxd_pipe *pipe)
     if (prologue(pipe) != 0)
         return;
     ioxd__serve(pipe);
-    if (pipe->in.conn->listener->tls)
+    if (pipe->in.conn->listener->certs)
         ioxd__tls_close_notify(pipe);
 }
 
@@ -173,7 +173,7 @@ static void serve_pipe(struct ioxd_pipe *pipe)
     if (prologue(pipe) != 0)
         return;
     g_pipe_handler(pipe);
-    if (pipe->in.conn->listener->tls)
+    if (pipe->in.conn->listener->certs)
         ioxd__tls_close_notify(pipe);
 }
 

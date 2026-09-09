@@ -107,7 +107,7 @@ int main(int argc, char **argv)
 
     ioxd_bind(8080, NULL);
     if (argc > 1) {
-        ioxd_tls *tls = ioxd_tls_new(argv[1]);
+        ioxd_certs *tls = ioxd_certs_load(argv[1]);
         if (!tls)
             return 1;                                /* the reason is on stderr: no `default`, a bad key, a TLS=0 build */
         ioxd_bind(8443, tls);
