@@ -126,6 +126,8 @@ if(IOXD_EXAMPLES)
     target_link_libraries(ioxd-pipe-server PRIVATE ioxd::ioxd)
     add_executable(ioxd-unit tests/unit.c)
     target_link_libraries(ioxd-unit PRIVATE ioxd::ioxd)
+    add_executable(ioxd-router-test tests/router_test.c)
+    target_link_libraries(ioxd-router-test PRIVATE ioxd::ioxd)
     # The suites, through the one script `make check` runs, so the sequence lives in one place.
     # The three that talk to the HTTP fixture share one entry, and so one fixture on one port, as
     # they do under make: a fixture bound to a port the suite before it filled with TIME_WAIT
@@ -136,8 +138,9 @@ if(IOXD_EXAMPLES)
     set(IOXD_PIPE_PORT  8102    CACHE STRING "port the pipe fixture listens on")
     set(IOXD_TLS_PYTHON python3 CACHE STRING "a python with tlslite-ng, for tests/tls_early.py")
     add_test(NAME unit COMMAND ioxd-unit)
+    add_test(NAME router COMMAND ioxd-router-test)
     add_test(NAME suites COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
-             --suite smoke --suite stress --suite tls
+             --suite smoke --suite conformance --suite stress --suite tls
              --port ${IOXD_CHECK_PORT}
              --server $<TARGET_FILE:ioxd-test-server>
              --tls-python ${IOXD_TLS_PYTHON}
@@ -150,7 +153,7 @@ if(IOXD_EXAMPLES)
     set_tests_properties(suites pipes PROPERTIES RUN_SERIAL TRUE)
     add_custom_target(check
             COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
-            DEPENDS ioxd-unit ioxd-test-server ioxd-pipe-server
+            DEPENDS ioxd-unit ioxd-router-test ioxd-test-server ioxd-pipe-server
             USES_TERMINAL)
     if(IOXD_HAVE_FAT_LTO)
         target_compile_options(ioxd-hello PRIVATE -flto)
