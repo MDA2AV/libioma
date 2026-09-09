@@ -9,14 +9,25 @@
  * Discipline: only the loop calls coro_resume, only a coroutine calls coro_yield. A coroutine
  * that wants to start another one hands it to the scheduler (proactor_spawn); resuming from
  * inside a coroutine would overwrite the loop's saved stack pointer.
+ *
+ * Two things the switch does not carry, both deliberate. It saves the six callee-saved registers
+ * and nothing else, so MXCSR and the x87 control word - the rounding mode, the denormal and
+ * exception masks - are whatever the last coroutine left behind: a handler that changes an FP mode
+ * must put it back before it yields. And switch_x86_64.S carries no .note.gnu.property, which
+ * leaves the whole linked program without the IBT/SHSTK markings, so no shadow stack is ever armed
+ * around a stack this file forged by hand.
  */
 #pragma once
 
 #include <stddef.h>
 
+/* Private to libioxd: hidden symbols cannot be interposed, so nothing outside the library can
+ * substitute a scheduler primitive (the .S hides swap_ctx the same way). */
+#define CORO_API __attribute__((visibility("hidden")))
+
 typedef struct coro {
     void   *sp;               /* saved stack pointer while suspended                  */
-    void   *stack;            /* mmap base; the lowest page is the guard              */
+    void   *stack;            /* mmap base; the low CORO_GUARD bytes are the guard    */
     size_t  size;             /* mapping size, guard included                         */
     void  (*fn)(void *);
     void   *arg;
@@ -25,16 +36,16 @@ typedef struct coro {
 } coro_t;
 
 /* Allocate a stack and forge its first frame. The descriptor lives at the top of that stack. */
-coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes);
+CORO_API coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes);
 
 /* Loop only. Run c until it yields; if it finished, its stack is unmapped before returning. */
-void coro_resume(coro_t *c);
+CORO_API void coro_resume(coro_t *c);
 
 /* Coroutine only. Back to the loop; returns when the loop resumes this coroutine again. */
-void coro_yield(void);
+CORO_API void coro_yield(void);
 
 /* The running coroutine, nullptr on the loop stack. */
-coro_t *coro_current(void);
+CORO_API coro_t *coro_current(void);
 
 /* Unmap the per-thread free list of pooled stacks. Call at worker teardown, on the worker thread. */
-void coro_pool_drain(void);
+CORO_API void coro_pool_drain(void);

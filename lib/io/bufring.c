@@ -19,11 +19,21 @@ static void *map_pages(size_t bytes)
     return m;
 }
 
+/* The kernel named a buffer we never offered: the slab pointer it implies is outside the mapping,
+ * so there is nothing safe to do with it. */
+[[noreturn]] void ioxd__bufring_bad_id(uint16_t buf_id)
+{
+    fprintf(stderr, "ioxd: provided buffer id %u is outside the ring (BUF_COUNT %d)\n", buf_id, BUF_COUNT);
+    abort();
+}
+
 /* Map the slab and the ring, register the ring as buffer group BGID, and offer every buffer. */
 void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
 {
-    b->ring = map_pages((size_t)BUF_COUNT * sizeof(struct io_uring_buf));
-    b->slab = map_pages((size_t)BUF_COUNT * BUF_SIZE);
+    b->ring     = map_pages((size_t)BUF_COUNT * sizeof(struct io_uring_buf));
+    b->slab     = map_pages((size_t)BUF_COUNT * BUF_SIZE);
+    b->dirty    = false;
+    b->returned = 0;
 
     struct io_uring_buf_reg reg;
     memset(&reg, 0, sizeof reg);
@@ -57,8 +67,8 @@ void ioxd__bufring_return(struct bufring *b, uint16_t buf_id)
     slot->len  = BUF_SIZE;
     slot->bid  = buf_id;
     b->tail++;
-    b->returned = true;                           /* lets the loop re-arm starved recvs     */
-    b->dirty    = true;                           /* tail needs publishing before the enter */
+    b->returned++;                                /* how many recvs the loop may re-arm     */
+    b->dirty = true;                              /* tail needs publishing before the enter */
 }
 
 /* Publish staged returns to the kernel. */

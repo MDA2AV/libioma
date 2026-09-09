@@ -13,6 +13,31 @@
 
 /* Names for the newer bits, in case the build box's headers predate them (the kernel decides at
  * runtime; unsupported features fall back). */
+#ifndef IORING_SETUP_SINGLE_ISSUER
+#define IORING_SETUP_SINGLE_ISSUER    (1U << 12)
+#endif
+#ifndef IORING_SETUP_DEFER_TASKRUN
+#define IORING_SETUP_DEFER_TASKRUN    (1U << 13)
+#endif
+#ifndef IORING_SETUP_NO_SQARRAY
+#define IORING_SETUP_NO_SQARRAY       (1U << 16)
+#endif
+#ifndef IORING_SQ_CQ_OVERFLOW
+#define IORING_SQ_CQ_OVERFLOW         (1U << 1)
+#endif
+#ifndef IORING_ASYNC_CANCEL_ANY
+#define IORING_ASYNC_CANCEL_ANY       (1U << 2)
+#endif
+/* EXT_ARG and the struct it points at arrived together, so one guard covers both. */
+#ifndef IORING_ENTER_EXT_ARG
+#define IORING_ENTER_EXT_ARG          (1U << 3)
+struct io_uring_getevents_arg {
+    uint64_t sigmask;
+    uint32_t sigmask_sz;
+    uint32_t pad;
+    uint64_t ts;
+};
+#endif
 #ifndef IORING_REGISTER_RING_FDS
 #define IORING_REGISTER_RING_FDS      20
 #define IORING_UNREGISTER_RING_FDS    21
@@ -28,7 +53,7 @@
 #endif
 
 struct uring {
-    int      fd;
+    int      fd;                       /* -1 until both mappings are up (see uring_init)      */
     int      enter_fd;                 /* fd, or the registered-ring index (see enter_flags) */
     unsigned enter_flags;              /* 0, or IORING_ENTER_REGISTERED_RING                 */
     bool     fixed_files;              /* a sparse registered file table exists              */
@@ -36,7 +61,8 @@ struct uring {
     /* submission side */
     unsigned *sq_head;                 /* kernel-written consumer index            */
     unsigned *sq_tail;                 /* our published producer index             */
-    unsigned *sq_array;                /* SQ index array; unused under NO_SQARRAY  */
+    unsigned *sq_array;                /* SQ index array; nullptr under NO_SQARRAY */
+    unsigned *sq_flags;                /* kernel-written: IORING_SQ_CQ_OVERFLOW    */
     unsigned  sq_mask, sq_entries;
     unsigned  sqe_tail;                /* local tail: claimed, not yet published   */
     struct io_uring_sqe *sqes;
@@ -47,6 +73,7 @@ struct uring {
     unsigned *cq_tail;                 /* kernel-written producer index            */
     unsigned  cq_mask;
     struct io_uring_cqe *cqes;
+    uint64_t  cq_overflows;            /* enters that found the kernel holding overflowed CQEs */
 
     /* mappings */
     void  *ring_mem; size_t ring_bytes;
@@ -61,8 +88,11 @@ void uring_exit(struct uring *ring);
 struct io_uring_sqe *uring_get_sqe(struct uring *ring);
 
 /* Publish claimed SQEs and enter. uring_submit never waits; uring_submit_wait blocks until
- * wait_nr completions are available or ts (may be nullptr) expires. Return: submitted count or
- * -errno (-ETIME on timeout). Under DEFER_TASKRUN only the waiting form reaps completions. */
+ * wait_nr completions are available or ts (may be nullptr) expires. Return: the number of SQEs the
+ * kernel consumed, or -errno. A timeout reads as -ETIME only when there was nothing to submit;
+ * with SQEs in hand the kernel returns the count it took and says nothing about the wait, so a
+ * non-negative return is not "completions are ready" - always drain the CQ.
+ * Under DEFER_TASKRUN only the waiting form reaps completions. */
 int  uring_submit(struct uring *ring);
 int  uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts);
 

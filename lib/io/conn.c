@@ -33,6 +33,26 @@ static void submit_cancel(proactor_t *p, uint64_t target_user_data)
     sqe->user_data = TAG_IGNORE;
 }
 
+/* Cancel the multishot recv, at most one cancel in flight: the queue-full policy would otherwise
+ * stage another on every arrival while the queue stays full. Cleared on the terminal CQE. */
+static void cancel_recv(proactor_t *p, conn_t *c)
+{
+    if (c->cancelling)
+        return;
+    c->cancelling = true;
+    submit_cancel(p, UD(c, TAG_RECV));
+}
+
+/* End the input once: the first reason wins, so a cancel we asked for afterwards does not
+ * overwrite the peer's FIN or the error that really ended it. */
+static void end_input(conn_t *c, int err)
+{
+    if (!c->eof) {
+        c->eof = true;
+        c->err = err;
+    }
+}
+
 /* ── the object ────────────────────────────────────────────────────────────────────────── */
 
 /* Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two owners hold it:
@@ -50,18 +70,20 @@ conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd)
             abort();
         }
     }
-    c->fd        = fd;
-    c->p         = p;
-    c->listener  = l;
-    c->waiter    = nullptr;
-    c->rx_head   = 0;
-    c->rx_tail   = 0;
-    c->recv      = RECV_ARMED;
-    c->refs      = 2;
-    c->closed    = false;
-    c->eof       = false;
-    c->err       = 0;
-    c->pool_next = nullptr;
+    c->fd         = fd;
+    c->p          = p;
+    c->listener   = l;
+    c->waiter     = nullptr;
+    c->rx_head    = 0;
+    c->rx_tail    = 0;
+    c->recv       = RECV_ARMED;
+    c->pausing    = false;
+    c->cancelling = false;
+    c->refs       = 2;
+    c->closed     = false;
+    c->eof        = false;
+    c->err        = 0;
+    c->pool_next  = nullptr;
     p->live++;
     return c;
 }
@@ -106,7 +128,8 @@ void ioxd__arm_recv(proactor_t *p, conn_t *c)
     sqe->ioprio    = IORING_RECV_MULTISHOT;
     sqe->buf_group = BGID;
     sqe->user_data = UD(c, TAG_RECV);
-    c->recv = RECV_ARMED;
+    c->recv       = RECV_ARMED;
+    c->cancelling = false;                           /* a fresh arm: no cancel of ours is in flight */
 }
 
 /* Resume the coroutine parked waiting for bytes, if there is one. It pops the queue itself. */
@@ -152,12 +175,14 @@ static void starved_push(proactor_t *p, conn_t *c)
     p->starved[p->nstarved++] = c;
 }
 
-/* Forget a parked connection (it closed before any buffer came back). */
+/* Forget a parked connection (it closed before any buffer came back). The tail slides down rather
+ * than the last entry taking its place: the loop re-arms the list oldest first. */
 static void starved_remove(proactor_t *p, conn_t *c)
 {
     for (unsigned i = 0; i < p->nstarved; i++) {
         if (p->starved[i] == c) {
-            p->starved[i] = p->starved[--p->nstarved];
+            p->nstarved--;
+            memmove(&p->starved[i], &p->starved[i + 1], (p->nstarved - i) * sizeof *p->starved);
             return;
         }
     }
@@ -174,9 +199,24 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     trace("[w%d] recv fd=%d result=%d more=%d buf=%d buf_id=%u queued=%u state=%d closed=%d eof=%d\n",
           p->id, c->fd, result, more, has_buf, buf_id, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
 
+    if (!more)
+        c->cancelling = false;                       /* the multishot ends here: no cancel is left in flight */
+
     if (result == -ENOBUFS) {
         if (c->closed) {
             c->recv = RECV_DONE;
+            conn_unref(c);
+            return;
+        }
+        if (c->pausing) {                            /* the pause we asked for; starvation stopped it first */
+            c->pausing = false;
+            c->recv    = RECV_PAUSED;
+            wake_reader(c);
+            return;
+        }
+        if (c->eof) {                                /* the input already ended: there is nothing to re-arm */
+            c->recv = RECV_DONE;
+            wake_reader(c);
             conn_unref(c);
             return;
         }
@@ -189,34 +229,37 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     if (result <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
         if (has_buf)
             ioxd__bufring_return(&p->bufs, buf_id);
-        if (c->pausing && result == -ECANCELED) {       /* our pause, not the end of input */
+        if (c->pausing && !c->closed && result == -ECANCELED) {   /* our pause, not the end of input */
             c->pausing = false;
             c->recv    = RECV_PAUSED;
             wake_reader(c);
             return;
         }
-        if (!c->eof) {
-            c->eof = true;
-            c->err = result;
-        }
+        /* Kernel TLS reports a control record - the peer's alert, a KeyUpdate it cannot honour -
+         * as -EIO. TLS.md calls that the end of input, so a close_notify reads like a FIN. */
+        end_input(c, result == -EIO && c->listener->tls ? 0 : result);
         c->recv = RECV_DONE;
         wake_reader(c);                              /* a parked reader sees 0 / -errno          */
         conn_unref(c);                               /* the recv's ref; may recycle c            */
         return;
     }
 
-    if (c->closed) {
+    if (!has_buf) {
+        /* A positive result must name the buffer it landed in. Nothing can be done with bytes we
+         * cannot find, so end the input the way the queue-full policy does. */
+        end_input(c, -EPROTO);
+        if (more)
+            cancel_recv(p, c);
+        wake_reader(c);
+    } else if (c->closed) {
         ioxd__bufring_return(&p->bufs, buf_id);                          /* the handler is gone; nobody will read it */
     } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
         /* The handler is not draining. Rather than let one peer hoard the buffer group, end its
          * input: the next read sees -ENOBUFS. */
         ioxd__bufring_return(&p->bufs, buf_id);
-        if (!c->eof) {
-            c->eof = true;
-            c->err = -ENOBUFS;
-        }
+        end_input(c, -ENOBUFS);
         if (more)
-            submit_cancel(p, UD(c, TAG_RECV));
+            cancel_recv(p, c);
         wake_reader(c);
     } else {
         struct rx_item *item = &c->rx[c->rx_tail++ & RX_MASK];
@@ -227,7 +270,7 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (!more) {                                     /* the kernel ended the multishot: re-arm    */
-        if (c->pausing) {                            /* ended on its own while a pause was asked */
+        if (c->pausing && !c->closed) {              /* ended on its own while a pause was asked */
             c->pausing = false;
             c->recv    = RECV_PAUSED;
             wake_reader(c);
@@ -237,23 +280,37 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
             c->recv = RECV_DONE;
             conn_unref(c);
         }
+    } else if (p->cancel_each && !c->closed) {       /* shutting down without a blanket cancel */
+        cancel_recv(p, c);
     }
+}
+
+/* Shutdown: a recv parked on -ENOBUFS holds no operation the kernel can cancel, so end its input
+ * by hand. Its handler wakes with an error, unwinds and closes the connection like any other. */
+void ioxd__recv_drain(conn_t *c)
+{
+    if (c->recv != RECV_STARVED)
+        return;
+    end_input(c, -ECANCELED);
+    c->recv = RECV_DONE;
+    wake_reader(c);
+    conn_unref(c);
 }
 
 /* ── close ─────────────────────────────────────────────────────────────────────────────── */
 
-/* Close the socket: a plain close, or under fixed files a CLOSE SQE on its slot, which rides the
- * next enter with the rest of the batch instead of costing a syscall here. */
-static void close_socket(proactor_t *p, int fd)
+/* Close the socket with a CLOSE SQE, which rides the next enter with the rest of the batch: no
+ * syscall here, and the close stays in order behind the SQEs already staged for that same socket -
+ * a plain close(2) would race them. A file slot is named by index, a real fd by itself. */
+void ioxd__close_socket(proactor_t *p, int fd)
 {
-    if (!p->ring.fixed_files) {
-        close(fd);
-        return;
-    }
     struct io_uring_sqe *sqe = ioxd__sqe(p);
-    sqe->opcode     = IORING_OP_CLOSE;
-    sqe->file_index = (uint32_t)fd + 1;              /* slot + 1; 0 would mean "a real fd" */
-    sqe->user_data  = TAG_IGNORE;
+    sqe->opcode    = IORING_OP_CLOSE;
+    sqe->user_data = TAG_CLOSE;                      /* only a negative result is news */
+    if (p->ring.fixed_files)
+        sqe->file_index = (uint32_t)fd + 1;          /* slot + 1; 0 would mean "a real fd" */
+    else
+        sqe->fd = fd;
 }
 
 /* Runs once when the handler returns: cancel the recv, hand unread buffers back, close the fd,
@@ -266,7 +323,7 @@ static void conn_close(conn_t *c)
           p->id, c->fd, c->recv, c->eof, c->err, c->rx_tail - c->rx_head);
 
     if (c->recv == RECV_ARMED) {
-        submit_cancel(p, UD(c, TAG_RECV));
+        cancel_recv(p, c);
     } else if (c->recv == RECV_STARVED || c->recv == RECV_PAUSED) {
         if (c->recv == RECV_STARVED)
             starved_remove(p, c);
@@ -276,7 +333,7 @@ static void conn_close(conn_t *c)
     while (c->rx_head != c->rx_tail)
         ioxd__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
 
-    close_socket(p, c->fd);
+    ioxd__close_socket(p, c->fd);
     conn_unref(c);
 }
 
@@ -295,8 +352,6 @@ void ioxd__conn_main(void *arg)
 
 /* ── awaits ────────────────────────────────────────────────────────────────────────────── */
 
-/* Copy the next delivered slice into buf, parking while the queue is empty. Returns the byte
- * count, 0 when the peer closed, or -errno. A fully consumed buffer goes back to the ring. */
 /* The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends until one
  * arrives; 1 with the item, 0 at the end of input, <0 an error. */
 int ioxd__await_item(conn_t *c, struct rx_item *out)
@@ -315,13 +370,14 @@ int ioxd__await_item(conn_t *c, struct rx_item *out)
 }
 
 
-/* Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno. */
+/* Stop the multishot recv so nothing more leaves the socket, and park until it has stopped.
+ * 0 once it is paused, -1 when the input ended instead - the caller has nothing left to program. */
 int ioxd__recv_pause(conn_t *c)
 {
     proactor_t *p = c->p;
     if (c->recv == RECV_ARMED) {
         c->pausing = true;
-        submit_cancel(p, UD(c, TAG_RECV));
+        cancel_recv(p, c);
         while (c->recv == RECV_ARMED) {              /* data may still land meanwhile: fine, it is queued */
             c->waiter = coro_current();
             coro_yield();
@@ -332,13 +388,28 @@ int ioxd__recv_pause(conn_t *c)
         starved_remove(p, c);
         c->recv = RECV_PAUSED;
     }
+    if (c->eof)                                      /* it ended while we were stopping it */
+        return -1;
     return c->recv == RECV_PAUSED ? 0 : -1;
 }
 
-void ioxd__recv_resume(conn_t *c)
+/* Arm the recv again after a pause. False when there is nothing to arm - the input ended, or the
+ * handler is already gone - so a prologue learns that its connection went away under it. */
+bool ioxd__recv_resume(conn_t *c)
 {
-    if (c->recv == RECV_PAUSED)
-        ioxd__arm_recv(c->p, c);
+    if (c->recv != RECV_PAUSED || c->eof || c->closed)
+        return false;
+    if (c->p->draining) {
+        /* The worker is stopping and its blanket cancel has already been and gone: a recv armed
+         * now would never be cancelled and the handler would park behind it until the grace period
+         * ran out. End the input instead, and let the handler unwind like everyone else's. */
+        end_input(c, -ECANCELED);
+        c->recv = RECV_DONE;
+        conn_unref(c);                               /* the recv's ref; the handler still holds its own */
+        return false;
+    }
+    ioxd__arm_recv(c->p, c);
+    return true;
 }
 
 int ioxd__recv_exact(conn_t *c, void *dst, size_t n)
@@ -378,6 +449,9 @@ int ioxd__setsockopt(conn_t *c, int level, int name, const void *val, size_t len
     sqe->optval  = (uint64_t)(uintptr_t)val;
     sqe->optlen  = (uint32_t)len;
     int rc = await_op(sqe, &op);
+    /* The plain fallback needs a real descriptor, and under registered files (the default) c->fd is
+     * a slot index, so it is dead code there: kernel TLS then wants a kernel with
+     * SOCKET_URING_OP_SETSOCKOPT (6.7+), or a build with -DFIXED_FILES=0. */
     if ((rc == -EOPNOTSUPP || rc == -EINVAL) && !c->p->ring.fixed_files)   /* a kernel without the command */
         rc = setsockopt(c->fd, level, name, val, (socklen_t)len) < 0 ? -errno : 0;
     return rc;
@@ -396,6 +470,7 @@ int ioxd__sendmsg(conn_t *c, const struct msghdr *msg)
     return await_op(sqe, &op);
 }
 
+/* Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno. */
 int await_send(conn_t *c, const void *buf, size_t len)
 {
     const uint8_t *src  = buf;

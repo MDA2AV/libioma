@@ -15,6 +15,14 @@ static thread_local void   *loop_sp;    /* the loop's stack pointer while a coro
 #ifndef CORO_POOL_MAX
 #define CORO_POOL_MAX 512           /* warm stacks kept per worker, reused instead of munmap/mmap */
 #endif
+#ifndef CORO_GUARD
+#define CORO_GUARD (64UL * 1024)    /* PROT_NONE below every stack. Big enough that a frame cannot
+                                     * step over it into the neighbour below: ioxd__conn_main's is
+                                     * 25 KB and ioxd__serve's 10 KB, so one page would not do.
+                                     * Address space only - PROT_NONE pages have no RSS. */
+#endif
+/* Pooled stacks keep their pages: no madvise(MADV_DONTNEED) on the way in. The trade is deliberate,
+ * a warm stack for the next connection against the RSS of an idle one, and the pool is capped. */
 static thread_local coro_t *pool_head;  /* free list of whole stack blocks, linked via ->next */
 static thread_local int     pool_count;
 
@@ -34,17 +42,25 @@ static void coro_entry(void)
     abort();                        /* a finished coroutine must never be resumed */
 }
 
-/* Get a stack - pooled, or freshly mapped with a guard page - and forge its first frame so the
+/* Get a stack - pooled, or freshly mapped with its guard - and forge its first frame so the
  * first switch into it 'returns' into coro_entry. */
 coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     stack_bytes = (stack_bytes + page - 1) & ~(page - 1);
-    size_t total = stack_bytes + page;                       /* plus the guard page */
+    size_t guard = (CORO_GUARD + page - 1) & ~(page - 1);
+    size_t total = stack_bytes + guard;
 
     coro_t *c;
-    if (pool_head && pool_head->size == total) {
-        /* a warm stack: guard page still armed, no mmap, no mprotect */
+    if (pool_head) {
+        /* Every caller passes STACK_SIZE, so the pool holds one size. A mismatch would mean a
+         * second size is in play and this reuse would hand back the wrong stack. */
+        if (pool_head->size != total) {
+            fprintf(stderr, "ioxd: coroutine stack size %zu does not match the pooled %zu\n",
+                    total, pool_head->size);
+            abort();
+        }
+        /* a warm stack: guard still armed, no mmap, no mprotect */
         c = pool_head;
         pool_head = c->next;
         pool_count--;
@@ -55,7 +71,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
             perror("mmap(stack)");
             abort();
         }
-        if (mprotect(mem, page, PROT_NONE) < 0) {            /* overflow faults here, not a neighbour */
+        if (mprotect(mem, guard, PROT_NONE) < 0) {           /* overflow faults here, not a neighbour */
             perror("mprotect(guard)");
             abort();
         }
@@ -89,6 +105,7 @@ coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
  * idle stacks kept, not how many coroutines may run. */
 static void coro_destroy(coro_t *c)
 {
+    c->sp = nullptr;                /* the frame it named is gone; a stale sp must not be switched to */
     if (pool_count < CORO_POOL_MAX) {
         c->next = pool_head;
         pool_head = c;
@@ -109,10 +126,20 @@ void coro_pool_drain(void)
     pool_count = 0;
 }
 
-/* Loop only: switch into c until it yields; if it finished, recycle its stack. */
+/* Loop only: switch into c until it yields; if it finished, recycle its stack. Both rules are
+ * checked in every build: an assert would go away under -DNDEBUG, and breaking either corrupts the
+ * loop's saved stack pointer or switches to a stack that has been recycled - neither of which
+ * shows up as anything but a crash somewhere else. */
 void coro_resume(coro_t *c)
 {
-    assert(cur == nullptr && "coro_resume is loop-only; a coroutine spawns, it never resumes");
+    if (cur) {
+        fprintf(stderr, "ioxd: coro_resume from inside a coroutine; only the loop resumes\n");
+        abort();
+    }
+    if (c->done) {
+        fprintf(stderr, "ioxd: coro_resume of a coroutine that already finished\n");
+        abort();
+    }
     cur = c;
     swap_ctx(&loop_sp, c->sp);
     cur = nullptr;

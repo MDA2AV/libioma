@@ -79,13 +79,18 @@ static int run_workers(int workers, int port, handler_fn handler)
 {
     if (workers <= 0)
         workers = cpu_count();
-    if (port != 0 && ioxd_listen(port, nullptr) < 0)
-        return 2;
+    int added = 0;                        /* listeners this call added: taken out again before returning */
+    if (port != 0) {
+        if (ioxd_listen(port, nullptr) < 0)
+            return 2;
+        added = 1;
+    }
     if (g_n_listeners == 0) {
         fprintf(stderr, "ioxd_run: nothing to listen on\n");
         return 2;
     }
 
+    g_stop = 0;                           /* a previous run's signal must not stop this one at once */
     raise_nofile();
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa;
@@ -101,9 +106,11 @@ static int run_workers(int workers, int port, handler_fn handler)
         perror("calloc");
         free(ws);
         free(th);
+        g_n_listeners -= added;
         return 1;
     }
 
+    int rc = 0, started = 0;
     for (int i = 0; i < workers; i++) {
         ws[i].id      = i;
         ws[i].cpu     = i;
@@ -113,19 +120,28 @@ static int run_workers(int workers, int port, handler_fn handler)
         ws[i].stop    = &g_stop;
         if (pthread_create(&th[i], nullptr, worker_thread, &ws[i]) != 0) {
             perror("pthread_create");
-            return 1;
+            g_stop = 1;                   /* the ones already running must retire, not serve on alone */
+            rc = 1;
+            break;
         }
+        started++;
     }
-    fprintf(stderr, "ioxd: %d workers on", workers);
-    for (int i = 0; i < g_n_listeners; i++)
-        fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].tls ? "/tls" : "");
-    fputc('\n', stderr);
+    if (started) {
+        fprintf(stderr, "ioxd: %d workers on", started);
+        for (int i = 0; i < g_n_listeners; i++)
+            fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].tls ? "/tls" : "");
+        fputc('\n', stderr);
+    }
 
-    for (int i = 0; i < workers; i++)
+    for (int i = 0; i < started; i++)
         pthread_join(th[i], nullptr);
+    for (int i = 0; i < started; i++)
+        if (ws[i].failed)                 /* a worker whose ring died: the run did not succeed */
+            rc = 1;
     free(th);
     free(ws);
-    return 0;
+    g_n_listeners -= added;               /* so a second ioxd_run does not serve this port twice */
+    return rc;
 }
 
 /* A TLS listener's connection runs the handshake before its handler; a plain one goes straight in. */
