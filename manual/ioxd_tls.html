@@ -15,9 +15,9 @@
 <h2>SYNOPSIS</h2>
 <pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
-<a href="ioxd_run.html#ioxd_certs">ioxd_certs</a> *<a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-kw">const</span> <span class="c-ty">char</span> *dir);
-<span class="c-ty">int</span> <a href="#ioxd_certs_reload">ioxd_certs_reload</a>(<a href="ioxd_run.html#ioxd_certs">ioxd_certs</a> *certs);
-<span class="c-ty">void</span> <a href="#ioxd_certs_free">ioxd_certs_free</a>(<a href="ioxd_run.html#ioxd_certs">ioxd_certs</a> *certs);</pre>
+ioxd_certs *<a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-kw">const</span> <span class="c-ty">char</span> *dir);
+<span class="c-ty">int</span> <a href="#ioxd_certs_reload">ioxd_certs_reload</a>(ioxd_certs *certs);
+<span class="c-ty">void</span> <a href="#ioxd_certs_free">ioxd_certs_free</a>(ioxd_certs *certs);</pre>
 <h2>DESCRIPTION</h2>
 <div class="entry">
 <pre class="decl" id="ioxd_certs_load">
@@ -39,7 +39,7 @@ ioxd_certs *ioxd_certs_load(<span class="c-kw">const</span> <span class="c-ty">c
 </div>
 <h2>EXAMPLES</h2>
 <p>A TLS port beside a plain one; the files rotated, then reloaded:</p>
-<pre class="ex"><a href="ioxd_run.html#ioxd_certs">ioxd_certs</a> *certs = <a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-str">"/etc/ioxd/certs"</span>);   <span class="c-cm">/* &lt;dir&gt;/&lt;host&gt;/cert.pem and key.pem; `default` required */</span>
+<pre class="ex">ioxd_certs *certs = <a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-str">"/etc/ioxd/certs"</span>);   <span class="c-cm">/* &lt;dir&gt;/&lt;host&gt;/cert.pem and key.pem; `default` required */</span>
 <span class="c-kw">if</span> (!certs)
     <span class="c-kw">return</span> <span class="c-num">1</span>;
 <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);

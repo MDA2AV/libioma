@@ -1,3 +1,5 @@
+// ReSharper disable CppRedundantInlineSpecifier
+
 /*
  * ioxd/router.h - groups, endpoints and middleware, and the same as a script.
  */
@@ -37,12 +39,15 @@ void        ioxd_group_use(ioxd_group *group, ioxd_mw mw);            /* wraps e
 ioxd_endpoint *ioxd_route(ioxd_group *group, const char *method, const char *path, ioxd_handler fn);
 void           ioxd_endpoint_use(ioxd_endpoint *endpoint, ioxd_mw mw);   /* wraps this one only */
 
-/* The verbs, for short: ioxd_get(api, "/users/:id", user). */
+/* The verbs, for short: ioxd_get(api, "/users/:id", user). A HEAD route of its own takes the
+ * place of the GET fallback; any other method goes through ioxd_route with its name. */
 static inline ioxd_endpoint *ioxd_get   (ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "GET",    path, fn); }
+static inline ioxd_endpoint *ioxd_head  (ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "HEAD",   path, fn); }
 static inline ioxd_endpoint *ioxd_post  (ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "POST",   path, fn); }
 static inline ioxd_endpoint *ioxd_put   (ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "PUT",    path, fn); }
 static inline ioxd_endpoint *ioxd_patch (ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "PATCH",  path, fn); }
 static inline ioxd_endpoint *ioxd_delete(ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "DELETE", path, fn); }
+static inline ioxd_endpoint *ioxd_options(ioxd_group *g, const char *path, ioxd_handler fn) { return ioxd_route(g, "OPTIONS", path, fn); }
 
 /* Root middleware: every request, the fallbacks included. */
 void ioxd_use(ioxd_mw mw);
@@ -120,8 +125,10 @@ ioxd_endpoint *ioxd__router_endpoint(const char *method, struct ioxd_endpoint_ar
 #define IOXD_USE(mw)            ioxd_group_use(ioxd__router_group_current(), (mw))
 #define IOXD_ROUTE(method, ...) ioxd__router_endpoint((method), IOXD__ROUTE_ARGS(__VA_ARGS__))
 #define IOXD_GET(...)           IOXD_ROUTE("GET",    __VA_ARGS__)
+#define IOXD_HEAD(...)          IOXD_ROUTE("HEAD",   __VA_ARGS__)
 #define IOXD_POST(...)          IOXD_ROUTE("POST",   __VA_ARGS__)
 #define IOXD_PUT(...)           IOXD_ROUTE("PUT",    __VA_ARGS__)
 #define IOXD_PATCH(...)         IOXD_ROUTE("PATCH",  __VA_ARGS__)
 #define IOXD_DELETE(...)        IOXD_ROUTE("DELETE", __VA_ARGS__)
+#define IOXD_OPTIONS(...)       IOXD_ROUTE("OPTIONS", __VA_ARGS__)
 #define IOXD_DEFAULT(fn)        ioxd_default(fn)

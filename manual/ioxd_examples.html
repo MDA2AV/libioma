@@ -90,7 +90,7 @@ curl -i -X DELETE http://127.0.0.1:8080/api/v1/users/42     # 405 with an allow 
 <span class="c-ty">int</span> main(<span class="c-ty">void</span>)
 {
     <span class="c-cm">/* as calls: a group is a handle, an endpoint too */</span>
-    <a href="ioxd_router.html#ioxd_group">ioxd_group</a> *legacy = <a href="ioxd_router.html#ioxd_group_new">ioxd_group_new</a>(<span class="c-kw">NULL</span>, <span class="c-str">"/legacy"</span>);
+    ioxd_group *legacy = <a href="ioxd_router.html#ioxd_group_new">ioxd_group_new</a>(<span class="c-kw">NULL</span>, <span class="c-str">"/legacy"</span>);
     <a href="ioxd_router.html#ioxd_group_use">ioxd_group_use</a>(legacy, no_cache);
     <a href="ioxd_router.html#ioxd_get">ioxd_get</a>(legacy, <span class="c-str">"/ping"</span>, ping);                 <span class="c-cm">/* GET /legacy/ping, behind no_cache */</span>
 

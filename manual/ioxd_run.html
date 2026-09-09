@@ -11,21 +11,37 @@
 <main>
 <div class="hdr"><span>IOXD_RUN(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_RUN(3)</span></div>
 <h2>NAME</h2>
-<p>ioxd/run.h - the run: bind the ports, plain or TLS, then start the workers - serving HTTP, or a pipe handler of your own.</p>
+<p>ioxd/run.h - bind the ports, run the workers</p>
 <h2>SYNOPSIS</h2>
 <pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
-<span class="c-kw">typedef</span> <span class="c-kw">struct</span> <a href="#ioxd_certs">ioxd_certs</a> <a href="#ioxd_certs">ioxd_certs</a>;
-<span class="c-ty">int</span> <a href="#ioxd_bind">ioxd_bind</a>(<span class="c-ty">int</span> port, <a href="#ioxd_certs">ioxd_certs</a> *certs);
+<span class="c-cm">// ReSharper disable CppRedundantInlineSpecifier /* * ioxd/run.h - the run: bind the ports, plain or TLS, then start the workers - serving HTTP, or * a pipe handler of your own. */ #pragma once #include &lt;stddef.h&gt; #include "ioxd/http.h" #include "ioxd/pipe.h" /* Bind a port: plain when certs is NULL, TLS 1.3 terminated in the kernel otherwise, with the * certificate store from <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a> (ioxd/tls.h). Every bound port serves the same routes, * or the same pipe handler; bind as many as you need (at most 8), then run. -1 if refused: a bad * port, or the table is full. */ typedef struct ioxd_certs ioxd_certs;</span>
+<span class="c-ty">int</span> <a href="#ioxd_bind">ioxd_bind</a>(<span class="c-ty">int</span> port, ioxd_certs *certs);
 <span class="c-kw">static</span> <span class="c-kw">inline</span> <span class="c-ty">int</span> <a href="#ioxd_run">ioxd_run</a>(<span class="c-ty">int</span> workers);
 <span class="c-ty">int</span> <a href="#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-ty">int</span> workers, <a href="ioxd_pipe.html#ioxd_pipe_handler">ioxd_pipe_handler</a> fn);</pre>
 <h2>DESCRIPTION</h2>
 <div class="entry">
-<pre class="decl" id="ioxd_certs">
+<pre class="decl" id="">
+<span class="c-cm">// ReSharper disable CppRedundantInlineSpecifier</span>
+
+<span class="c-cm">/*
+ * ioxd/run.h - the run: bind the ports, plain or TLS, then start the workers - serving HTTP, or
+ * a pipe handler of your own.
+ */</span>
+<span class="c-pp">#pragma once</span>
+
+<span class="c-pp">#include &lt;stddef.h&gt;</span>
+
+<span class="c-pp">#include "ioxd/http.h"</span>
+<span class="c-pp">#include "ioxd/pipe.h"</span>
+
+<span class="c-cm">/* Bind a port: plain when certs is NULL, TLS 1.3 terminated in the kernel otherwise, with the
+ * certificate store from ioxd_certs_load (ioxd/tls.h). Every bound port serves the same routes,
+ * or the same pipe handler; bind as many as you need (at most 8), then run. -1 if refused: a bad
+ * port, or the table is full. */</span>
 <span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_certs ioxd_certs;
 <span class="c-ty">int</span> ioxd_bind(<span class="c-ty">int</span> port, ioxd_certs *certs);
 </pre>
-<div class="text"><p>Bind a port: plain when certs is NULL, TLS 1.3 terminated in the kernel otherwise, with the certificate store from <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a> (ioxd/tls.h). Every bound port serves the same routes, or the same pipe handler; bind as many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_run">

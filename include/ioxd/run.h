@@ -1,3 +1,5 @@
+// ReSharper disable CppRedundantInlineSpecifier
+
 /*
  * ioxd/run.h - the run: bind the ports, plain or TLS, then start the workers - serving HTTP, or
  * a pipe handler of your own.

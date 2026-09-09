@@ -62,6 +62,9 @@ HANDLER(h_leak)
 HANDLER(h_after)
 HANDLER(h_twice)
 HANDLER(h_late)                                     /* registered too late: never reached */
+HANDLER(h_doc)
+HANDLER(h_doc_head)
+HANDLER(h_doc_options)
 
 static void mw_root(ioxd_ctx *ctx, ioxd_next *next)  { mark('r'); ioxd_next_run(ctx, next); mark('R'); }
 static void mw_api (ioxd_ctx *ctx, ioxd_next *next)  { mark('a'); ioxd_next_run(ctx, next); mark('A'); }
@@ -89,6 +92,9 @@ static void register_routes(void)
     IOXD_PATCH("/users/new", h_patch);
     IOXD_POST("/users/:id", h_user);                /* a method on both nodes: listed once */
     IOXD_GET("/twice", h_twice, mw_twice);
+    IOXD_GET("/doc", h_doc);
+    IOXD_HEAD("/doc", h_doc_head);                  /* a HEAD of its own: not the GET's */
+    ioxd_options(NULL, "/doc", h_doc_options);
 
     IOXD_GROUP("/api", mw_api) {
         IOXD_GET("users", h_api_users, mw_own);     /* neither side brings a '/': "/api/users" */
@@ -272,6 +278,14 @@ static void test_head(void)
     CHECK(reached("h_user") && captured("id", "7"));
     request("HEAD", "/nowhere");
     CHECK(g_ctx.res.status == 404);
+    request("HEAD", "/doc");                        /* an explicit HEAD route beats the fallback */
+    CHECK(reached("h_doc_head"));
+    request("GET", "/doc");
+    CHECK(reached("h_doc"));
+    request("OPTIONS", "/doc");
+    CHECK(reached("h_doc_options"));
+    request("PUT", "/doc");                         /* every method the path has, HEAD once */
+    CHECK(g_ctx.res.status == 405 && allow_is("GET, HEAD, OPTIONS"));
 }
 
 static void test_chain(void)
