@@ -15,7 +15,7 @@ int ioxd__timer_delay(proactor_t *p, uint64_t ns)
     struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
     sqe->opcode = IORING_OP_TIMEOUT;
     sqe->fd     = -1;
-    sqe->addr   = (uint64_t)(uintptr_t)&ts;
+    sqe->addr   = (uintptr_t)&ts;
     sqe->len    = 1;
     int rc = ioxd__io_await(sqe, &op);
     if (rc == -ETIME)

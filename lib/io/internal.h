@@ -31,7 +31,7 @@ enum {
     TAG_DRAIN = 5,                                /* the shutdown's blanket cancel            */
 };
 
-#define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))
+#define UD(ptr, tag) ((uintptr_t)(ptr) | (uintptr_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))
 #define UD_TAG(ud)   ((unsigned)((ud) & 7U))
 

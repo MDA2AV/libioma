@@ -358,7 +358,7 @@ int ioxd__conn_recv_exact(conn_t *c, void *dst, size_t n)
         sqe->opcode    = IORING_OP_RECV;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
-        sqe->addr      = (uint64_t)(uintptr_t)at;
+        sqe->addr      = (uintptr_t)at;
         sqe->len       = (uint32_t)left;
         sqe->msg_flags = MSG_WAITALL;
         int got = ioxd__io_await(sqe, &op);
@@ -382,7 +382,7 @@ int ioxd__conn_setsockopt(conn_t *c, int level, int name, const void *val, size_
     sqe->cmd_op  = SOCKET_URING_OP_SETSOCKOPT;
     sqe->level   = (uint32_t)level;
     sqe->optname = (uint32_t)name;
-    sqe->optval  = (uint64_t)(uintptr_t)val;
+    sqe->optval  = (uintptr_t)val;
     sqe->optlen  = (uint32_t)len;
     int rc = ioxd__io_await(sqe, &op);
 
@@ -398,7 +398,7 @@ int ioxd__conn_sendmsg(conn_t *c, const struct msghdr *msg)
     sqe->opcode    = IORING_OP_SENDMSG;
     sqe->fd        = c->fd;
     sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
-    sqe->addr      = (uint64_t)(uintptr_t)msg;
+    sqe->addr      = (uintptr_t)msg;
     sqe->len       = 1;
     sqe->msg_flags = MSG_NOSIGNAL;
     return ioxd__io_await(sqe, &op);
@@ -414,7 +414,7 @@ int ioxd__conn_send(conn_t *c, const void *buf, size_t len)
         sqe->opcode    = IORING_OP_SEND;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
-        sqe->addr      = (uint64_t)(uintptr_t)src;
+        sqe->addr      = (uintptr_t)src;
         sqe->len       = left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
         sqe->msg_flags = MSG_NOSIGNAL;
         int n = ioxd__io_await(sqe, &op);

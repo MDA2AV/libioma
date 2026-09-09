@@ -82,7 +82,7 @@ coro_t *ioxd__coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 
     uint64_t *sp = (uint64_t *)c;
     *--sp = 0;
-    *--sp = (uint64_t)(uintptr_t)coro_entry;
+    *--sp = (uintptr_t)coro_entry;
     for (int i = 0; i < 6; i++)
         *--sp = 0;
     c->sp = sp;

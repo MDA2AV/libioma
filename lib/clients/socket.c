@@ -39,7 +39,7 @@ static int connect_socket(proactor_t *p, int fd, const struct sockaddr *sa, sock
     sqe->opcode = IORING_OP_CONNECT;
     sqe->fd     = fd;
     sqe->flags  = p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
-    sqe->addr   = (uint64_t)(uintptr_t)sa;
+    sqe->addr   = (uintptr_t)sa;
     sqe->off    = len;
     return ioxd__io_await(sqe, &op);
 }

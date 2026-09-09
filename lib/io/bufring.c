@@ -34,7 +34,7 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker, unsig
 
     struct io_uring_buf_reg reg;
     memset(&reg, 0, sizeof reg);
-    reg.ring_addr    = (uint64_t)(uintptr_t)b->ring;
+    reg.ring_addr    = (uintptr_t)b->ring;
     reg.ring_entries = count;
     reg.bgid         = BGID;
     int rc = ioxd__uring_register(ring, IORING_REGISTER_PBUF_RING, &reg, 1);
@@ -45,7 +45,7 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker, unsig
 
     for (unsigned i = 0; i < count; i++) {
         struct io_uring_buf *slot = &b->ring->bufs[i];
-        slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, (uint16_t)i);
+        slot->addr = (uintptr_t)ioxd__bufring_at(b, (uint16_t)i);
         slot->len  = size;
         slot->bid  = (uint16_t)i;
     }
@@ -56,7 +56,7 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker, unsig
 void ioxd__bufring_return(struct bufring *b, uint16_t buf_id)
 {
     struct io_uring_buf *slot = &b->ring->bufs[b->tail & b->mask];
-    slot->addr = (uint64_t)(uintptr_t)ioxd__bufring_at(b, buf_id);
+    slot->addr = (uintptr_t)ioxd__bufring_at(b, buf_id);
     slot->len  = b->size;
     slot->bid  = buf_id;
     b->tail++;

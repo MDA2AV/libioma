@@ -200,7 +200,7 @@ int ioxd__uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kerne
 
     struct io_uring_getevents_arg arg;
     memset(&arg, 0, sizeof arg);
-    arg.ts = (uint64_t)(uintptr_t)ts;
+    arg.ts = (uintptr_t)ts;
     return flush_and_enter(ring, wait_nr, IORING_ENTER_GETEVENTS | IORING_ENTER_EXT_ARG,
                            &arg, sizeof arg);
 }
