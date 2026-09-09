@@ -23,7 +23,7 @@ static void on_signal(int sig)
 
 static void *worker_thread(void *arg)
 {
-    proactor_run(arg);
+    ioxd__proactor_run(arg);
     return nullptr;
 }
 
@@ -166,19 +166,19 @@ static int run_workers(int workers, handler_fn handler)
 static int prologue(struct ioxd_pipe *pipe)
 {
     struct listener *l = pipe->in.conn->listener;
-    return l->certs ? ioxd__tls_prologue(pipe, l->certs) : 0;
+    return l->certs ? ioxd__handshake_prologue(pipe, l->certs) : 0;
 }
 
 static void serve_http(struct ioxd_pipe *pipe)
 {
     if (prologue(pipe) != 0)
         return;
-    ioxd__serve(pipe);
+    ioxd__engine_serve(pipe);
     if (pipe->in.conn->listener->certs)
-        ioxd__tls_close_notify(pipe);
+        ioxd__handshake_close_notify(pipe);
 }
 
-int ioxd__run(int workers, size_t ctx_size)
+int ioxd__run_http(int workers, size_t ctx_size)
 {
     if (ctx_size != sizeof(ioxd_ctx)) {
         fprintf(stderr, "ioxd_run: the application's ioxd_ctx is %zu bytes, the library's %zu: "
@@ -197,7 +197,7 @@ static void serve_pipe(struct ioxd_pipe *pipe)
         return;
     g_pipe_handler(pipe);
     if (pipe->in.conn->listener->certs)
-        ioxd__tls_close_notify(pipe);
+        ioxd__handshake_close_notify(pipe);
 }
 
 int ioxd_run_pipes(int workers, ioxd_pipe_handler fn)

@@ -15,7 +15,7 @@
 
 /* What the engine calls, from the library's private lib/http/router.h. */
 void ioxd__router_build(void);
-void ioxd__dispatch(ioxd_ctx *ctx);
+void ioxd__router_dispatch(ioxd_ctx *ctx);
 
 static int checks, failures;
 
@@ -97,12 +97,12 @@ static void register_routes(void)
         }
     }
 
-    ioxd_group *outer = ioxd__group_current();
+    ioxd_group *outer = ioxd__router_group_current();
     IOXD_GROUP("/leak") {
         IOXD_GET("/x", h_leak);
         break;                                      /* leaving early must still close the group */
     }
-    CHECK(ioxd__group_current() == outer);
+    CHECK(ioxd__router_group_current() == outer);
     IOXD_GET("/after", h_after);                    /* so this is "/after", not "/leak/after" */
 }
 
@@ -131,7 +131,7 @@ static void request(const char *method, const char *path)
     ran      = "";
     n_trace  = 0;
     trace[0] = '\0';
-    ioxd__dispatch(&g_ctx);
+    ioxd__router_dispatch(&g_ctx);
 }
 
 /* Did the request reach this handler? */
@@ -187,7 +187,7 @@ static void capture_stderr(void (*fn)(void), char *buf, size_t cap)
 /* A group opened and never closed: everything after it nested inside, so ioxd_run says so. */
 static void build_with_a_group_left_open(void)
 {
-    ioxd__group_begin((struct ioxd_group_args){ "/stray", { NULL } });
+    ioxd__router_group_begin((struct ioxd_group_args){ "/stray", { NULL } });
     ioxd__router_build();
 }
 

@@ -5,7 +5,7 @@
 
 #include "io/pipe.h"
 
-void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection until it ends */
+void ioxd__engine_serve(struct ioxd_pipe *pipe);         /* requests on the connection until it ends */
 
 /* ── engine.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -128,7 +128,7 @@ void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection 
 /* send_status:
  * A bodyless framework reply (parse errors, limits): an error path, so plain snprintf. Best
  * effort; the caller then closes.
- *   - whatever the handler had buffered is moot  [ioxd_pipewriter_reset(pw);]
+ *   - whatever the handler had buffered is moot  [ioxd__pipewriter_reset(pw);]
  */
 
 /* wire_status:
@@ -179,7 +179,7 @@ void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection 
  *     {]
  *   - the terminator rides the same send  [if (final && res->chunked) {]
  *   - one contiguous send  [memcpy(front, head, (size_t)head_len);]
- *   - bigger than the lead: on its own, first  [else if (ioxd_pipewriter_through(pw, head,
+ *   - bigger than the lead: on its own, first  [else if (ioxd__pipewriter_through(pw, head,
  *     (size_t)head_len) < 0)]
  *   - the handler wrote past its own length: nothing more goes  [return fail(res);]
  */
@@ -299,11 +299,11 @@ void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection 
  *   - what the previous attempt scanned  [size_t        already = 0;]
  *   - the peer is done: a clean end between requests  [return -1;]
  *   - in: room; out: count  [req->n_headers = IOXD_MAX_HEADERS;]
- *   - the head stays put, where it was parsed  [if (!ioxd_pipereader_keep(pr, (size_t)parsed))
+ *   - the head stays put, where it was parsed  [if (!ioxd__pipereader_keep(pr, (size_t)parsed))
  *     {]
- *   - the body's kept bytes are a run of their own  [ioxd_pipereader_run_begin(pr);]
+ *   - the body's kept bytes are a run of their own  [ioxd__pipereader_run_begin(pr);]
  *   - malformed  [if (parsed == -1) {]
- *   - incomplete: the next read waits for more  [ioxd_pipereader_examine(pr, live.len);]
+ *   - incomplete: the next read waits for more  [ioxd__pipereader_examine(pr, live.len);]
  */
 
 /* starts_ci:
@@ -337,18 +337,18 @@ void ioxd__serve(struct ioxd_pipe *pipe);         /* requests on the connection 
  *   - headers[] is only read up to here  [res->n_headers      = 0;]
  */
 
-/* ioxd__serve:
+/* ioxd__engine_serve:
  * The proactor handler for every connection: one request per iteration - get the head, run the
  * chain against a context, drain what it left of the body, send what it wrote - while kept
  * alive. Returning closes the connection.
  *   - decoded query parameters  [char params[IOXD_PARAM_CAP];]
  *   - this request's context  [ioxd_ctx           ctx;]
  *   - the framing cannot be trusted: answer, close  [if (refused) {]
- *   - middleware chain + endpoint  [ioxd__dispatch(&ctx);]
+ *   - middleware chain + endpoint  [ioxd__router_dispatch(&ctx);]
  *   - too large, malformed, or gone  [if (state.body_err) {]
  *   - never asked for: the client may not send it, so no drain  [ctx.res.close = true;]
  *   - what the handler left unread  [drain_body(&ctx);]
  *   - sends; suspends meanwhile  [if (finish(&ctx) < 0)]
  *   - this request's bytes go; a pipelined next one stays
- *     [ioxd_pipereader_release(&pipe->in);]
+ *     [ioxd__pipereader_release(&pipe->in);]
  */

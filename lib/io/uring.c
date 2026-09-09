@@ -22,7 +22,7 @@ static int sys_enter(int fd, unsigned to_submit, unsigned min_complete, unsigned
     return rc < 0 ? -errno : (int)rc;
 }
 
-int uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_args)
+int ioxd__uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_args)
 {
     long rc = syscall(SYS_io_uring_register, ring->fd, opcode, arg, nr_args);
     return rc < 0 ? -errno : (int)rc;
@@ -40,7 +40,7 @@ static int ring_failed(struct uring *ring, int err)
     return err;
 }
 
-int uring_init(struct uring *ring, unsigned entries)
+int ioxd__uring_init(struct uring *ring, unsigned entries)
 {
     ring_clear(ring);
 
@@ -110,13 +110,13 @@ int uring_init(struct uring *ring, unsigned entries)
     return 0;
 }
 
-int uring_register_ring_fd(struct uring *ring)
+int ioxd__uring_register_ring_fd(struct uring *ring)
 {
     struct io_uring_rsrc_update up;
     memset(&up, 0, sizeof up);
     up.offset = (uint32_t)-1;
     up.data   = (uint64_t)ring->fd;
-    int rc = uring_register(ring, IORING_REGISTER_RING_FDS, &up, 1);
+    int rc = ioxd__uring_register(ring, IORING_REGISTER_RING_FDS, &up, 1);
     if (rc < 0)
         return rc;
     if (rc != 1)
@@ -126,26 +126,26 @@ int uring_register_ring_fd(struct uring *ring)
     return 0;
 }
 
-int uring_register_files_sparse(struct uring *ring, unsigned n)
+int ioxd__uring_register_files_sparse(struct uring *ring, unsigned n)
 {
     struct io_uring_rsrc_register reg;
     memset(&reg, 0, sizeof reg);
     reg.nr    = n;
     reg.flags = IORING_RSRC_REGISTER_SPARSE;
-    int rc = uring_register(ring, IORING_REGISTER_FILES2, &reg, sizeof reg);
+    int rc = ioxd__uring_register(ring, IORING_REGISTER_FILES2, &reg, sizeof reg);
     if (rc < 0)
         return rc;
     ring->fixed_files = true;
     return 0;
 }
 
-void uring_exit(struct uring *ring)
+void ioxd__uring_exit(struct uring *ring)
 {
     if (ring->enter_flags & IORING_ENTER_REGISTERED_RING) {
         struct io_uring_rsrc_update up;
         memset(&up, 0, sizeof up);
         up.offset = (uint32_t)ring->enter_fd;
-        uring_register(ring, IORING_UNREGISTER_RING_FDS, &up, 1);
+        ioxd__uring_register(ring, IORING_UNREGISTER_RING_FDS, &up, 1);
     }
     if (ring->sqe_mem)  munmap(ring->sqe_mem, ring->sqe_bytes);
     if (ring->ring_mem) munmap(ring->ring_mem, ring->ring_bytes);
@@ -153,7 +153,7 @@ void uring_exit(struct uring *ring)
     ring_clear(ring);
 }
 
-struct io_uring_sqe *uring_get_sqe(struct uring *ring)
+struct io_uring_sqe *ioxd__uring_get_sqe(struct uring *ring)
 {
     unsigned head = load_acquire(ring->sq_head);
     if (ring->sqe_tail - head >= ring->sq_entries)
@@ -188,12 +188,12 @@ static int flush_and_enter(struct uring *ring, unsigned wait_nr, unsigned flags,
     return sys_enter(ring->enter_fd, to_submit, wait_nr, flags | ring->enter_flags, arg, argsz);
 }
 
-int uring_submit(struct uring *ring)
+int ioxd__uring_submit(struct uring *ring)
 {
     return flush_and_enter(ring, 0, 0, nullptr, 0);
 }
 
-int uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts)
+int ioxd__uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts)
 {
     if (!ts)
         return flush_and_enter(ring, wait_nr, IORING_ENTER_GETEVENTS, nullptr, 0);
@@ -205,12 +205,12 @@ int uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_time
                            &arg, sizeof arg);
 }
 
-unsigned uring_cq_ready(struct uring *ring)
+unsigned ioxd__uring_cq_ready(struct uring *ring)
 {
     return load_acquire(ring->cq_tail) - *ring->cq_head;
 }
 
-void uring_cq_advance(struct uring *ring, unsigned n)
+void ioxd__uring_cq_advance(struct uring *ring, unsigned n)
 {
     if (n == 0)
         return;

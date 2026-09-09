@@ -37,9 +37,9 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker, unsig
     reg.ring_addr    = (uint64_t)(uintptr_t)b->ring;
     reg.ring_entries = count;
     reg.bgid         = BGID;
-    int rc = uring_register(ring, IORING_REGISTER_PBUF_RING, &reg, 1);
+    int rc = ioxd__uring_register(ring, IORING_REGISTER_PBUF_RING, &reg, 1);
     if (rc < 0) {
-        fprintf(stderr, "[w%d] register pbuf ring: %s\n", worker, ioxd__errstr(-rc));
+        fprintf(stderr, "[w%d] register pbuf ring: %s\n", worker, ioxd__io_errstr(-rc));
         abort();
     }
 
@@ -78,7 +78,7 @@ void ioxd__bufring_unregister(struct bufring *b, struct uring *ring)
     struct io_uring_buf_reg reg;
     memset(&reg, 0, sizeof reg);
     reg.bgid = BGID;
-    uring_register(ring, IORING_UNREGISTER_PBUF_RING, &reg, 1);
+    ioxd__uring_register(ring, IORING_UNREGISTER_PBUF_RING, &reg, 1);
 }
 
 void ioxd__bufring_unmap(struct bufring *b)

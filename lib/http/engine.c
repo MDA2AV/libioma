@@ -250,8 +250,8 @@ static void send_status(ioxd_pipewriter *pw, int code)
         return;
     if ((size_t)len >= sizeof head)
         len = (int)sizeof head - 1;
-    ioxd_pipewriter_reset(pw);
-    ioxd_pipewriter_send(pw, head, (size_t)len);
+    ioxd__pipewriter_reset(pw);
+    ioxd__pipewriter_send(pw, head, (size_t)len);
 }
 
 enum framing {
@@ -376,8 +376,8 @@ static int flush(ioxd_ctx *ctx, bool final)
         res->head_sent = true;
     }
     if (state->no_body) {
-        ioxd_pipewriter_reset(pw);
-        if (head_len && ioxd_pipewriter_through(pw, head, (size_t)head_len) < 0)
+        ioxd__pipewriter_reset(pw);
+        if (head_len && ioxd__pipewriter_through(pw, head, (size_t)head_len) < 0)
             return fail(res);
         return 0;
     }
@@ -393,8 +393,8 @@ static int flush(ioxd_ctx *ctx, bool final)
     if (res->chunked && pw->len) {
         char  size_line[16];
         int   digits = put_hex(size_line, pw->len);
-        char *front  = ioxd_pipewriter_front(pw, (size_t)digits + 2);
-        char *back   = ioxd_pipewriter_back(pw, 2);
+        char *front  = ioxd__pipewriter_front(pw, (size_t)digits + 2);
+        char *back   = ioxd__pipewriter_back(pw, 2);
         if (!front || !back)
             return fail(res);
         memcpy(front, size_line, (size_t)digits);
@@ -404,19 +404,19 @@ static int flush(ioxd_ctx *ctx, bool final)
         back[1] = '\n';
     }
     if (final && res->chunked) {
-        char *back = ioxd_pipewriter_back(pw, 5);
+        char *back = ioxd__pipewriter_back(pw, 5);
         if (!back)
             return fail(res);
         put_terminator(back);
     }
     if (head_len) {
-        char *front = ioxd_pipewriter_front(pw, (size_t)head_len);
+        char *front = ioxd__pipewriter_front(pw, (size_t)head_len);
         if (front)
             memcpy(front, head, (size_t)head_len);
-        else if (ioxd_pipewriter_through(pw, head, (size_t)head_len) < 0)
+        else if (ioxd__pipewriter_through(pw, head, (size_t)head_len) < 0)
             return fail(res);
     }
-    if (ioxd_pipewriter_flush(pw) < 0)
+    if (ioxd__pipewriter_flush(pw) < 0)
         return fail(res);
     if (over)
         return fail(res);
@@ -433,11 +433,11 @@ static int finish(ioxd_ctx *ctx)
         if (flush(ctx, true) < 0)
             return -1;
     } else if (res->chunked) {
-        char *back = ioxd_pipewriter_back(pw, 5);
+        char *back = ioxd__pipewriter_back(pw, 5);
         if (!back)
             return fail(res);
         put_terminator(back);
-        if (ioxd_pipewriter_flush(pw) < 0)
+        if (ioxd__pipewriter_flush(pw) < 0)
             return fail(res);
     }
     if (res->has_length && !STATE(ctx)->no_body && res->body_sent != res->content_length)
@@ -453,15 +453,15 @@ int ioxd_write(ioxd_ctx *ctx, const void *data, size_t len)
         return -1;
     const char *src = data;
     while (len) {
-        size_t room = ioxd_pipewriter_room(pw);
+        size_t room = ioxd__pipewriter_room(pw);
         if (room == 0) {
             if (flush(ctx, false) < 0)
                 return -1;
             continue;
         }
         size_t n = len < room ? len : room;
-        memcpy(ioxd_pipewriter_at(pw), src, n);
-        ioxd_pipewriter_advance(pw, n);
+        memcpy(ioxd__pipewriter_at(pw), src, n);
+        ioxd__pipewriter_advance(pw, n);
         src += n;
         len -= n;
     }
@@ -488,19 +488,19 @@ int ioxd_printf(ioxd_ctx *ctx, const char *fmt, ...)
     va_list ap, again;
     va_start(ap, fmt);
     va_copy(again, ap);
-    size_t room = ioxd_pipewriter_room(pw);
-    int    n    = vsnprintf(ioxd_pipewriter_at(pw), room, fmt, ap);
+    size_t room = ioxd__pipewriter_room(pw);
+    int    n    = vsnprintf(ioxd__pipewriter_at(pw), room, fmt, ap);
     va_end(ap);
 
     int rc = -1;
     if (n < 0) {
     } else if ((size_t)n < room) {
-        ioxd_pipewriter_advance(pw, (size_t)n);
+        ioxd__pipewriter_advance(pw, (size_t)n);
         rc = 0;
     } else if ((size_t)n >= pw->cap) {
         rc = write_formatted_heap(ctx, fmt, again, (size_t)n);
     } else if (flush(ctx, false) == 0) {
-        ioxd_pipewriter_advance(pw, (size_t)vsnprintf(ioxd_pipewriter_at(pw), pw->cap, fmt, again));
+        ioxd__pipewriter_advance(pw, (size_t)vsnprintf(ioxd__pipewriter_at(pw), pw->cap, fmt, again));
         rc = 0;
     }
     va_end(again);
@@ -518,14 +518,14 @@ void *ioxd_reserve(ioxd_ctx *ctx, size_t n)
     ioxd_pipewriter *pw  = WRITER(ctx);
     if (res->failed || n > pw->cap)
         return nullptr;
-    if (n > ioxd_pipewriter_room(pw) && flush(ctx, false) < 0)
+    if (n > ioxd__pipewriter_room(pw) && flush(ctx, false) < 0)
         return nullptr;
-    return ioxd_pipewriter_at(pw);
+    return ioxd__pipewriter_at(pw);
 }
 
 void ioxd_advance(ioxd_ctx *ctx, size_t n)
 {
-    ioxd_pipewriter_advance(WRITER(ctx), n);
+    ioxd__pipewriter_advance(WRITER(ctx), n);
 }
 
 static void body_fail(ioxd_ctx *ctx, int status)
@@ -540,7 +540,7 @@ static bool body_begin(ioxd_ctx *ctx)
     if (!ctx->req.expect_continue || state->continue_sent || ctx->res.head_sent)
         return true;
     state->continue_sent = true;
-    if (ioxd_pipewriter_through(WRITER(ctx), "HTTP/1.1 100 Continue\r\n\r\n", 25) < 0) {
+    if (ioxd__pipewriter_through(WRITER(ctx), "HTTP/1.1 100 Continue\r\n\r\n", 25) < 0) {
         state->body_err = -1;
         return false;
     }
@@ -549,7 +549,7 @@ static bool body_begin(ioxd_ctx *ctx)
 
 static bool body_bytes(ioxd_ctx *ctx, ioxd_slice *live)
 {
-    int rc = ioxd_pipereader_read(READER(ctx), live);
+    int rc = ioxd__pipereader_read(READER(ctx), live);
     if (rc > 0)
         return true;
     if (rc == IOXD_PIPE_FULL)
@@ -567,7 +567,7 @@ static long body_line(ioxd_ctx *ctx, ioxd_slice *live)
         const char *eol = memmem(live->p, live->len, "\r\n", 2);
         if (eol)
             return eol - live->p;
-        ioxd_pipereader_examine(READER(ctx), live->len);
+        ioxd__pipereader_examine(READER(ctx), live->len);
     }
 }
 
@@ -584,7 +584,7 @@ static bool chunk_trailers(ioxd_ctx *ctx)
             body_fail(ctx, 400);
             return false;
         }
-        ioxd_pipereader_drop(READER(ctx), (size_t)len + 2);
+        ioxd__pipereader_drop(READER(ctx), (size_t)len + 2);
         if (len == 0)
             break;
     }
@@ -603,7 +603,7 @@ static bool chunk_header(ioxd_ctx *ctx)
     }
     size_t size = 0, i = 0;
     for (; i < (size_t)len; i++) {
-        int digit = ioxd__hexval((unsigned char)live.p[i]);
+        int digit = ioxd__http_hexval((unsigned char)live.p[i]);
         if (digit < 0)
             break;
         if (size > (SIZE_MAX >> 4)) {
@@ -619,7 +619,7 @@ static bool chunk_header(ioxd_ctx *ctx)
         body_fail(ctx, 400);
         return false;
     }
-    ioxd_pipereader_drop(READER(ctx), (size_t)len + 2);
+    ioxd__pipereader_drop(READER(ctx), (size_t)len + 2);
     if (size == 0)
         return chunk_trailers(ctx);
     STATE(ctx)->chunk_left = size;
@@ -634,13 +634,13 @@ static bool chunk_end(ioxd_ctx *ctx)
             return false;
         if (live.len >= 2)
             break;
-        ioxd_pipereader_examine(READER(ctx), live.len);
+        ioxd__pipereader_examine(READER(ctx), live.len);
     }
     if (live.p[0] != '\r' || live.p[1] != '\n') {
         body_fail(ctx, 400);
         return false;
     }
-    ioxd_pipereader_drop(READER(ctx), 2);
+    ioxd__pipereader_drop(READER(ctx), 2);
     return true;
 }
 
@@ -669,7 +669,7 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx)
             if (!body_bytes(ctx, &live))
                 return none;
             size_t n = live.len < state->chunk_left ? live.len : state->chunk_left;
-            if (!ioxd_pipereader_keep(pr, n)) {
+            if (!ioxd__pipereader_keep(pr, n)) {
                 body_fail(ctx, 413);
                 return none;
             }
@@ -678,7 +678,7 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx)
             if (state->chunk_left == 0 && !chunk_end(ctx))
                 return none;
         }
-        req->body = ioxd_pipereader_run(pr);
+        req->body = ioxd__pipereader_run(pr);
     } else {
         if (req->content_length > pr->cap) {
             body_fail(ctx, 413);
@@ -687,11 +687,11 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx)
         ioxd_slice live = none;
         while (req->content_length && live.len < req->content_length) {
             if (live.len)
-                ioxd_pipereader_examine(pr, live.len);
+                ioxd__pipereader_examine(pr, live.len);
             if (!body_bytes(ctx, &live))
                 return none;
         }
-        const char *kept = req->content_length ? ioxd_pipereader_keep(pr, req->content_length) : live.p;
+        const char *kept = req->content_length ? ioxd__pipereader_keep(pr, req->content_length) : live.p;
         if (req->content_length && !kept) {
             body_fail(ctx, 413);
             return none;
@@ -709,7 +709,7 @@ static int fixed_data(ioxd_ctx *ctx, struct serve_state *state, char *dst, size_
     size_t remaining = ctx->req.content_length - state->body_read;
     if (n > remaining)
         n = remaining;
-    int got = ioxd_pipereader_copy(&state->pipe->in, dst, n);
+    int got = ioxd__pipereader_copy(&state->pipe->in, dst, n);
     if (got <= 0) {
         state->body_err = -1;
         return -1;
@@ -724,7 +724,7 @@ static int chunk_data(ioxd_ctx *ctx, struct serve_state *state, char *dst, size_
 {
     if (n > state->chunk_left)
         n = state->chunk_left;
-    int got = ioxd_pipereader_copy(&state->pipe->in, dst, n);
+    int got = ioxd__pipereader_copy(&state->pipe->in, dst, n);
     if (got <= 0) {
         state->body_err = -1;
         return -1;
@@ -818,7 +818,7 @@ static long read_head(ioxd_ctx *ctx)
     size_t        already = 0;
     ioxd_slice    live = { nullptr, 0 };
     for (;;) {
-        int rc = ioxd_pipereader_read(pr, &live);
+        int rc = ioxd__pipereader_read(pr, &live);
         if (rc == 0)
             return -1;
         if (rc == IOXD_PIPE_FULL) {
@@ -835,18 +835,18 @@ static long read_head(ioxd_ctx *ctx)
                                        (struct phr_header *)req->headers, &req->n_headers,
                                        already);
         if (parsed >= 0) {
-            if (!ioxd_pipereader_keep(pr, (size_t)parsed)) {
+            if (!ioxd__pipereader_keep(pr, (size_t)parsed)) {
                 send_status(WRITER(ctx), 431);
                 return -1;
             }
-            ioxd_pipereader_run_begin(pr);
+            ioxd__pipereader_run_begin(pr);
             return parsed;
         }
         if (parsed == -1) {
             send_status(WRITER(ctx), 400);
             return -1;
         }
-        ioxd_pipereader_examine(pr, live.len);
+        ioxd__pipereader_examine(pr, live.len);
         already = live.len;
     }
 }
@@ -925,10 +925,10 @@ static void init_response(ioxd_response *res, ioxd_pipewriter *pw)
     res->failed         = false;
     res->body_sent      = 0;
     res->head_len       = 0;
-    ioxd_pipewriter_reset(pw);
+    ioxd__pipewriter_reset(pw);
 }
 
-void ioxd__serve(struct ioxd_pipe *pipe)
+void ioxd__engine_serve(struct ioxd_pipe *pipe)
 {
     char params[IOXD_PARAM_CAP];
 
@@ -950,7 +950,7 @@ void ioxd__serve(struct ioxd_pipe *pipe)
         }
         state.head_only = ctx.req.method.len == 4 && memcmp(ctx.req.method.p, "HEAD", 4) == 0;
 
-        ioxd__dispatch(&ctx);
+        ioxd__router_dispatch(&ctx);
 
         if (state.body_err) {
             if (state.body_err > 0 && !ctx.res.head_sent)
@@ -967,6 +967,6 @@ void ioxd__serve(struct ioxd_pipe *pipe)
             return;
         if (!ctx.req.keep_alive || ctx.res.close)
             return;
-        ioxd_pipereader_release(&pipe->in);
+        ioxd__pipereader_release(&pipe->in);
     }
 }

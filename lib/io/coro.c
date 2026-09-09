@@ -7,7 +7,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
-extern void swap_ctx(void **save_sp, void *load_sp);
+extern void ioxd__coro_swap(void **save_sp, void *load_sp);
 
 static thread_local coro_t *cur;
 static thread_local void   *loop_sp;
@@ -20,12 +20,12 @@ static thread_local coro_t  *pool_head;
 static thread_local unsigned pool_count;
 static thread_local unsigned pool_max = CORO_POOL_MAX;
 
-void coro_pool_limit(unsigned max_idle)
+void ioxd__coro_pool_limit(unsigned max_idle)
 {
     pool_max = max_idle;
 }
 
-coro_t *coro_current(void)
+coro_t *ioxd__coro_current(void)
 {
     return cur;
 }
@@ -35,11 +35,11 @@ static void coro_entry(void)
     coro_t *c = cur;
     c->fn(c->arg);
     c->done = true;
-    coro_yield();
+    ioxd__coro_yield();
     abort();
 }
 
-coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
+coro_t *ioxd__coro_create(void (*fn)(void *), void *arg, size_t stack_bytes)
 {
     size_t page = (size_t)sysconf(_SC_PAGESIZE);
     stack_bytes = (stack_bytes + page - 1) & ~(page - 1);
@@ -101,7 +101,7 @@ static void coro_destroy(coro_t *c)
     munmap(c->stack, c->size);
 }
 
-void coro_pool_drain(void)
+void ioxd__coro_pool_drain(void)
 {
     while (pool_head) {
         coro_t *c = pool_head;
@@ -111,25 +111,25 @@ void coro_pool_drain(void)
     pool_count = 0;
 }
 
-void coro_resume(coro_t *c)
+void ioxd__coro_resume(coro_t *c)
 {
     if (cur) {
-        fprintf(stderr, "ioxd: coro_resume from inside a coroutine; only the loop resumes\n");
+        fprintf(stderr, "ioxd: ioxd__coro_resume from inside a coroutine; only the loop resumes\n");
         abort();
     }
     if (c->done) {
-        fprintf(stderr, "ioxd: coro_resume of a coroutine that already finished\n");
+        fprintf(stderr, "ioxd: ioxd__coro_resume of a coroutine that already finished\n");
         abort();
     }
     cur = c;
-    swap_ctx(&loop_sp, c->sp);
+    ioxd__coro_swap(&loop_sp, c->sp);
     cur = nullptr;
     if (c->done)
         coro_destroy(c);
 }
 
-void coro_yield(void)
+void ioxd__coro_yield(void)
 {
-    assert(cur != nullptr && "coro_yield needs a running coroutine");
-    swap_ctx(&cur->sp, loop_sp);
+    assert(cur != nullptr && "ioxd__coro_yield needs a running coroutine");
+    ioxd__coro_swap(&cur->sp, loop_sp);
 }

@@ -47,7 +47,7 @@ typedef struct op {
 
 /* The text of an errno, for a log line. glibc's strerror has had a per-thread buffer since 2.32,
  * which is what every supported box runs; clang-tidy's concurrency check does not know that. */
-static inline const char *ioxd__errstr(int err)
+static inline const char *ioxd__io_errstr(int err)
 {
     return strerror(err);   /* NOLINT(concurrency-mt-unsafe) */
 }

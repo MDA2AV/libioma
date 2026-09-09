@@ -172,7 +172,7 @@ static size_t decode(const char *src, size_t len, char *dst)
         if (src[i] == '+') {
             dst[out++] = ' ';
         } else if (src[i] == '%' && i + 2 < len) {
-            int hi = ioxd__hexval((unsigned char)src[i + 1]), lo = ioxd__hexval((unsigned char)src[i + 2]);
+            int hi = ioxd__http_hexval((unsigned char)src[i + 1]), lo = ioxd__http_hexval((unsigned char)src[i + 2]);
             if (hi >= 0 && lo >= 0 && !(hi == 0 && lo == 0)) {
                 dst[out++] = (char)(hi * 16 + lo);
                 i += 2;

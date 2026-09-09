@@ -1,5 +1,5 @@
 /*
- * void swap_ctx(void **save_sp, void *load_sp)        rdi = save_sp, rsi = load_sp
+ * void ioxd__coro_swap(void **save_sp, void *load_sp)        rdi = save_sp, rsi = load_sp
  *
  * Save the callee-saved registers on the current stack, store the stack pointer, load the other
  * stack pointer, restore its callee-saved registers, and return into whatever it was doing.
@@ -11,16 +11,16 @@
  *
  * The CFI describes one frame of six pushes. It is still right after the stack swap, because the
  * stack being loaded was left in exactly that shape by its own trip through here (or forged that
- * way by coro_create), so gdb and perf unwind out of either coroutine.
+ * way by ioxd__coro_create), so gdb and perf unwind out of either coroutine.
  *
  * No .note.gnu.property on purpose: an unmarked object leaves the linked binary without the
  * IBT/SHSTK flags, so a shadow stack is never enabled around this hand-built frame.
  */
 	.text
-	.globl	swap_ctx
-	.hidden	swap_ctx
-	.type	swap_ctx, @function
-swap_ctx:
+	.globl	ioxd__coro_swap
+	.hidden	ioxd__coro_swap
+	.type	ioxd__coro_swap, @function
+ioxd__coro_swap:
 	.cfi_startproc
 	pushq	%rbp
 	.cfi_adjust_cfa_offset 8
@@ -62,6 +62,6 @@ swap_ctx:
 	.cfi_adjust_cfa_offset -8
 	ret
 	.cfi_endproc
-	.size	swap_ctx, .-swap_ctx
+	.size	ioxd__coro_swap, .-ioxd__coro_swap
 
 	.section .note.GNU-stack,"",@progbits

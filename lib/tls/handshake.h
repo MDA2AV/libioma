@@ -10,16 +10,16 @@
 
 /* The handshake over the pipe, then the keys into the socket. 0, or -1: the connection is not
  * usable (the handshake failed, the peer left, kernel TLS is unavailable). */
-int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs);
+int ioxd__handshake_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs);
 
 /* Tell the peer the connection is ending: a close_notify alert, sent as a TLS control record
  * through the kernel. Best effort, for a connection whose prologue succeeded. */
-void ioxd__tls_close_notify(struct ioxd_pipe *pipe);
+void ioxd__handshake_close_notify(struct ioxd_pipe *pipe);
 
 #if IOXD_TLS
 #include <openssl/ssl.h>
 
-void ioxd__tls_keylog(const SSL *ssl, const char *line);         /* catches the traffic secrets */
+void ioxd__handshake_keylog(const SSL *ssl, const char *line);         /* catches the traffic secrets */
 #endif
 
 /* ── handshake.c: the notes ──────────────────────────────────────────────────────────────────── */
@@ -54,7 +54,7 @@ void ioxd__tls_keylog(const SSL *ssl, const char *line);         /* catches the 
  * 64 hex characters into 32 bytes.
  */
 
-/* ioxd__tls_keylog:
+/* ioxd__handshake_keylog:
  * "SERVER_TRAFFIC_SECRET_0 <client random> <secret>" and its CLIENT twin: the two we need.
  *   - past the client random  [const char *secret = strchr(tag, ' ');]
  */
@@ -107,20 +107,20 @@ void ioxd__tls_keylog(const SSL *ssl, const char *line);         /* catches the 
  *   - OpenSSL answered something: a KeyUpdate we cannot follow  [if (BIO_pending(wbio) > 0) {]
  */
 
-/* ioxd__tls_prologue:
+/* ioxd__handshake_prologue:
  *   - set on every failure: logged once  [const char    *why = nullptr;]
  *   - early plaintext, then one record: off the coroutine's stack  [plain = malloc(PLAIN_MAX +
  *     RECORD_MAX);]
  *   - not the SSL's yet  [BIO_free(rbio);]
  *   - the SSL owns both from here  [SSL_set_bio(ssl, rbio, wbio);]
- *   - the table its ClientHello picks a host from  [ioxd__tls_bind(ssl, t);]
+ *   - the table its ClientHello picks a host from  [ioxd__certs_bind(ssl, t);]
  *   - the handshake, as an ordinary await loop  [for (;;) {]
- *   - nothing more leaves the socket meanwhile  [if (ioxd__recv_pause(c) < 0) {]
+ *   - nothing more leaves the socket meanwhile  [if (ioxd__conn_recv_pause(c) < 0) {]
  *   - or the worker is draining: nothing to serve  [why = "input ended after the handshake";]
  *   - and its BIOs  [SSL_free(ssl);]
  */
 
-/* ioxd__tls_close_notify:
+/* ioxd__handshake_close_notify:
  *   - warning, close_notify  [unsigned char alert[2] = { 1, 0 };]
  *   - the alert record type  [*CMSG_DATA(cm) = 21;]
  */

@@ -52,7 +52,7 @@
  * in.
  */
 
-/* ioxd__run:
+/* ioxd__run_http:
  * ioxd_run, through the header's inline: the caller's sizeof(ioxd_ctx) must be ours, or the
  * limits that size it (IOXD_MAX_HEADERS and friends) were redefined on one side and every
  * handler would read the context at the wrong offsets.

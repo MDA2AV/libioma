@@ -177,10 +177,10 @@ int ioxd_bind(int port, ioxd_certs *certs);
  * port could not be opened, when a worker failed, or when the limits above differ between this
  * header and the library (the context would not match). May be called again after it returns;
  * the ports stay bound. */
-int ioxd__run(int workers, size_t ctx_size);
+int ioxd__run_http(int workers, size_t ctx_size);
 static inline int ioxd_run(int workers)
 {
-    return ioxd__run(workers, sizeof(ioxd_ctx));
+    return ioxd__run_http(workers, sizeof(ioxd_ctx));
 }
 
 /* The reason phrase for a status code ("OK", "Not Found", ...); "Unknown" if unlisted. */

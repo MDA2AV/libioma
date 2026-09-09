@@ -24,7 +24,7 @@ static_assert(((unsigned)RX_QUEUE & ((unsigned)RX_QUEUE - 1U)) == 0 && RX_QUEUE 
 typedef struct proactor proactor_t;
 typedef struct conn     conn_t;
 struct listener;                          /* io/proactor.h: the port it was accepted on */
-struct msghdr;                            /* <sys/socket.h>, for ioxd__sendmsg          */
+struct msghdr;                            /* <sys/socket.h>, for ioxd__conn_sendmsg          */
 
 /* A slice the kernel delivered into a provided buffer, waiting for the handler to read it. */
 struct rx_item {
@@ -61,25 +61,25 @@ struct conn {
 /* What a coroutine calls, on the owning worker: every one of these suspends it, and the loop
  * resumes it when the completion arrives - so none is named for the waiting, each for what it
  * does, after the syscall where there is one. */
-int ioxd__send     (conn_t *c, const void *buf, size_t len);   /* all of buf: len, else -errno                */
-int ioxd__recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive) */
+int ioxd__conn_send     (conn_t *c, const void *buf, size_t len);   /* all of buf: len, else -errno                */
+int ioxd__conn_recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive) */
 
 /* For a protocol prologue (TLS): stop the multishot recv so nothing more leaves the socket, take
  * what it already delivered, read exact byte counts straight from the socket, program the
  * socket, then resume. All suspend like any await. */
-int  ioxd__recv_pause (conn_t *c);                        /* 0 once stopped; -1 if the input already ended */
-bool ioxd__recv_resume(conn_t *c);                        /* true once re-armed; false if it ended meanwhile */
-int  ioxd__recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into dst, or <0                     */
-int  ioxd__setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
-int  ioxd__sendmsg    (conn_t *c, const struct msghdr *msg);   /* one sendmsg, for a message with control data */
+int  ioxd__conn_recv_pause (conn_t *c);                        /* 0 once stopped; -1 if the input already ended */
+bool ioxd__conn_recv_resume(conn_t *c);                        /* true once re-armed; false if it ended meanwhile */
+int  ioxd__conn_recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into dst, or <0                     */
+int  ioxd__conn_setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
+int  ioxd__conn_sendmsg    (conn_t *c, const struct msghdr *msg);   /* one sendmsg, for a message with control data */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
 conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the pool, or fresh  */
 void    ioxd__conn_main(void *arg);                      /* the connection's coroutine body      */
-void    ioxd__arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
-void    ioxd__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
-void    ioxd__recv_drain(conn_t *c);                     /* shutdown: end a recv parked on -ENOBUFS */
-void    ioxd__close_socket(proactor_t *p, int fd);       /* close a socket through the ring      */
+void    ioxd__conn_arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
+void    ioxd__conn_on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
+void    ioxd__conn_recv_drain(conn_t *c);                     /* shutdown: end a recv parked on -ENOBUFS */
+void    ioxd__conn_close_socket(proactor_t *p, int fd);       /* close a socket through the ring      */
 void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */
 
 /* ── conn.c: the notes ──────────────────────────────────────────────────────────────────── */
@@ -94,7 +94,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *   - ── the object ──────────────────────────────────────────────────────────────────────────
  *     [/ * Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two ]
  *   - ── the recv side ───────────────────────────────────────────────────────────────────────
- *     [void ioxd__arm_recv(proactor_t *p, conn_t *c)]
+ *     [void ioxd__conn_arm_recv(proactor_t *p, conn_t *c)]
  *   - ── close ───────────────────────────────────────────────────────────────────────────────
  *     [/ * Close the socket with a CLOSE SQE, which rides the next enter with the rest o]
  *   - ── awaits ──────────────────────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * Free the pool at worker teardown.
  */
 
-/* ioxd__arm_recv:
+/* ioxd__conn_arm_recv:
  * Arm the multishot recv: one SQE, then a CQE per arrival, each in a buffer the kernel picks.
  *   - a fresh arm: no cancel of ours is in flight  [c->cancelling = false;]
  */
@@ -158,7 +158,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * rather than the last entry taking its place: the loop re-arms the list oldest first.
  */
 
-/* ioxd__on_recv:
+/* ioxd__conn_on_recv:
  * A recv CQE: queue the data and wake the reader, or record the end of input and drop the
  * recv's ref. -ENOBUFS is not an error: the buffer group ran dry, so park and re-arm later.
  *   - the multishot ends here: no cancel is left in flight  [c->cancelling = false;]
@@ -183,13 +183,13 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *   - shutting down without a blanket cancel  [} else if (p->cancel_each && !c->closed) {]
  */
 
-/* ioxd__recv_drain:
+/* ioxd__conn_recv_drain:
  * Shutdown: a recv parked on -ENOBUFS holds no operation the kernel can cancel, so end its
  * input by hand. Its handler wakes with an error, unwinds and closes the connection like any
  * other.
  */
 
-/* ioxd__close_socket:
+/* ioxd__conn_close_socket:
  * Close the socket with a CLOSE SQE, which rides the next enter with the rest of the batch: no
  * syscall here, and the close stays in order behind the SQEs already staged for that same
  * socket - a plain close(2) would race them. A file slot is named by index, a real fd by
@@ -208,20 +208,20 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * The connection's coroutine: run the worker's handler to completion, then close.
  */
 
-/* ioxd__recv_item:
+/* ioxd__conn_recv_item:
  * The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends
  * until one arrives; 1 with the item, 0 at the end of input, <0 an error.
- *   - ioxd__on_recv wakes us  [coro_yield();]
+ *   - ioxd__conn_on_recv wakes us  [ioxd__coro_yield();]
  */
 
-/* ioxd__recv_pause:
+/* ioxd__conn_recv_pause:
  * Stop the multishot recv so nothing more leaves the socket, and park until it has stopped. 0
  * once it is paused, -1 when the input ended instead - the caller has nothing left to program.
  *   - data may still land meanwhile: fine, it is queued  [while (c->recv == RECV_ARMED) {]
  *   - it ended while we were stopping it  [if (c->eof)]
  */
 
-/* ioxd__recv_resume:
+/* ioxd__conn_recv_resume:
  * Arm the recv again after a pause. False when there is nothing to arm - the input ended, or
  * the handler is already gone - so a prologue learns that its connection went away under it.
  *   - The worker is stopping and its blanket cancel has already been and gone: a recv armed
@@ -231,7 +231,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *   - the recv's ref; the handler still holds its own  [conn_unref(c);]
  */
 
-/* ioxd__setsockopt:
+/* ioxd__conn_setsockopt:
  *   - The plain fallback needs a real descriptor, and under registered files (the default)
  *     c->fd is a slot index, so it is dead code there: kernel TLS then wants a kernel with
  *     SOCKET_URING_OP_SETSOCKOPT (6.7+), or a build with -DFIXED_FILES=0.  [if ((rc ==
@@ -240,7 +240,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *     !c->p->ring.fixed_files)]
  */
 
-/* ioxd__send:
+/* ioxd__conn_send:
  * Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno.
  *   - no SIGPIPE; the loop finishes short sends (kernel TLS refuses MSG_WAITALL)
  *     [sqe->msg_flags = MSG_NOSIGNAL;]

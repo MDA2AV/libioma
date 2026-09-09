@@ -150,7 +150,7 @@ void ioxd_endpoint_use(ioxd_endpoint *endpoint, ioxd_mw mw)
     endpoint->own[endpoint->n_own++] = mw;
 }
 
-ioxd_group *ioxd__group_begin(struct ioxd_group_args args)
+ioxd_group *ioxd__router_group_begin(struct ioxd_group_args args)
 {
     ioxd_group *group = ioxd_group_new(g_current, args.prefix);
     for (int i = 0; i < IOXD_MAX_MW && args.mws[i]; i++)
@@ -159,25 +159,25 @@ ioxd_group *ioxd__group_begin(struct ioxd_group_args args)
     return group;
 }
 
-ioxd_group *ioxd__group_end(void)
+ioxd_group *ioxd__router_group_end(void)
 {
     if (g_current->parent)
         g_current = g_current->parent;
     return nullptr;
 }
 
-void ioxd__group_pop(ioxd_group **open)
+void ioxd__router_group_pop(ioxd_group **open)
 {
     if (*open)
-        ioxd__group_end();
+        ioxd__router_group_end();
 }
 
-ioxd_group *ioxd__group_current(void)
+ioxd_group *ioxd__router_group_current(void)
 {
     return g_current;
 }
 
-ioxd_endpoint *ioxd__endpoint(const char *method, struct ioxd_endpoint_args args)
+ioxd_endpoint *ioxd__router_endpoint(const char *method, struct ioxd_endpoint_args args)
 {
     ioxd_endpoint *ep = ioxd_route(g_current, method, args.path, args.fn);
     for (int i = 0; i < IOXD_MAX_MW && args.mws[i]; i++)
@@ -366,8 +366,8 @@ static ioxd_slice decoded(ioxd_slice raw, char *arena, size_t cap, size_t *used)
     size_t out = 0;
     for (size_t i = 0; i < raw.len; i++) {
         if (raw.p[i] == '%' && i + 2 < raw.len) {
-            int hi = ioxd__hexval((unsigned char)raw.p[i + 1]);
-            int lo = ioxd__hexval((unsigned char)raw.p[i + 2]);
+            int hi = ioxd__http_hexval((unsigned char)raw.p[i + 1]);
+            int lo = ioxd__http_hexval((unsigned char)raw.p[i + 2]);
             if (hi >= 0 && lo >= 0) {
                 dst[out++] = (char)(hi * 16 + lo);
                 i += 2;
@@ -470,7 +470,7 @@ static void not_allowed(ioxd_ctx *ctx)
     ioxd_text(ctx, "405 Method Not Allowed\n");
 }
 
-void ioxd__dispatch(ioxd_ctx *ctx)
+void ioxd__router_dispatch(ioxd_ctx *ctx)
 {
     ioxd_request *req  = &ctx->req;
     struct seen   seen = { .n = 0 };

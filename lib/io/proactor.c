@@ -24,26 +24,26 @@ static uint64_t now_ms(void)
 static void publish_cq(proactor_t *p)
 {
     if (p->cq_taken) {
-        uring_cq_advance(&p->ring, p->cq_taken);
+        ioxd__uring_cq_advance(&p->ring, p->cq_taken);
         p->cq_taken = 0;
     }
 }
 
-struct io_uring_sqe *ioxd__sqe(proactor_t *p)
+struct io_uring_sqe *ioxd__proactor_sqe(proactor_t *p)
 {
-    struct io_uring_sqe *sqe = uring_get_sqe(&p->ring);
+    struct io_uring_sqe *sqe = ioxd__uring_get_sqe(&p->ring);
     int rc = 0;
     for (int i = 0; !sqe && i < 16; i++) {
         ioxd__bufring_publish(&p->bufs);
         publish_cq(p);
-        rc = uring_submit(&p->ring);
+        rc = ioxd__uring_submit(&p->ring);
         if (rc == -EBUSY || rc == -EAGAIN || rc == -EINTR)
-            rc = uring_submit_wait(&p->ring, 0, nullptr);
-        sqe = uring_get_sqe(&p->ring);
+            rc = ioxd__uring_submit_wait(&p->ring, 0, nullptr);
+        sqe = ioxd__uring_get_sqe(&p->ring);
     }
     if (!sqe) {
         fprintf(stderr, "[w%d] SQ still full after flushing: %s\n",
-                p->id, rc < 0 ? ioxd__errstr(-rc) : "the kernel is not consuming it");
+                p->id, rc < 0 ? ioxd__io_errstr(-rc) : "the kernel is not consuming it");
         abort();
     }
     return sqe;
@@ -68,7 +68,7 @@ static void arm_accept(struct listener *l)
         return;
     }
     l->stalled = false;
-    struct io_uring_sqe *sqe = ioxd__sqe(l->p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(l->p);
     sqe->opcode    = IORING_OP_ACCEPT;
     sqe->fd        = l->fd;
     sqe->ioprio    = IORING_ACCEPT_MULTISHOT;
@@ -105,7 +105,7 @@ static void note_accept_error(struct listener *l, int result)
     if (now < l->err_log_at)
         return;
     fprintf(stderr, "[w%d] accept :%u: %s (%llu since the last line)\n",
-            l->p->id, l->port, ioxd__errstr(-result), (unsigned long long)l->err_since_log);
+            l->p->id, l->port, ioxd__io_errstr(-result), (unsigned long long)l->err_since_log);
     l->err_since_log = 0;
     l->err_log_at    = now + 1;
 }
@@ -115,11 +115,11 @@ static void on_accept(struct listener *l, int result, unsigned flags)
     proactor_t *p = l->p;
     trace("[w%d] accept :%u result=%d more=%d\n", p->id, l->port, result, !!(flags & IORING_CQE_F_MORE));
     if (result >= 0 && p->draining) {
-        ioxd__close_socket(p, result);
+        ioxd__conn_close_socket(p, result);
     } else if (result >= 0) {
         conn_t *c = ioxd__conn_new(p, l, result);
-        ioxd__arm_recv(p, c);
-        proactor_spawn(p, ioxd__conn_main, c);
+        ioxd__conn_arm_recv(p, c);
+        ioxd__proactor_spawn(p, ioxd__conn_main, c);
         p->accepted++;
     } else if (!(p->draining && result == -ECANCELED)) {
         note_accept_error(l, result);
@@ -142,23 +142,23 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
         op->res   = cqe->res;
         op->flags = cqe->flags;
         trace("[w%d] op res=%d flags=%#x\n", p->id, cqe->res, cqe->flags);
-        coro_resume(op->waiter);
+        ioxd__coro_resume(op->waiter);
         break;
     }
     case TAG_RECV:
-        ioxd__on_recv(p, ptr, cqe->res, cqe->flags);
+        ioxd__conn_on_recv(p, ptr, cqe->res, cqe->flags);
         break;
     case TAG_ACCEPT:
         on_accept(ptr, cqe->res, cqe->flags);
         break;
     case TAG_CLOSE:
         if (cqe->res < 0)
-            fprintf(stderr, "[w%d] close: %s\n", p->id, ioxd__errstr(-cqe->res));
+            fprintf(stderr, "[w%d] close: %s\n", p->id, ioxd__io_errstr(-cqe->res));
         break;
     case TAG_DRAIN:
         if (cqe->res < 0 && cqe->res != -ENOENT) {
             fprintf(stderr, "[w%d] cancel all: %s; cancelling connections one at a time\n",
-                    p->id, ioxd__errstr(-cqe->res));
+                    p->id, ioxd__io_errstr(-cqe->res));
             p->cancel_each = true;
         }
         break;
@@ -167,9 +167,9 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
     }
 }
 
-void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg)
+void ioxd__proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg)
 {
-    coro_t *c = coro_create(fn, arg, p->cfg.stack_size);
+    coro_t *c = ioxd__coro_create(fn, arg, p->cfg.stack_size);
     if (p->ready_tail)
         p->ready_tail->next = c;
     else
@@ -185,7 +185,7 @@ static void run_ready(proactor_t *p)
         if (!p->ready_head)
             p->ready_tail = nullptr;
         c->next = nullptr;
-        coro_resume(c);
+        ioxd__coro_resume(c);
     }
 }
 
@@ -198,7 +198,7 @@ static void rearm_starved(proactor_t *p)
 
     unsigned n = room < p->nstarved ? room : p->nstarved;
     for (unsigned i = 0; i < n; i++)
-        ioxd__arm_recv(p, p->starved[i]);
+        ioxd__conn_arm_recv(p, p->starved[i]);
     p->nstarved -= n;
     memmove(p->starved, p->starved + n, p->nstarved * sizeof *p->starved);
 }
@@ -237,7 +237,7 @@ static void begin_drain(proactor_t *p)
     for (int i = 0; i < p->n_listeners; i++) {
         struct listener *l = &p->listeners[i];
         if (!l->stalled) {
-            struct io_uring_sqe *sqe = ioxd__sqe(p);
+            struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
             sqe->opcode    = IORING_OP_ASYNC_CANCEL;
             sqe->fd        = -1;
             sqe->addr      = UD(l, TAG_ACCEPT);
@@ -246,14 +246,14 @@ static void begin_drain(proactor_t *p)
         l->stalled = true;
     }
 
-    struct io_uring_sqe *sqe = ioxd__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
     sqe->opcode       = IORING_OP_ASYNC_CANCEL;
     sqe->fd           = -1;
     sqe->cancel_flags = IORING_ASYNC_CANCEL_ANY;
     sqe->user_data    = UD(p, TAG_DRAIN);
 
     while (p->nstarved)
-        ioxd__recv_drain(p->starved[--p->nstarved]);
+        ioxd__conn_recv_drain(p->starved[--p->nstarved]);
 }
 
 static void pin_to(int idx)
@@ -292,24 +292,24 @@ static unsigned fixed_slots(void)
     return n;
 }
 
-void proactor_run(proactor_t *p)
+void ioxd__proactor_run(proactor_t *p)
 {
     if (p->cpu >= 0)
         pin_to(p->cpu);
 
-    coro_pool_limit(p->cfg.idle_stacks);
-    int rc = uring_init(&p->ring, p->cfg.ring_entries);
+    ioxd__coro_pool_limit(p->cfg.idle_stacks);
+    int rc = ioxd__uring_init(&p->ring, p->cfg.ring_entries);
     if (rc < 0) {
-        fprintf(stderr, "[w%d] io_uring_setup: %s%s\n", p->id, ioxd__errstr(-rc),
+        fprintf(stderr, "[w%d] io_uring_setup: %s%s\n", p->id, ioxd__io_errstr(-rc),
                 rc == -EPERM ? " (io_uring is disabled: see /proc/sys/kernel/io_uring_disabled)" : "");
         abort();
     }
 #ifndef NO_REG_RING
-    uring_register_ring_fd(&p->ring);
+    ioxd__uring_register_ring_fd(&p->ring);
 #endif
 
     unsigned slots = fixed_slots();
-    if (slots && uring_register_files_sparse(&p->ring, slots) == 0)
+    if (slots && ioxd__uring_register_files_sparse(&p->ring, slots) == 0)
         p->file_slots = slots;
     ioxd__bufring_init(&p->bufs, &p->ring, p->id, p->cfg.recv_buffers, p->cfg.recv_buffer_size);
     char   ports[IOXD_MAX_LISTENERS * 12] = "";
@@ -344,17 +344,17 @@ void proactor_run(proactor_t *p)
         rearm_starved(p);
         ioxd__bufring_publish(&p->bufs);
 
-        rc = uring_submit_wait(&p->ring, 1, &wait_at_most);
+        rc = ioxd__uring_submit_wait(&p->ring, 1, &wait_at_most);
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {
-            fprintf(stderr, "[w%d] io_uring_enter: %s\n", p->id, ioxd__errstr(-rc));
+            fprintf(stderr, "[w%d] io_uring_enter: %s\n", p->id, ioxd__io_errstr(-rc));
             p->failed = rc;
             *p->stop  = 1;
             break;
         }
 
-        unsigned ready = uring_cq_ready(&p->ring);
+        unsigned ready = ioxd__uring_cq_ready(&p->ring);
         for (unsigned i = 0; i < ready; i++) {
-            struct io_uring_cqe cqe = *uring_cqe_at(&p->ring, p->cq_taken);
+            struct io_uring_cqe cqe = *ioxd__uring_cqe_at(&p->ring, p->cq_taken);
             p->cq_taken++;
             dispatch(p, &cqe);
         }
@@ -363,7 +363,7 @@ void proactor_run(proactor_t *p)
     }
 
     ioxd__bufring_publish(&p->bufs);
-    uring_submit(&p->ring);
+    ioxd__uring_submit(&p->ring);
 
     fprintf(stderr, "[w%d] stopping: %llu accepted, %u still open, %llu cq overflows\n",
             p->id, (unsigned long long)p->accepted, p->live,
@@ -372,7 +372,7 @@ void proactor_run(proactor_t *p)
     for (int i = 0; i < p->n_listeners; i++)
         close(p->listeners[i].fd);
     ioxd__bufring_unregister(&p->bufs, &p->ring);
-    uring_exit(&p->ring);
+    ioxd__uring_exit(&p->ring);
     if (p->live == 0) {
         ioxd__bufring_unmap(&p->bufs);
     } else {
@@ -383,5 +383,5 @@ void proactor_run(proactor_t *p)
     p->starved  = nullptr;
     p->nstarved = p->cap_starved = 0;
     ioxd__conn_pool_drain(p);
-    coro_pool_drain();
+    ioxd__coro_pool_drain();
 }

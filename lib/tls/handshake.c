@@ -1,5 +1,5 @@
 #include "tls/handshake.h"
-#include "tls/store.h"
+#include "tls/certs.h"
 #include "io/internal.h"
 
 #include <errno.h>
@@ -62,7 +62,7 @@ static bool unhex(const char *hex, unsigned char *out)
     return true;
 }
 
-void ioxd__tls_keylog(const SSL *ssl, const char *line)
+void ioxd__handshake_keylog(const SSL *ssl, const char *line)
 {
     struct secrets *s = SSL_get_ex_data(ssl, ex_index);
     if (!s)
@@ -118,7 +118,7 @@ static int install(conn_t *c, int direction, const unsigned char *secret, uint64
     memcpy(ci.iv, iv + 4, 8);
     for (unsigned i = 0; i < 8; i++)
         ci.rec_seq[i] = (unsigned char)(seq >> (56U - 8U * i));
-    int rc = ioxd__setsockopt(c, SOL_TLS, direction, &ci, sizeof ci);
+    int rc = ioxd__conn_setsockopt(c, SOL_TLS, direction, &ci, sizeof ci);
     explicit_bzero(&ci, sizeof ci);
     explicit_bzero(key, sizeof key);
     explicit_bzero(iv, sizeof iv);
@@ -130,9 +130,9 @@ static int flush_outbound(struct ioxd_pipe *pipe, BIO *wbio)
     char buf[4096];
     int  n;
     while ((n = BIO_read(wbio, buf, sizeof buf)) > 0)
-        if (ioxd_pipewriter_write(&pipe->out, buf, (size_t)n) < 0)
+        if (ioxd__pipewriter_write(&pipe->out, buf, (size_t)n) < 0)
             return -1;
-    return ioxd_pipewriter_flush(&pipe->out);
+    return ioxd__pipewriter_flush(&pipe->out);
 }
 
 static size_t record_len(const unsigned char *rec)
@@ -146,19 +146,19 @@ static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec
     size_t have = 0, need = 5;
     while (have < need) {
         ioxd_slice live = { nullptr, 0 };
-        int rc = draining ? ioxd_pipereader_avail(pr, &live) : ioxd_pipereader_read(pr, &live);
+        int rc = draining ? ioxd__pipereader_avail(pr, &live) : ioxd__pipereader_read(pr, &live);
         if (rc < 0 || (rc == 0 && !draining))
             return -1;
         if (rc == 0) {
             if (have == 0)
                 return 0;
-            if (ioxd__recv_exact(pr->conn, rec + have, need - have) < 0)
+            if (ioxd__conn_recv_exact(pr->conn, rec + have, need - have) < 0)
                 return -1;
             have = need;
         } else {
             size_t k = live.len < need - have ? live.len : need - have;
             memcpy(rec + have, live.p, k);
-            ioxd_pipereader_drop(pr, k);
+            ioxd__pipereader_drop(pr, k);
             have += k;
         }
         if (have == 5 && need == 5) {
@@ -229,17 +229,17 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
     }
 }
 
-int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
+int ioxd__handshake_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
 {
     pthread_once(&ex_once, make_ex_index);
     conn_t        *c = pipe->in.conn;
-    struct table  *t = ioxd__tls_acquire(certs);
+    struct table  *t = ioxd__certs_acquire(certs);
     struct secrets s = {};
     unsigned char *plain = nullptr;
     const char    *why = nullptr;
     int            r;
 
-    SSL *ssl  = SSL_new(ioxd__tls_fallback(t));
+    SSL *ssl  = SSL_new(ioxd__certs_fallback(t));
     BIO *rbio = BIO_new(BIO_s_mem());
     BIO *wbio = BIO_new(BIO_s_mem());
     plain = malloc(PLAIN_MAX + RECORD_MAX);
@@ -252,7 +252,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
     SSL_set_bio(ssl, rbio, wbio);
     SSL_set_accept_state(ssl);
     SSL_set_ex_data(ssl, ex_index, &s);
-    ioxd__tls_bind(ssl, t);
+    ioxd__certs_bind(ssl, t);
 
     for (;;) {
         int ret = SSL_do_handshake(ssl);
@@ -277,7 +277,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
         goto out;
     }
 
-    if (ioxd__recv_pause(c) < 0) {
+    if (ioxd__conn_recv_pause(c) < 0) {
         why = "input ended after the handshake";
         goto out;
     }
@@ -286,23 +286,23 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
     if (records < 0)
         goto out;
 
-    r = ioxd__setsockopt(c, SOL_TCP, TCP_ULP, "tls", sizeof "tls");
+    r = ioxd__conn_setsockopt(c, SOL_TCP, TCP_ULP, "tls", sizeof "tls");
     if (r < 0) {
-        why = r == -ENOENT ? "kernel TLS unavailable: is the tls module loaded?" : ioxd__errstr(-r);
+        why = r == -ENOENT ? "kernel TLS unavailable: is the tls module loaded?" : ioxd__io_errstr(-r);
         goto out;
     }
     r = install(c, TLS_TX, s.tx, 0);
     if (r == 0)
         r = install(c, TLS_RX, s.rx, (uint64_t)records);
     if (r < 0) {
-        why = r == KDF_FAILED ? "key derivation failed" : ioxd__errstr(-r);
+        why = r == KDF_FAILED ? "key derivation failed" : ioxd__io_errstr(-r);
         goto out;
     }
-    if (plain_len && !ioxd_pipereader_inject(&pipe->in, plain, plain_len)) {
+    if (plain_len && !ioxd__pipereader_inject(&pipe->in, plain, plain_len)) {
         why = "early application data does not fit";
         goto out;
     }
-    if (!ioxd__recv_resume(c))
+    if (!ioxd__conn_recv_resume(c))
         why = "input ended after the handshake";
 out:
     if (why)
@@ -313,11 +313,11 @@ out:
         free(plain);
     }
     SSL_free(ssl);
-    ioxd__tls_release(certs, t);
+    ioxd__certs_release(certs, t);
     return why ? -1 : 0;
 }
 
-void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
+void ioxd__handshake_close_notify(struct ioxd_pipe *pipe)
 {
     unsigned char alert[2] = { 1, 0 };
     struct iovec  iov      = { alert, sizeof alert };
@@ -331,19 +331,19 @@ void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
     cm->cmsg_type  = TLS_SET_RECORD_TYPE;
     cm->cmsg_len   = CMSG_LEN(sizeof(unsigned char));
     *CMSG_DATA(cm) = 21;
-    ioxd__sendmsg(pipe->in.conn, &msg);
+    ioxd__conn_sendmsg(pipe->in.conn, &msg);
 }
 
 #else
 
-int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
+int ioxd__handshake_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
 {
     (void)pipe;
     (void)certs;
     return -1;
 }
 
-void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
+void ioxd__handshake_close_notify(struct ioxd_pipe *pipe)
 {
     (void)pipe;
 }

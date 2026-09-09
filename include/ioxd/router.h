@@ -75,11 +75,11 @@ struct ioxd_group_args    { const char *prefix; ioxd_mw mws[IOXD_MAX_MW + 1]; };
 struct ioxd_endpoint_args { const char *path; ioxd_handler fn; ioxd_mw mws[IOXD_MAX_MW + 1]; };
 
 /* What the macros call: the current group's stack and an endpoint with a middleware list. */
-ioxd_group    *ioxd__group_begin(struct ioxd_group_args args);
-ioxd_group    *ioxd__group_end(void);
-void           ioxd__group_pop(ioxd_group **open);
-ioxd_group    *ioxd__group_current(void);
-ioxd_endpoint *ioxd__endpoint(const char *method, struct ioxd_endpoint_args args);
+ioxd_group    *ioxd__router_group_begin(struct ioxd_group_args args);
+ioxd_group    *ioxd__router_group_end(void);
+void           ioxd__router_group_pop(ioxd_group **open);
+ioxd_group    *ioxd__router_group_current(void);
+ioxd_endpoint *ioxd__router_endpoint(const char *method, struct ioxd_endpoint_args args);
 
 /* The argument lists become the structs above. An argument count picks the expansion, so the
  * middleware list always has its own braces and no macro is ever invoked with an empty variadic
@@ -108,17 +108,17 @@ ioxd_endpoint *ioxd__endpoint(const char *method, struct ioxd_endpoint_args args
  * stands, and a group still open at ioxd_run is reported. */
 #ifdef __GNUC__
 #define IOXD_GROUP(...)                                                                             \
-    for (ioxd_group *IOXD__CAT(ioxd__block_, __LINE__) __attribute__((cleanup(ioxd__group_pop)))    \
-             = ioxd__group_begin(IOXD__GROUP_ARGS(__VA_ARGS__));                                    \
-         IOXD__CAT(ioxd__block_, __LINE__); IOXD__CAT(ioxd__block_, __LINE__) = ioxd__group_end())
+    for (ioxd_group *IOXD__CAT(ioxd__block_, __LINE__) __attribute__((cleanup(ioxd__router_group_pop)))    \
+             = ioxd__router_group_begin(IOXD__GROUP_ARGS(__VA_ARGS__));                                    \
+         IOXD__CAT(ioxd__block_, __LINE__); IOXD__CAT(ioxd__block_, __LINE__) = ioxd__router_group_end())
 #else
 #define IOXD_GROUP(...)                                                                             \
     for (ioxd_group *IOXD__CAT(ioxd__block_, __LINE__)                                              \
-             = ioxd__group_begin(IOXD__GROUP_ARGS(__VA_ARGS__));                                    \
-         IOXD__CAT(ioxd__block_, __LINE__); IOXD__CAT(ioxd__block_, __LINE__) = ioxd__group_end())
+             = ioxd__router_group_begin(IOXD__GROUP_ARGS(__VA_ARGS__));                                    \
+         IOXD__CAT(ioxd__block_, __LINE__); IOXD__CAT(ioxd__block_, __LINE__) = ioxd__router_group_end())
 #endif
-#define IOXD_USE(mw)            ioxd_group_use(ioxd__group_current(), (mw))
-#define IOXD_ROUTE(method, ...) ioxd__endpoint((method), IOXD__ROUTE_ARGS(__VA_ARGS__))
+#define IOXD_USE(mw)            ioxd_group_use(ioxd__router_group_current(), (mw))
+#define IOXD_ROUTE(method, ...) ioxd__router_endpoint((method), IOXD__ROUTE_ARGS(__VA_ARGS__))
 #define IOXD_GET(...)           IOXD_ROUTE("GET",    __VA_ARGS__)
 #define IOXD_POST(...)          IOXD_ROUTE("POST",   __VA_ARGS__)
 #define IOXD_PUT(...)           IOXD_ROUTE("PUT",    __VA_ARGS__)

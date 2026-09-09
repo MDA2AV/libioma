@@ -7,7 +7,7 @@
 #include "ioxd.h"
 
 void ioxd__router_build(void);                    /* the segment tree and the flat chains, once */
-void ioxd__dispatch(ioxd_ctx *ctx);               /* the request's endpoint, behind its chain    */
+void ioxd__router_dispatch(ioxd_ctx *ctx);               /* the request's endpoint, behind its chain    */
 
 /* ── router.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -51,7 +51,7 @@ void ioxd__dispatch(ioxd_ctx *ctx);               /* the request's endpoint, beh
  *     method_is(ep, name) ((ep)->method_len == sizeof(name) - 1 && \]
  *   - ── registration ────────────────────────────────────────────────────────────────────────
  *     [/ * Registration is over once ioxd_run has resolved the table: it is read-only fr]
- *   - --- the script form (the IOXD_ macros) ---  [ioxd_group *ioxd__group_begin(struct
+ *   - --- the script form (the IOXD_ macros) ---  [ioxd_group *ioxd__router_group_begin(struct
  *     ioxd_group_args args)]
  *   - ── resolution, once, from ioxd_run ─────────────────────────────────────────────────────
  *     [static bool next_segment(const char **at, const char *end, ioxd_slice *seg)]
@@ -92,25 +92,25 @@ void ioxd__dispatch(ioxd_ctx *ctx);               /* the request's endpoint, beh
  * Middleware around one endpoint.
  */
 
-/* ioxd__group_begin:
+/* ioxd__router_group_begin:
  * Open a group below the current one and make it current; its middleware list ends at a null.
  */
 
-/* ioxd__group_end:
+/* ioxd__router_group_end:
  * Close the current group; null, so the block's loop ends.
  */
 
-/* ioxd__group_pop:
+/* ioxd__router_group_pop:
  * The block's cleanup handler, where the compiler has one: a break, return or goto out of an
  * IOXD_GROUP skips the loop's increment, so the group is popped here instead. A block that
  * ended on its own already popped and nulled the variable, and this does nothing.
  */
 
-/* ioxd__group_current:
+/* ioxd__router_group_current:
  * The group a script-form registration goes into.
  */
 
-/* ioxd__endpoint:
+/* ioxd__router_endpoint:
  * An endpoint in the current group, with its middleware list (ended by a null).
  */
 
@@ -214,7 +214,7 @@ void ioxd__dispatch(ioxd_ctx *ctx);               /* the request's endpoint, beh
  *   - status and allow are set before its chain  [static void not_allowed(ioxd_ctx *ctx)]
  */
 
-/* ioxd__dispatch:
+/* ioxd__router_dispatch:
  * Find the request's endpoint and run it behind its chain; the fallbacks run behind the
  * root's.
  *   - the path is known, the method is not  [if (seen.n) {]

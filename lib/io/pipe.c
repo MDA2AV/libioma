@@ -3,7 +3,7 @@
 
 #include <string.h>
 
-void ioxd_pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap)
+void ioxd__pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap)
 {
     *pr      = (ioxd_pipereader){};
     pr->conn = conn;
@@ -81,7 +81,7 @@ static int more(ioxd_pipereader *pr)
     if (pr->eof)
         return 0;
     struct rx_item item;
-    int rc = ioxd__recv_item(pr->conn, &item);
+    int rc = ioxd__conn_recv_item(pr->conn, &item);
     if (rc <= 0) {
         pr->eof = true;
         if (rc < 0)
@@ -108,7 +108,7 @@ static int more(ioxd_pipereader *pr)
     return 1;
 }
 
-int ioxd_pipereader_read(ioxd_pipereader *pr, ioxd_slice *live)
+int ioxd__pipereader_read(ioxd_pipereader *pr, ioxd_slice *live)
 {
     if (pr->error)
         return pr->error;
@@ -124,7 +124,7 @@ int ioxd_pipereader_read(ioxd_pipereader *pr, ioxd_slice *live)
     }
 }
 
-void ioxd_pipereader_examine(ioxd_pipereader *pr, size_t n)
+void ioxd__pipereader_examine(ioxd_pipereader *pr, size_t n)
 {
     pr->examined = n;
 }
@@ -147,12 +147,12 @@ static void consume(ioxd_pipereader *pr, size_t n)
     pr->examined = pr->examined > n ? pr->examined - n : 0;
 }
 
-void ioxd_pipereader_drop(ioxd_pipereader *pr, size_t n)
+void ioxd__pipereader_drop(ioxd_pipereader *pr, size_t n)
 {
     consume(pr, n);
 }
 
-const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
+const char *ioxd__pipereader_keep(ioxd_pipereader *pr, size_t n)
 {
     const char *kept;
     ioxd_slice  live = live_span(pr);
@@ -196,7 +196,7 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
     return kept;
 }
 
-void ioxd_pipereader_run_begin(ioxd_pipereader *pr)
+void ioxd__pipereader_run_begin(ioxd_pipereader *pr)
 {
     if (pr->run_in_cur && pr->run_len) {
         if (pr->has_pinned && !pr->cur_is_pinned) {
@@ -217,13 +217,13 @@ void ioxd_pipereader_run_begin(ioxd_pipereader *pr)
     cur_done(pr);
 }
 
-ioxd_slice ioxd_pipereader_run(const ioxd_pipereader *pr)
+ioxd_slice ioxd__pipereader_run(const ioxd_pipereader *pr)
 {
     const char *base = pr->run_in_cur ? (const char *)pr->cur.ptr : pr->buf;
     return (ioxd_slice){ base + pr->run_start, pr->run_len };
 }
 
-void ioxd_pipereader_release(ioxd_pipereader *pr)
+void ioxd__pipereader_release(ioxd_pipereader *pr)
 {
     pr->run_len    = 0;
     pr->run_in_cur = false;
@@ -245,7 +245,7 @@ void ioxd_pipereader_release(ioxd_pipereader *pr)
     cur_done(pr);
 }
 
-void ioxd_pipereader_close(ioxd_pipereader *pr)
+void ioxd__pipereader_close(ioxd_pipereader *pr)
 {
     if (pr->has_cur && !pr->cur_is_pinned)
         ioxd__bufring_return(&pr->conn->p->bufs, pr->cur.buf_id);
@@ -254,7 +254,7 @@ void ioxd_pipereader_close(ioxd_pipereader *pr)
     pr->has_cur = pr->has_pinned = pr->cur_is_pinned = false;
 }
 
-int ioxd_pipereader_copy(ioxd_pipereader *pr, void *dst, size_t n)
+int ioxd__pipereader_copy(ioxd_pipereader *pr, void *dst, size_t n)
 {
     if (pr->error)
         return pr->error;
@@ -272,7 +272,7 @@ int ioxd_pipereader_copy(ioxd_pipereader *pr, void *dst, size_t n)
     }
 }
 
-int ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
+int ioxd__pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
 {
     if (pr->error)
         return pr->error;
@@ -289,7 +289,7 @@ int ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
     return 1;
 }
 
-bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
+bool ioxd__pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
 {
     if (pr->error)
         return false;
@@ -312,7 +312,7 @@ bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
     return true;
 }
 
-void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)
+void ioxd__pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)
 {
     *pw       = (ioxd_pipewriter){};
     pw->conn  = conn;
@@ -322,19 +322,19 @@ void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t l
     pw->slack = slack;
 }
 
-void ioxd_pipewriter_reset(ioxd_pipewriter *pw)
+void ioxd__pipewriter_reset(ioxd_pipewriter *pw)
 {
     pw->head = pw->len = pw->tail = 0;
 }
 
-int ioxd_pipewriter_flush(ioxd_pipewriter *pw)
+int ioxd__pipewriter_flush(ioxd_pipewriter *pw)
 {
     if (pw->failed)
         return -1;
     size_t total = pw->head + pw->len + pw->tail;
     if (total == 0)
         return 0;
-    int rc = ioxd__send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    int rc = ioxd__conn_send(pw->conn, pw->buf + pw->lead - pw->head, total);
     pw->head = pw->len = pw->tail = 0;
     if (rc < 0) {
         pw->failed = true;
@@ -343,22 +343,22 @@ int ioxd_pipewriter_flush(ioxd_pipewriter *pw)
     return 0;
 }
 
-void *ioxd_pipewriter_reserve(ioxd_pipewriter *pw, size_t n)
+void *ioxd__pipewriter_reserve(ioxd_pipewriter *pw, size_t n)
 {
     if (pw->failed || n > pw->cap)
         return nullptr;
-    if (pw->len + n > pw->cap && ioxd_pipewriter_flush(pw) < 0)
+    if (pw->len + n > pw->cap && ioxd__pipewriter_flush(pw) < 0)
         return nullptr;
-    return ioxd_pipewriter_at(pw);
+    return ioxd__pipewriter_at(pw);
 }
 
-void ioxd_pipewriter_advance(ioxd_pipewriter *pw, size_t n)
+void ioxd__pipewriter_advance(ioxd_pipewriter *pw, size_t n)
 {
-    size_t room = ioxd_pipewriter_room(pw);
+    size_t room = ioxd__pipewriter_room(pw);
     pw->len += n < room ? n : room;
 }
 
-char *ioxd_pipewriter_front(ioxd_pipewriter *pw, size_t n)
+char *ioxd__pipewriter_front(ioxd_pipewriter *pw, size_t n)
 {
     if (n > pw->lead - pw->head)
         return nullptr;
@@ -366,7 +366,7 @@ char *ioxd_pipewriter_front(ioxd_pipewriter *pw, size_t n)
     return pw->buf + pw->lead - pw->head;
 }
 
-char *ioxd_pipewriter_back(ioxd_pipewriter *pw, size_t n)
+char *ioxd__pipewriter_back(ioxd_pipewriter *pw, size_t n)
 {
     if (n > pw->slack - pw->tail)
         return nullptr;
@@ -375,24 +375,24 @@ char *ioxd_pipewriter_back(ioxd_pipewriter *pw, size_t n)
     return at;
 }
 
-int ioxd_pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n)
+int ioxd__pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
-    if (ioxd__send(pw->conn, data, n) < 0) {
+    if (ioxd__conn_send(pw->conn, data, n) < 0) {
         pw->failed = true;
         return -1;
     }
     return 0;
 }
 
-int ioxd_pipewriter_write(ioxd_pipewriter *pw, const void *data, size_t n)
+int ioxd__pipewriter_write(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
     if (n > pw->cap)
-        return ioxd_pipewriter_flush(pw) < 0 ? -1 : ioxd_pipewriter_through(pw, data, n);
-    void *at = ioxd_pipewriter_reserve(pw, n);
+        return ioxd__pipewriter_flush(pw) < 0 ? -1 : ioxd__pipewriter_through(pw, data, n);
+    void *at = ioxd__pipewriter_reserve(pw, n);
     if (!at)
         return -1;
     memcpy(at, data, n);
@@ -400,32 +400,32 @@ int ioxd_pipewriter_write(ioxd_pipewriter *pw, const void *data, size_t n)
     return 0;
 }
 
-int ioxd_pipewriter_send(ioxd_pipewriter *pw, const void *data, size_t n)
+int ioxd__pipewriter_send(ioxd_pipewriter *pw, const void *data, size_t n)
 {
-    return ioxd_pipewriter_write(pw, data, n) < 0 ? -1 : ioxd_pipewriter_flush(pw);
+    return ioxd__pipewriter_write(pw, data, n) < 0 ? -1 : ioxd__pipewriter_flush(pw);
 }
 
 void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
 {
-    ioxd_pipereader_init(&p->in, conn, gather, gather_cap);
-    ioxd_pipewriter_init(&p->out, conn, slab, lead, cap, slack);
+    ioxd__pipereader_init(&p->in, conn, gather, gather_cap);
+    ioxd__pipewriter_init(&p->out, conn, slab, lead, cap, slack);
 }
 
 void ioxd__pipe_close(struct ioxd_pipe *p)
 {
-    ioxd_pipewriter_flush(&p->out);
-    ioxd_pipereader_close(&p->in);
+    ioxd__pipewriter_flush(&p->out);
+    ioxd__pipereader_close(&p->in);
 }
 
-int         ioxd_pipe_read   (ioxd_pipe *p, ioxd_slice *live)          { return ioxd_pipereader_read(&p->in, live); }
-void        ioxd_pipe_examine(ioxd_pipe *p, size_t n)                  { ioxd_pipereader_examine(&p->in, n); }
-void        ioxd_pipe_drop   (ioxd_pipe *p, size_t n)                  { ioxd_pipereader_drop(&p->in, n); }
-const char *ioxd_pipe_keep   (ioxd_pipe *p, size_t n)                  { return ioxd_pipereader_keep(&p->in, n); }
-ioxd_slice  ioxd_pipe_kept   (ioxd_pipe *p)                            { return ioxd_pipereader_run(&p->in); }
-void        ioxd_pipe_release(ioxd_pipe *p)                            { ioxd_pipereader_release(&p->in); }
-int         ioxd_pipe_copy   (ioxd_pipe *p, void *dst, size_t n)       { return ioxd_pipereader_copy(&p->in, dst, n); }
-void       *ioxd_pipe_reserve(ioxd_pipe *p, size_t n)                  { return ioxd_pipewriter_reserve(&p->out, n); }
-void        ioxd_pipe_advance(ioxd_pipe *p, size_t n)                  { ioxd_pipewriter_advance(&p->out, n); }
-int         ioxd_pipe_write  (ioxd_pipe *p, const void *data, size_t n) { return ioxd_pipewriter_write(&p->out, data, n); }
-int         ioxd_pipe_flush  (ioxd_pipe *p)                            { return ioxd_pipewriter_flush(&p->out); }
-int         ioxd_pipe_send   (ioxd_pipe *p, const void *data, size_t n) { return ioxd_pipewriter_send(&p->out, data, n); }
+int         ioxd_pipe_read   (ioxd_pipe *p, ioxd_slice *live)          { return ioxd__pipereader_read(&p->in, live); }
+void        ioxd_pipe_examine(ioxd_pipe *p, size_t n)                  { ioxd__pipereader_examine(&p->in, n); }
+void        ioxd_pipe_drop   (ioxd_pipe *p, size_t n)                  { ioxd__pipereader_drop(&p->in, n); }
+const char *ioxd_pipe_keep   (ioxd_pipe *p, size_t n)                  { return ioxd__pipereader_keep(&p->in, n); }
+ioxd_slice  ioxd_pipe_kept   (ioxd_pipe *p)                            { return ioxd__pipereader_run(&p->in); }
+void        ioxd_pipe_release(ioxd_pipe *p)                            { ioxd__pipereader_release(&p->in); }
+int         ioxd_pipe_copy   (ioxd_pipe *p, void *dst, size_t n)       { return ioxd__pipereader_copy(&p->in, dst, n); }
+void       *ioxd_pipe_reserve(ioxd_pipe *p, size_t n)                  { return ioxd__pipewriter_reserve(&p->out, n); }
+void        ioxd_pipe_advance(ioxd_pipe *p, size_t n)                  { ioxd__pipewriter_advance(&p->out, n); }
+int         ioxd_pipe_write  (ioxd_pipe *p, const void *data, size_t n) { return ioxd__pipewriter_write(&p->out, data, n); }
+int         ioxd_pipe_flush  (ioxd_pipe *p)                            { return ioxd__pipewriter_flush(&p->out); }
+int         ioxd_pipe_send   (ioxd_pipe *p, const void *data, size_t n) { return ioxd__pipewriter_send(&p->out, data, n); }

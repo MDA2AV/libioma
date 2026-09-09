@@ -36,8 +36,8 @@ struct bufring {
 void ioxd__bufring_init      (struct bufring *b, struct uring *ring, int worker, unsigned count, unsigned size);   /* map, register, offer every buffer */
 void ioxd__bufring_return    (struct bufring *b, uint16_t buf_id);                  /* stage a buffer's return           */
 void ioxd__bufring_publish   (struct bufring *b);                                   /* the staged returns, one release   */
-void ioxd__bufring_unregister(struct bufring *b, struct uring *ring);               /* before uring_exit                 */
-void ioxd__bufring_unmap     (struct bufring *b);                                   /* after uring_exit                  */
+void ioxd__bufring_unregister(struct bufring *b, struct uring *ring);               /* before ioxd__uring_exit                 */
+void ioxd__bufring_unmap     (struct bufring *b);                                   /* after ioxd__uring_exit                  */
 
 [[noreturn]] void ioxd__bufring_bad_id(const struct bufring *b, uint16_t buf_id);   /* a buffer id outside the slab: abort */
 
@@ -85,9 +85,9 @@ static inline uint8_t *ioxd__bufring_at(const struct bufring *b, uint16_t buf_id
  */
 
 /* ioxd__bufring_unregister:
- * Unregister the group. Call before uring_exit.
+ * Unregister the group. Call before ioxd__uring_exit.
  */
 
 /* ioxd__bufring_unmap:
- * Unmap the ring and the slab. Call after uring_exit, once no in-flight op can reference them.
+ * Unmap the ring and the slab. Call after ioxd__uring_exit, once no in-flight op can reference them.
  */

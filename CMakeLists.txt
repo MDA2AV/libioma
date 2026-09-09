@@ -65,7 +65,7 @@ add_library(ioxd
         lib/http/router.c
         lib/http/run.c
         lib/json/json.c
-        lib/tls/store.c
+        lib/tls/certs.c
         lib/tls/handshake.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioxd::ioxd ALIAS ioxd)

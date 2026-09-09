@@ -11,15 +11,15 @@
 
 static int await_op(struct io_uring_sqe *sqe, op_t *op)
 {
-    op->waiter     = coro_current();
+    op->waiter     = ioxd__coro_current();
     sqe->user_data = UD(op, TAG_OP);
-    coro_yield();
+    ioxd__coro_yield();
     return op->res;   /* NOLINT(clang-analyzer-core.uninitialized.UndefReturn): set by the loop before it resumed us */
 }
 
 static void submit_cancel(proactor_t *p, uint64_t target_user_data)
 {
-    struct io_uring_sqe *sqe = ioxd__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
     sqe->opcode    = IORING_OP_ASYNC_CANCEL;
     sqe->fd        = -1;
     sqe->addr      = target_user_data;
@@ -98,9 +98,9 @@ void ioxd__conn_pool_drain(proactor_t *p)
     p->conn_free_count = 0;
 }
 
-void ioxd__arm_recv(proactor_t *p, conn_t *c)
+void ioxd__conn_arm_recv(proactor_t *p, conn_t *c)
 {
-    struct io_uring_sqe *sqe = ioxd__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
     sqe->opcode    = IORING_OP_RECV;
     sqe->fd        = c->fd;
     sqe->flags     = IOSQE_BUFFER_SELECT | (p->ring.fixed_files ? IOSQE_FIXED_FILE : 0);
@@ -116,7 +116,7 @@ static void wake_reader(conn_t *c)
     coro_t *waiter = c->waiter;
     if (waiter) {
         c->waiter = nullptr;
-        coro_resume(waiter);
+        ioxd__coro_resume(waiter);
     }
 }
 
@@ -161,7 +161,7 @@ static void starved_remove(proactor_t *p, conn_t *c)
     }
 }
 
-void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
+void ioxd__conn_on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
 {
     bool     more    = flags & IORING_CQE_F_MORE;
     bool     has_buf = flags & IORING_CQE_F_BUFFER;
@@ -241,7 +241,7 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
             c->recv    = RECV_PAUSED;
             wake_reader(c);
         } else if (!c->closed && !c->eof) {
-            ioxd__arm_recv(p, c);
+            ioxd__conn_arm_recv(p, c);
         } else {
             c->recv = RECV_DONE;
             conn_unref(c);
@@ -251,7 +251,7 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 }
 
-void ioxd__recv_drain(conn_t *c)
+void ioxd__conn_recv_drain(conn_t *c)
 {
     if (c->recv != RECV_STARVED)
         return;
@@ -261,9 +261,9 @@ void ioxd__recv_drain(conn_t *c)
     conn_unref(c);
 }
 
-void ioxd__close_socket(proactor_t *p, int fd)
+void ioxd__conn_close_socket(proactor_t *p, int fd)
 {
-    struct io_uring_sqe *sqe = ioxd__sqe(p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
     sqe->opcode    = IORING_OP_CLOSE;
     sqe->user_data = TAG_CLOSE;
     if (p->ring.fixed_files)
@@ -290,7 +290,7 @@ static void conn_close(conn_t *c)
     while (c->rx_head != c->rx_tail)
         ioxd__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
 
-    ioxd__close_socket(p, c->fd);
+    ioxd__conn_close_socket(p, c->fd);
     conn_unref(c);
 }
 
@@ -306,7 +306,7 @@ void ioxd__conn_main(void *arg)
     conn_close(c);
 }
 
-int ioxd__recv_item(conn_t *c, struct rx_item *out)
+int ioxd__conn_recv_item(conn_t *c, struct rx_item *out)
 {
     for (;;) {
         if (c->rx_head != c->rx_tail) {
@@ -316,20 +316,20 @@ int ioxd__recv_item(conn_t *c, struct rx_item *out)
         }
         if (c->eof)
             return c->err;
-        c->waiter = coro_current();
-        coro_yield();
+        c->waiter = ioxd__coro_current();
+        ioxd__coro_yield();
     }
 }
 
-int ioxd__recv_pause(conn_t *c)
+int ioxd__conn_recv_pause(conn_t *c)
 {
     proactor_t *p = c->p;
     if (c->recv == RECV_ARMED) {
         c->pausing = true;
         cancel_recv(p, c);
         while (c->recv == RECV_ARMED) {
-            c->waiter = coro_current();
-            coro_yield();
+            c->waiter = ioxd__coro_current();
+            ioxd__coro_yield();
         }
         c->pausing = false;
     }
@@ -342,7 +342,7 @@ int ioxd__recv_pause(conn_t *c)
     return c->recv == RECV_PAUSED ? 0 : -1;
 }
 
-bool ioxd__recv_resume(conn_t *c)
+bool ioxd__conn_recv_resume(conn_t *c)
 {
     if (c->recv != RECV_PAUSED || c->eof || c->closed)
         return false;
@@ -352,17 +352,17 @@ bool ioxd__recv_resume(conn_t *c)
         conn_unref(c);
         return false;
     }
-    ioxd__arm_recv(c->p, c);
+    ioxd__conn_arm_recv(c->p, c);
     return true;
 }
 
-int ioxd__recv_exact(conn_t *c, void *dst, size_t n)
+int ioxd__conn_recv_exact(conn_t *c, void *dst, size_t n)
 {
     uint8_t *at = dst;
     size_t   left = n;
     while (left) {
         op_t op;
-        struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+        struct io_uring_sqe *sqe = ioxd__proactor_sqe(c->p);
         sqe->opcode    = IORING_OP_RECV;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
@@ -380,10 +380,10 @@ int ioxd__recv_exact(conn_t *c, void *dst, size_t n)
     return (int)n;
 }
 
-int ioxd__setsockopt(conn_t *c, int level, int name, const void *val, size_t len)
+int ioxd__conn_setsockopt(conn_t *c, int level, int name, const void *val, size_t len)
 {
     op_t op;
-    struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(c->p);
     sqe->opcode  = IORING_OP_URING_CMD;
     sqe->fd      = c->fd;
     sqe->flags   = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
@@ -399,10 +399,10 @@ int ioxd__setsockopt(conn_t *c, int level, int name, const void *val, size_t len
     return rc;
 }
 
-int ioxd__sendmsg(conn_t *c, const struct msghdr *msg)
+int ioxd__conn_sendmsg(conn_t *c, const struct msghdr *msg)
 {
     op_t op;
-    struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+    struct io_uring_sqe *sqe = ioxd__proactor_sqe(c->p);
     sqe->opcode    = IORING_OP_SENDMSG;
     sqe->fd        = c->fd;
     sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
@@ -412,13 +412,13 @@ int ioxd__sendmsg(conn_t *c, const struct msghdr *msg)
     return await_op(sqe, &op);
 }
 
-int ioxd__send(conn_t *c, const void *buf, size_t len)
+int ioxd__conn_send(conn_t *c, const void *buf, size_t len)
 {
     const uint8_t *src  = buf;
     size_t         left = len;
     while (left > 0) {
         op_t op;
-        struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+        struct io_uring_sqe *sqe = ioxd__proactor_sqe(c->p);
         sqe->opcode    = IORING_OP_SEND;
         sqe->fd        = c->fd;
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;

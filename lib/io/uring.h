@@ -53,7 +53,7 @@ struct io_uring_getevents_arg {
 #endif
 
 struct uring {
-    int      fd;                       /* -1 until both mappings are up (see uring_init)      */
+    int      fd;                       /* -1 until both mappings are up (see ioxd__uring_init)      */
     int      enter_fd;                 /* fd, or the registered-ring index (see enter_flags) */
     unsigned enter_flags;              /* 0, or IORING_ENTER_REGISTERED_RING                 */
     bool     fixed_files;              /* a sparse registered file table exists              */
@@ -81,37 +81,37 @@ struct uring {
 };
 
 /* Create the ring on the calling thread (DEFER_TASKRUN ties the ring to it). 0 or -errno. */
-int  uring_init(struct uring *ring, unsigned entries);
-void uring_exit(struct uring *ring);
+int  ioxd__uring_init(struct uring *ring, unsigned entries);
+void ioxd__uring_exit(struct uring *ring);
 
 /* Claim the next SQE, zeroed. nullptr when the SQ is full: submit, then try again. */
-struct io_uring_sqe *uring_get_sqe(struct uring *ring);
+struct io_uring_sqe *ioxd__uring_get_sqe(struct uring *ring);
 
-/* Publish claimed SQEs and enter. uring_submit never waits; uring_submit_wait blocks until
+/* Publish claimed SQEs and enter. ioxd__uring_submit never waits; ioxd__uring_submit_wait blocks until
  * wait_nr completions are available or ts (may be nullptr) expires. Return: the number of SQEs the
  * kernel consumed, or -errno. A timeout reads as -ETIME only when there was nothing to submit;
  * with SQEs in hand the kernel returns the count it took and says nothing about the wait, so a
  * non-negative return is not "completions are ready" - always drain the CQ.
  * Under DEFER_TASKRUN only the waiting form reaps completions. */
-int  uring_submit(struct uring *ring);
-int  uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts);
+int  ioxd__uring_submit(struct uring *ring);
+int  ioxd__uring_submit_wait(struct uring *ring, unsigned wait_nr, struct __kernel_timespec *ts);
 
-int  uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_args);
+int  ioxd__uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_args);
 
 /* Register the ring's own fd so every enter skips an fd lookup. 0 or -errno (kernel 5.18+). */
-int  uring_register_ring_fd(struct uring *ring);
+int  ioxd__uring_register_ring_fd(struct uring *ring);
 
 /* Create an empty registered file table of n slots, so sockets can live in slots instead of fds:
  * accept lands them there, recv/send/close address them by index. 0 or -errno (kernel 5.19+). */
-int  uring_register_files_sparse(struct uring *ring, unsigned n);
+int  ioxd__uring_register_files_sparse(struct uring *ring, unsigned n);
 
 /* Batched CQ drain: read the tail once, index the batch, publish the head once. */
-unsigned uring_cq_ready(struct uring *ring);
-static inline struct io_uring_cqe *uring_cqe_at(struct uring *ring, unsigned i)
+unsigned ioxd__uring_cq_ready(struct uring *ring);
+static inline struct io_uring_cqe *ioxd__uring_cqe_at(struct uring *ring, unsigned i)
 {
     return &ring->cqes[(*ring->cq_head + i) & ring->cq_mask];
 }
-void uring_cq_advance(struct uring *ring, unsigned n);
+void ioxd__uring_cq_advance(struct uring *ring, unsigned n);
 
 /* ── uring.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -123,12 +123,12 @@ void uring_cq_advance(struct uring *ring, unsigned n);
  * io_uring_enter; -errno on failure.
  */
 
-/* uring_register:
+/* ioxd__uring_register:
  * io_uring_register (buffer rings, files, ...); the result, or -errno.
  */
 
 /* ring_clear:
- * The struct owning nothing: no descriptor, no mapping. uring_exit over this unmaps nothing
+ * The struct owning nothing: no descriptor, no mapping. ioxd__uring_exit over this unmaps nothing
  * and closes nothing, which is what a failed init has to leave behind.
  */
 
@@ -136,9 +136,9 @@ void uring_cq_advance(struct uring *ring, unsigned n);
  * Give up on a half-built ring: empty the struct and hand back the error.
  */
 
-/* uring_init:
+/* ioxd__uring_init:
  * Create the ring and mmap both rings plus the SQE array. 0, or -errno. On any failure the
- * struct is left empty, so a caller that calls uring_exit anyway unmaps nothing and closes
+ * struct is left empty, so a caller that calls ioxd__uring_exit anyway unmaps nothing and closes
  * nothing.
  *   - SINGLE_ISSUER: only this thread submits, the kernel skips SQ locking. DEFER_TASKRUN:
  *     completion work runs batched inside enter(GETEVENTS), never as an interrupt. NO_SQARRAY
@@ -154,23 +154,23 @@ void uring_cq_advance(struct uring *ring, unsigned n);
  *     = fd;]
  */
 
-/* uring_register_ring_fd:
+/* ioxd__uring_register_ring_fd:
  * Register the ring fd in the task's ring table; enter then uses the index and skips the
  * lookup.
  *   - any free index  [up.offset = (uint32_t)-1;]
  *   - the count registered: up.offset is only ours then  [if (rc != 1)]
  */
 
-/* uring_register_files_sparse:
+/* ioxd__uring_register_files_sparse:
  * A sparse file table: n empty slots the kernel fills on direct accept.
  */
 
-/* uring_exit:
+/* ioxd__uring_exit:
  * Unmap and close the ring; the kernel cancels anything still in flight and drops the tables.
  *   - fd 0 is a legal descriptor  [if (ring->fd >= 0)  close(ring->fd);]
  */
 
-/* uring_get_sqe:
+/* ioxd__uring_get_sqe:
  * Claim the next SQE against the local tail, zeroed. nullptr when the SQ is full.
  *   - full: the caller flushes and retries  [return nullptr;]
  */
@@ -186,19 +186,19 @@ void uring_cq_advance(struct uring *ring, unsigned n);
  *     IORING_SQ_CQ_OVERFLOW) {]
  */
 
-/* uring_submit:
+/* ioxd__uring_submit:
  * Submit everything claimed; never waits.
  */
 
-/* uring_submit_wait:
+/* ioxd__uring_submit_wait:
  * Submit, then wait for wait_nr completions or until ts expires (nullptr: no timeout).
  */
 
-/* uring_cq_ready:
+/* ioxd__uring_cq_ready:
  * How many CQEs are waiting; reads the kernel's tail once.
  */
 
-/* uring_cq_advance:
+/* ioxd__uring_cq_advance:
  * Release n consumed CQEs; publishes the head once.
  *   - nothing consumed: no store, no barrier  [if (n == 0)]
  */

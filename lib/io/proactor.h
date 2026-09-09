@@ -7,7 +7,7 @@
  * The loop: run freshly spawned coroutines, re-arm recvs parked on -ENOBUFS, publish and enter
  * once (submit everything staged, wait for >= 1 completion), then dispatch the CQ batch, each CQE
  * copied out of the ring before its handler runs. The head is published once at the end of the
- * batch - and in ioxd__sqe ahead of an enter made in the middle of one, so the kernel has room for
+ * batch - and in ioxd__proactor_sqe ahead of an enter made in the middle of one, so the kernel has room for
  * what that enter completes. Dispatching resumes handler coroutines inline, so the sends they
  * stage ride the next enter together with the batch.
  *
@@ -94,14 +94,14 @@ struct proactor {
 };
 
 /* The worker thread's whole life: ring, buffers, listeners, loop until *stop, drain, teardown. */
-void proactor_run(proactor_t *p);
+void ioxd__proactor_run(proactor_t *p);
 
 /* Start a coroutine on this worker. Safe from the loop or from any coroutine on it. */
-void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
+void ioxd__proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
 
 /* Claim an SQE to stage an operation; flushes without waiting when the SQ is full. For the
  * plane's own files: every op goes through here so it rides the loop's next enter. */
-struct io_uring_sqe *ioxd__sqe(proactor_t *p);
+struct io_uring_sqe *ioxd__proactor_sqe(proactor_t *p);
 
 /* ── proactor.c: the notes ──────────────────────────────────────────────────────────────────── */
 
@@ -124,7 +124,7 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
  *   - ── completions ─────────────────────────────────────────────────────────────────────────
  *     [static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)]
  *   - ── scheduling ──────────────────────────────────────────────────────────────────────────
- *     [void proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg)]
+ *     [void ioxd__proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg)]
  *   - ── listener ────────────────────────────────────────────────────────────────────────────
  *     [/ * A SO_REUSEPORT socket on port; every worker opens its own, so the kernel spre]
  *   - ── shutdown ────────────────────────────────────────────────────────────────────────────
@@ -143,10 +143,10 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
  * enter in the middle of one, so the kernel has room for what the enter completes.
  */
 
-/* ioxd__sqe:
+/* ioxd__proactor_sqe:
  *   - the kernel must see staged returns before this enter  [ioxd__bufring_publish(&p->bufs);]
  *   - and have room in the CQ for what it completes  [publish_cq(p);]
- *   - reap without waiting; the CQ has room again  [rc = uring_submit_wait(&p->ring, 0,
+ *   - reap without waiting; the CQ has room again  [rc = ioxd__uring_submit_wait(&p->ring, 0,
  *     nullptr);]
  */
 
@@ -183,7 +183,7 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
 
 /* on_accept:
  * An accept CQE: wrap the new fd in a conn, arm its recv, spawn its handler coroutine.
- *   - accepted just before the cancel: no new work  [ioxd__close_socket(p, result);]
+ *   - accepted just before the cancel: no new work  [ioxd__conn_close_socket(p, result);]
  *   - TCP_NODELAY came with the listener  [conn_t *c = ioxd__conn_new(p, l, result);]
  *   - our own shutdown cancel is not an error  [} else if (!(p->draining && result ==
  *     -ECANCELED)) {]
@@ -193,13 +193,13 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
 
 /* dispatch:
  * Route one CQE by the tag in its user_data. Handler coroutines resume inline from here.
- *   - to its next await; op may be gone after  [coro_resume(op->waiter);]
+ *   - to its next await; op may be gone after  [ioxd__coro_resume(op->waiter);]
  *   - a failed close leaks a slot: say so  [case TAG_CLOSE:]
  *   - the shutdown's one blanket cancel  [case TAG_DRAIN:]
  *   - TAG_IGNORE: cancel acknowledgements  [default:]
  */
 
-/* proactor_spawn:
+/* ioxd__proactor_spawn:
  * Queue a new coroutine; the loop starts it on its next iteration.
  */
 
@@ -212,7 +212,7 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
  * last sweep: re-arming the whole list on a single return would send them all back to the
  * empty ring. Oldest first, so a connection parked early is not starved by later ones.
  *   - only this round's returns count as room  [p->bufs.returned = 0;]
- *   - keeps the ref it already holds  [ioxd__arm_recv(p, p->starved[i]);]
+ *   - keeps the ref it already holds  [ioxd__conn_arm_recv(p, p->starved[i]);]
  */
 
 /* listener_open:
@@ -243,11 +243,11 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
  * checks the table against. 0 disables the feature.
  */
 
-/* proactor_run:
+/* ioxd__proactor_run:
  * The worker's whole life: setup, the loop until *stop, teardown in dependency order.
- *   - on this thread: DEFER_TASKRUN ties it here  [int rc = uring_init(&p->ring,
+ *   - on this thread: DEFER_TASKRUN ties it here  [int rc = ioxd__uring_init(&p->ring,
  *     p->cfg.ring_entries);]
- *   - optional: enter skips an fd lookup  [uring_register_ring_fd(&p->ring);]
+ *   - optional: enter skips an fd lookup  [ioxd__uring_register_ring_fd(&p->ring);]
  *   - optional: sockets live in a file table  [unsigned slots = fixed_slots();]
  *   - the ceiling accept_room holds us to  [p->file_slots = slots;]
  *   - truncated: stop growing  [at += (size_t)n < sizeof ports - at ? (size_t)n : sizeof ports
@@ -255,14 +255,14 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p);
  *   - 100 ms: so an idle worker notices *stop  [struct __kernel_timespec wait_at_most = {
  *     .tv_sec = 0, .tv_nsec = 100000000L };]
  *   - from here the stop flag is not read again  [begin_drain(p);]
- *   - one syscall per batch  [rc = uring_submit_wait(&p->ring, 1, &wait_at_most);]
+ *   - one syscall per batch  [rc = ioxd__uring_submit_wait(&p->ring, 1, &wait_at_most);]
  *   - ioxd_run returns non-zero for it  [p->failed = rc;]
  *   - one ring is gone: retire the others too  [*p->stop  = 1;]
  *   - The batch, one CQE at a time, copied out before the handler runs: the head is published
- *     once at the end - or in ioxd__sqe, ahead of an enter in the middle of the batch, so the
+ *     once at the end - or in ioxd__proactor_sqe, ahead of an enter in the middle of the batch, so the
  *     kernel has somewhere to put what that enter completes.  [unsigned ready =
- *     uring_cq_ready(&p->ring);]
- *   - read the tail once  [unsigned ready = uring_cq_ready(&p->ring);]
+ *     ioxd__uring_cq_ready(&p->ring);]
+ *   - read the tail once  [unsigned ready = ioxd__uring_cq_ready(&p->ring);]
  *   - handlers run in here  [dispatch(p, &cqe);]
  *   - a close may have made room to accept again  [rearm_stalled(p);]
  *   - The closes the last handlers staged have to reach the kernel before the ring goes, or

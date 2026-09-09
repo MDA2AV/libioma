@@ -1,4 +1,4 @@
-#include "tls/store.h"
+#include "tls/certs.h"
 #include "tls/handshake.h"
 #include "io/internal.h"
 
@@ -43,7 +43,7 @@ static void make_table_ex(void)
     table_ex = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 }
 
-void ioxd__tls_bind(SSL *ssl, struct table *t)
+void ioxd__certs_bind(SSL *ssl, struct table *t)
 {
     pthread_once(&table_ex_once, make_table_ex);
     SSL_set_ex_data(ssl, table_ex, t);
@@ -132,7 +132,7 @@ static SSL_CTX *context_for(const char *cert, const char *key)
     }
     SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION | SSL_OP_NO_TICKET);
     SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
-    SSL_CTX_set_keylog_callback(ctx, ioxd__tls_keylog);
+    SSL_CTX_set_keylog_callback(ctx, ioxd__handshake_keylog);
     SSL_CTX_set_client_hello_cb(ctx, on_client_hello, nullptr);
     return ctx;
 }
@@ -175,7 +175,7 @@ static struct table *load(const char *dir, const struct table *old)
 {
     DIR *d = opendir(dir);
     if (!d) {
-        fprintf(stderr, "ioxd_certs: %s: %s\n", dir, ioxd__errstr(errno));
+        fprintf(stderr, "ioxd_certs: %s: %s\n", dir, ioxd__io_errstr(errno));
         return nullptr;
     }
     struct table *t = calloc(1, sizeof *t);
@@ -279,14 +279,14 @@ void ioxd_certs_free(ioxd_certs *certs)
 {
     if (!certs)
         return;
-    ioxd__tls_release(certs, certs->table);
+    ioxd__certs_release(certs, certs->table);
     pthread_mutex_destroy(&certs->reload);
     pthread_mutex_destroy(&certs->lock);
     free(certs->dir);
     free(certs);
 }
 
-struct table *ioxd__tls_acquire(ioxd_certs *certs)
+struct table *ioxd__certs_acquire(ioxd_certs *certs)
 {
     pthread_mutex_lock(&certs->lock);
     struct table *t = certs->table;
@@ -295,7 +295,7 @@ struct table *ioxd__tls_acquire(ioxd_certs *certs)
     return t;
 }
 
-void ioxd__tls_release(ioxd_certs *certs, struct table *t)
+void ioxd__certs_release(ioxd_certs *certs, struct table *t)
 {
     pthread_mutex_lock(&certs->lock);
     int left = --t->refs;
@@ -304,7 +304,7 @@ void ioxd__tls_release(ioxd_certs *certs, struct table *t)
         table_free(t);
 }
 
-SSL_CTX *ioxd__tls_fallback(const struct table *t)
+SSL_CTX *ioxd__certs_fallback(const struct table *t)
 {
     return t->fallback;
 }
@@ -312,16 +312,16 @@ SSL_CTX *ioxd__tls_fallback(const struct table *t)
 int ioxd_certs_reload(ioxd_certs *certs)
 {
     pthread_mutex_lock(&certs->reload);
-    struct table *old   = ioxd__tls_acquire(certs);
+    struct table *old   = ioxd__certs_acquire(certs);
     struct table *fresh = load(certs->dir, old);
     if (fresh) {
         pthread_mutex_lock(&certs->lock);
         certs->table = fresh;
         pthread_mutex_unlock(&certs->lock);
         fprintf(stderr, "ioxd_certs: reloaded %d host%s from %s\n", fresh->n, fresh->n == 1 ? "" : "s", certs->dir);
-        ioxd__tls_release(certs, old);
+        ioxd__certs_release(certs, old);
     }
-    ioxd__tls_release(certs, old);
+    ioxd__certs_release(certs, old);
     pthread_mutex_unlock(&certs->reload);
     return fresh ? 0 : -1;
 }

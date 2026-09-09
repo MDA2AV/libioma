@@ -1,5 +1,5 @@
 /*
- * tls/store.h - the certificate store's entries for the handshake: the table serving now, held
+ * tls/certs.h - the certificate store's entries for the handshake: the table serving now, held
  * by reference for as long as a handshake runs, the context a handshake starts on, and the
  * binding that lets its ClientHello pick a host from that same table. The public side of the
  * store - ioxd_certs_load, ioxd_certs_reload, ioxd_certs_free - is ioxd/tls.h.
@@ -12,16 +12,16 @@
 #include <openssl/ssl.h>
 
 struct table;
-struct table *ioxd__tls_acquire (ioxd_certs *certs);                 /* the table serving now, referenced */
-void          ioxd__tls_release (ioxd_certs *certs, struct table *t);
-SSL_CTX      *ioxd__tls_fallback(const struct table *t);         /* the context a handshake starts on */
-void          ioxd__tls_bind    (SSL *ssl, struct table *t);     /* the table its ClientHello picks a host from */
+struct table *ioxd__certs_acquire (ioxd_certs *certs);                 /* the table serving now, referenced */
+void          ioxd__certs_release (ioxd_certs *certs, struct table *t);
+SSL_CTX      *ioxd__certs_fallback(const struct table *t);         /* the context a handshake starts on */
+void          ioxd__certs_bind    (SSL *ssl, struct table *t);     /* the table its ClientHello picks a host from */
 #endif
 
-/* ── store.c: the notes ──────────────────────────────────────────────────────────────────── */
+/* ── certs.c: the notes ──────────────────────────────────────────────────────────────────── */
 
 /*
- * tls/store.c - the certificate store: one SSL_CTX per host directory, pinned to what kernel
+ * tls/certs.c - the certificate store: one SSL_CTX per host directory, pinned to what kernel
  * TLS can carry (TLS 1.3, TLS_AES_128_GCM_SHA256, no tickets), chosen by SNI at the
  * ClientHello. The table of hosts is reference-counted so a reload swaps it under handshakes
  * in flight.
@@ -42,7 +42,7 @@ void          ioxd__tls_bind    (SSL *ssl, struct table *t);     /* the table it
  *   - built without TLS  [#else]
  */
 
-/* ioxd__tls_bind:
+/* ioxd__certs_bind:
  * The prologue's SSL, told which table it started on. It holds a reference to that table for
  * as long as the SSL lives, so the ClientHello callback can read it back whenever the peer
  * gets round to sending one.
@@ -106,17 +106,17 @@ void          ioxd__tls_bind    (SSL *ssl, struct table *t);     /* the table it
  */
 
 /* ioxd_certs_free:
- *   - the store's own reference; the last one frees  [ioxd__tls_release(certs, certs->table);]
+ *   - the store's own reference; the last one frees  [ioxd__certs_release(certs, certs->table);]
  */
 
-/* ioxd__tls_acquire:
+/* ioxd__certs_acquire:
  * A reference to the table serving now; released after the handshake.
  */
 
 /* ioxd_certs_reload:
  *   - one at a time, so the table it reads stays put  [pthread_mutex_lock(&certs->reload);]
  *   - and cannot be freed while load() reads it  [struct table *old   =
- *     ioxd__tls_acquire(certs);]
- *   - the store's own reference to the old table  [ioxd__tls_release(certs, old);]
- *   - the one this reload took  [ioxd__tls_release(certs, old);]
+ *     ioxd__certs_acquire(certs);]
+ *   - the store's own reference to the old table  [ioxd__certs_release(certs, old);]
+ *   - the one this reload took  [ioxd__certs_release(certs, old);]
  */

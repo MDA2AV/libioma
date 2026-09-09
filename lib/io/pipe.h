@@ -37,18 +37,18 @@ typedef struct ioxd_pipereader {
     int            error;               /* 0, or IOXD_PIPE_GONE / IOXD_PIPE_FULL, sticky */
 } ioxd_pipereader;
 
-void        ioxd_pipereader_init     (ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap);
-void        ioxd_pipereader_close    (ioxd_pipereader *pr);                    /* returns the buffers it holds */
-int         ioxd_pipereader_read     (ioxd_pipereader *pr, ioxd_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
-void        ioxd_pipereader_examine  (ioxd_pipereader *pr, size_t n);          /* looked at n live bytes: the next read waits for more */
-void        ioxd_pipereader_drop     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes */
-const char *ioxd_pipereader_keep     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes but keep them, contiguous with the run; where they are, or nullptr: no room (FULL), or n past the live bytes */
-void        ioxd_pipereader_run_begin(ioxd_pipereader *pr);                    /* freeze the run; the next keep starts another */
-ioxd_slice  ioxd_pipereader_run      (const ioxd_pipereader *pr);              /* the run in progress */
-void        ioxd_pipereader_release  (ioxd_pipereader *pr);                    /* forget every kept byte; live bytes stay */
-int         ioxd_pipereader_copy     (ioxd_pipereader *pr, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
-int         ioxd_pipereader_avail    (ioxd_pipereader *pr, ioxd_slice *live);   /* like read, but never waits: 0 when nothing unexamined was delivered; <0 error */
-bool        ioxd_pipereader_inject   (ioxd_pipereader *pr, const void *data, size_t n);   /* bytes that arrived by another route, appended to the live bytes; false: no room */
+void        ioxd__pipereader_init     (ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap);
+void        ioxd__pipereader_close    (ioxd_pipereader *pr);                    /* returns the buffers it holds */
+int         ioxd__pipereader_read     (ioxd_pipereader *pr, ioxd_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
+void        ioxd__pipereader_examine  (ioxd_pipereader *pr, size_t n);          /* looked at n live bytes: the next read waits for more */
+void        ioxd__pipereader_drop     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes */
+const char *ioxd__pipereader_keep     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes but keep them, contiguous with the run; where they are, or nullptr: no room (FULL), or n past the live bytes */
+void        ioxd__pipereader_run_begin(ioxd_pipereader *pr);                    /* freeze the run; the next keep starts another */
+ioxd_slice  ioxd__pipereader_run      (const ioxd_pipereader *pr);              /* the run in progress */
+void        ioxd__pipereader_release  (ioxd_pipereader *pr);                    /* forget every kept byte; live bytes stay */
+int         ioxd__pipereader_copy     (ioxd_pipereader *pr, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
+int         ioxd__pipereader_avail    (ioxd_pipereader *pr, ioxd_slice *live);   /* like read, but never waits: 0 when nothing unexamined was delivered; <0 error */
+bool        ioxd__pipereader_inject   (ioxd_pipereader *pr, const void *data, size_t n);   /* bytes that arrived by another route, appended to the live bytes; false: no room */
 
 /* The writer: a slab with a head and a tail. Data goes in at the tail (reserve/advance, or write);
  * a frame's front goes into the lead just before the pending data and its back into the slack just
@@ -64,23 +64,23 @@ typedef struct ioxd_pipewriter {
     bool    failed;                     /* the peer is gone: every call fails from here on       */
 } ioxd_pipewriter;
 
-void   ioxd_pipewriter_init   (ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack);
-void   ioxd_pipewriter_reset  (ioxd_pipewriter *pw);                          /* drop everything pending           */
-void  *ioxd_pipewriter_reserve(ioxd_pipewriter *pw, size_t n);                /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
-void   ioxd_pipewriter_advance(ioxd_pipewriter *pw, size_t n);
-char  *ioxd_pipewriter_front  (ioxd_pipewriter *pw, size_t n);                /* n bytes just before the pending span; nullptr when the lead has no room  */
-char  *ioxd_pipewriter_back   (ioxd_pipewriter *pw, size_t n);                /* n bytes just after it; nullptr when the slack has no room                */
-int    ioxd_pipewriter_write  (ioxd_pipewriter *pw, const void *data, size_t n);   /* copy in; larger than the slab goes straight out          */
-int    ioxd_pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n);   /* send now, ahead of the pending span, bypassing the slab   */
-int    ioxd_pipewriter_flush  (ioxd_pipewriter *pw);                          /* send front, data and back; suspends */
-int    ioxd_pipewriter_send   (ioxd_pipewriter *pw, const void *data, size_t n);   /* write, then flush                                         */
+void   ioxd__pipewriter_init   (ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack);
+void   ioxd__pipewriter_reset  (ioxd_pipewriter *pw);                          /* drop everything pending           */
+void  *ioxd__pipewriter_reserve(ioxd_pipewriter *pw, size_t n);                /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
+void   ioxd__pipewriter_advance(ioxd_pipewriter *pw, size_t n);
+char  *ioxd__pipewriter_front  (ioxd_pipewriter *pw, size_t n);                /* n bytes just before the pending span; nullptr when the lead has no room  */
+char  *ioxd__pipewriter_back   (ioxd_pipewriter *pw, size_t n);                /* n bytes just after it; nullptr when the slack has no room                */
+int    ioxd__pipewriter_write  (ioxd_pipewriter *pw, const void *data, size_t n);   /* copy in; larger than the slab goes straight out          */
+int    ioxd__pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n);   /* send now, ahead of the pending span, bypassing the slab   */
+int    ioxd__pipewriter_flush  (ioxd_pipewriter *pw);                          /* send front, data and back; suspends */
+int    ioxd__pipewriter_send   (ioxd_pipewriter *pw, const void *data, size_t n);   /* write, then flush                                         */
 
 /* Where the next byte goes, and how many fit before the slab is full. */
-static inline char *ioxd_pipewriter_at(const ioxd_pipewriter *pw)
+static inline char *ioxd__pipewriter_at(const ioxd_pipewriter *pw)
 {
     return pw->buf + pw->lead + pw->len;
 }
-static inline size_t ioxd_pipewriter_room(const ioxd_pipewriter *pw)
+static inline size_t ioxd__pipewriter_room(const ioxd_pipewriter *pw)
 {
     return pw->cap - pw->len;
 }
@@ -114,9 +114,9 @@ void ioxd__pipe_close(struct ioxd_pipe *p);
 
 /* at file scope:
  *   - ── the reader ──────────────────────────────────────────────────────────────────────────
- *     [void ioxd_pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t c]
+ *     [void ioxd__pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t c]
  *   - ── the writer ──────────────────────────────────────────────────────────────────────────
- *     [void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t l]
+ *     [void ioxd__pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t l]
  *   - ── the pipe ────────────────────────────────────────────────────────────────────────────
  *     [void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gat]
  */
@@ -138,7 +138,7 @@ void ioxd__pipe_close(struct ioxd_pipe *p);
  * Move the current buffer's run and live bytes into buf, so what follows can join them. A run
  * that was kept in place has pointers out to it, so its buffer stays pinned rather than going
  * back to the ring - unless another buffer is pinned already (the HTTP engine's head), in
- * which case the run just moves and ioxd_pipereader_run is where to find it.
+ * which case the run just moves and ioxd__pipereader_run is where to find it.
  */
 
 /* refuse:
@@ -155,7 +155,7 @@ void ioxd__pipe_close(struct ioxd_pipe *p);
  * Forget n live bytes of the current place; never more than there are.
  */
 
-/* ioxd_pipereader_keep:
+/* ioxd__pipereader_keep:
  *   - more than is live: the caller's mistake  [return nullptr;]
  *   - a run starts where the live bytes are  [if (pr->run_len == 0) {]
  *   - dropped bytes in between: slide these down  [} else if (pr->buf_pos != pr->floor) {]
@@ -165,31 +165,31 @@ void ioxd__pipe_close(struct ioxd_pipe *p);
  *   - nothing live: the caller's mistake  [return nullptr;]
  */
 
-/* ioxd_pipereader_run_begin:
+/* ioxd__pipereader_run_begin:
  *   - another buffer is pinned already: this run moves to buf  [if (pr->has_pinned &&
  *     !pr->cur_is_pinned) {]
  */
 
-/* ioxd_pipereader_release:
+/* ioxd__pipereader_release:
  *   - it lives on as the current buffer  [pr->cur_is_pinned = false;]
  */
 
-/* ioxd_pipereader_avail:
+/* ioxd__pipereader_avail:
  *   - all seen: take a delivered buffer, if one is queued  [while (l.len <= pr->examined) {]
  */
 
-/* ioxd_pipereader_inject:
+/* ioxd__pipereader_inject:
  *   - live bytes, or a run, in place: they move first  [if (pr->has_cur) {]
  */
 
-/* ioxd_pipewriter_advance:
+/* ioxd__pipewriter_advance:
  *   - never past the slab, whatever was claimed  [pw->len += n < room ? n : room;]
  */
 
-/* ioxd_pipewriter_write:
+/* ioxd__pipewriter_write:
  *   - larger than the slab: straight from the caller's memory  [if (n > pw->cap)]
  */
 
 /* ioxd__pipe_close:
- *   - what a handler left in the slab still goes  [ioxd_pipewriter_flush(&p->out);]
+ *   - what a handler left in the slab still goes  [ioxd__pipewriter_flush(&p->out);]
  */
