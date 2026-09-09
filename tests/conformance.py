@@ -215,13 +215,13 @@ check("a status outside 100-999 -> 500", st == 500)
 check("an unlisted status -> its number, a reason phrase", st == 418)
 
 # ── a declared length, held to ───────────────────────────────────────────────────────────────
-(st, hd, body), closed, n = one(b"GET /declared?say=100&write=9 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+(st, hd, body), closed, n = one(b"GET /promise?say=100&write=9 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 check("a declared length larger than a buffered body -> the real length", st == 200 and hd.get("content-length") == "9" and body == b"123456789")
-data, closed = exchange(b"GET /declared?say=3&write=19&stream=1 HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+data, closed = exchange(b"GET /promise?say=3&write=19&stream=1 HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n")
 rs = split_responses(data)
 check("a streamed body past its declared length -> cut at the length, connection closed",
       len(rs) == 1 and rs[0][1].get("content-length") == "3" and rs[0][2] == b"123" and closed)
-data, closed = exchange(b"GET /declared?say=100&write=9&stream=1 HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+data, closed = exchange(b"GET /promise?say=100&write=9&stream=1 HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n")
 check("a streamed body short of its declared length -> the connection closes (the client sees the cut)",
       closed and data.startswith(b"HTTP/1.1 200") and len(split_responses(data + b"")) <= 1)
 

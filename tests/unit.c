@@ -343,6 +343,7 @@ static void test_json_levels(void)
 /* The decimal point is '.' whatever LC_NUMERIC says: the numbers are formatted in the writer's
  * own "C" locale and the thread's is handed straight back. A locale with a point of its own is
  * not installed everywhere, so this says so and skips when there is none. */
+/* NOLINTBEGIN(concurrency-mt-unsafe): the process locale is switched here, single-threaded, before any worker exists */
 static void test_json_locale(void)
 {
     static const char *const others[] = {
@@ -365,6 +366,7 @@ static void test_json_locale(void)
     CHECK(strcmp(localeconv()->decimal_point, ".") != 0);        /* the thread's was handed back */
     setlocale(LC_NUMERIC, saved);
 }
+/* NOLINTEND(concurrency-mt-unsafe) */
 
 static void test_json(void)
 {

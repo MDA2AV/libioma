@@ -9,6 +9,7 @@
  * table through the SSL its handshake holds a reference for.
  */
 #include "tls/tls.h"
+#include "io/internal.h"
 #include "tls/internal.h"
 
 #include <stdio.h>
@@ -203,7 +204,7 @@ static struct table *load(const char *dir, const struct table *old)
 {
     DIR *d = opendir(dir);
     if (!d) {
-        fprintf(stderr, "ioxd_tls: %s: %s\n", dir, strerror(errno));
+        fprintf(stderr, "ioxd_tls: %s: %s\n", dir, ioxd__errstr(errno));
         return nullptr;
     }
     struct table *t = calloc(1, sizeof *t);
@@ -214,7 +215,7 @@ static struct table *load(const char *dir, const struct table *old)
     }
     t->refs = 1;
     struct dirent *e;
-    while ((e = readdir(d))) {
+    while ((e = readdir(d))) {   /* NOLINT(concurrency-mt-unsafe): one DIR per reload, reloads serialised */
         if (e->d_name[0] == '.')
             continue;
         char cert[PATH_MAX], key[PATH_MAX];

@@ -1,12 +1,15 @@
 # clang-tidy configuration for libioxd. CLion picks this file up (it prefers a project .clang-tidy
-# over its own settings); from the shell, with the compile flags the Makefile uses:
+# over its own settings); from the shell, `make tidy` runs it with the flags the objects are built
+# with, which is
 #
 #   clang-tidy lib/io/*.c lib/http/*.c tests/server.c -- -std=gnu23 -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
 #
 # (CLion's bundled clang-tidy ships without clang's builtin headers; give it gcc's with
-#  --extra-arg=-isystem/usr/lib/gcc/x86_64-linux-gnu/13/include, or it cascades phantom warnings.)
+#  --extra-arg=-isystem$(gcc -print-file-name=include), or it cascades phantom warnings - which is
+#  what `make tidy TIDY=<clion>/bin/clang/linux/x64/bin/clang-tidy` does for you.)
 #
-# The checks that matter for a C library, minus the ones that only add noise here: the Annex K
+# The checks that matter for a C library - the threading ones included, since the workers share a
+# certificate store and a stop flag - minus the ones that only add noise here: the Annex K
 # "memcpy is insecure" nag (glibc has no *_s functions), include-what-you-use over deliberately
 # transitive private headers, the pragma-once portability nag, int-to-pointer casts that ARE the
 # tagged user_data design, and the readability checks that argue with idiomatic C.
@@ -14,6 +17,7 @@ Checks: >
   -*,
   bugprone-*,
   clang-analyzer-*,
+  concurrency-*,
   misc-*,
   performance-*,
   portability-*,

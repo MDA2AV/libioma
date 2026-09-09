@@ -2,6 +2,7 @@
  * bufring.c - the provided buffer ring of io/bufring.h.
  */
 #include "io/bufring.h"
+#include "io/internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,7 +43,7 @@ void ioxd__bufring_init(struct bufring *b, struct uring *ring, int worker)
     reg.bgid         = BGID;
     int rc = uring_register(ring, IORING_REGISTER_PBUF_RING, &reg, 1);
     if (rc < 0) {
-        fprintf(stderr, "[w%d] register pbuf ring: %s\n", worker, strerror(-rc));
+        fprintf(stderr, "[w%d] register pbuf ring: %s\n", worker, ioxd__errstr(-rc));
         abort();
     }
 

@@ -1,10 +1,12 @@
 obj/
+obj-tiny/
 *.o
 
 # libraries and examples
 libioxd.a
 libioxd.so
 libioxd.so.*
+libioxd-tiny.a
 ioxd-hello
 ioxd.pc
 
@@ -26,6 +28,7 @@ compile_commands.json
 # IDE
 .idea/
 tests/ioxd-test-server
+tests/ioxd-test-server-tiny
 tests/ioxd-unit
 tests/ioxd-pipe-server
 tests/ioxd-router-test

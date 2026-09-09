@@ -50,6 +50,33 @@ def read_response(s):
     return status, headers, body
 
 
+def read_to_close(s):
+    """Everything until the server closes: (data, closed). closed is False when the read timed out
+    instead - the connection is still open, which is a hang, not a close, and an assertion about a
+    close must not pass on one."""
+    data = b""
+    while True:
+        try:
+            chunk = s.recv(65536)
+        except socket.timeout:
+            return data, False
+        except ConnectionResetError:
+            return data, True
+        if not chunk:
+            return data, True
+        data += chunk
+
+
+def port_open(port, timeout=1):
+    """Whether anything is listening there: the only honest test of a port (a TLS=0 build has no
+    third one, and the suites that need it say so and skip)."""
+    try:
+        socket.create_connection(("127.0.0.1", port), timeout=timeout).close()
+        return True
+    except OSError:
+        return False
+
+
 def dechunk(raw):
     """A chunked body, decoded."""
     out = b""
@@ -107,25 +134,47 @@ results.append(check("  extra segment does not match the pattern", st == 404))
 
 # a body far larger than the reply buffer streams: chunked on HTTP/1.1 (http.client decodes it)
 import http.client
-hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+hc = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
 hc.request("GET", "/stream?n=5000")
 r = hc.getresponse(); data = r.read(); hc.close()
 results.append(check("GET /stream -> chunked stream, every line arrives",
                      r.status == 200 and r.getheader("transfer-encoding") == "chunked"
                      and data.count(b"\n") == 5000 and data.endswith(b"line 5000 of 5000\n")))
 # the same on HTTP/1.0: no length known, so it streams until close
-s = socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=10)
+s = socket.create_connection(("127.0.0.1", PORT), timeout=10)
 s.send(b"GET /stream?n=3000 HTTP/1.0\r\nHost: x\r\n\r\n")
-raw = b""
-while True:
-    chunk = s.recv(65536)
-    if not chunk: break
-    raw += chunk
+raw, closed = read_to_close(s)
 s.close()
 head, _, body = raw.partition(b"\r\n\r\n")
 results.append(check("GET /stream on HTTP/1.0 -> until close, no length, all lines",
-                     b"connection: close" in head and b"content-length" not in head
+                     closed and b"connection: close" in head and b"content-length" not in head
                      and b"chunked" not in head and body.count(b"\n") == 3000))
+
+# a declared length: the reply streams framed by Content-Length instead of chunked, sent by the
+# handler in four ioxd_flush calls (ioxd_content_length + ioxd_flush)
+def tiles(n):
+    """The body /declared writes: 'a'..'z', cycling."""
+    return bytes((ord("a") + i % 26) for i in range(n))
+
+
+s = connect()
+s.send(b"GET /declared?n=5000 HTTP/1.1\r\nHost: x\r\n\r\n")
+st, hd, body = read_response(s)
+results.append(check("GET /declared -> the declared length, framed by it, and every byte in order",
+                     st == 200 and hd.get("content-length") == "5000"
+                     and hd.get("transfer-encoding") is None and body == tiles(5000)))
+s.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+st, hd, body = read_response(s)
+s.close()
+results.append(check("  a request after it on the same connection -> still in sync", st == 200 and body == b"ok"))
+
+# the reply written into the slab directly (ioxd_reserve + ioxd_advance), and a reserve past it
+st, hd, body = get("/raw?n=100")
+results.append(check("GET /raw -> the bytes written straight into the reserved room",
+                     st == 200 and hd.get("content-length") == "100"
+                     and body == bytes((ord("0") + i % 10) for i in range(100))))
+st, hd, body = get("/raw?n=20000")
+results.append(check("GET /raw past the slab -> the reserve is refused, the handler says so", st == 500))
 
 # POST /echo reflects the body
 s = connect()
@@ -144,6 +193,38 @@ s.send(b"DELETE / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 st, hd, body = read_response(s)
 s.close()
 results.append(check("DELETE / -> 405 with allow (path known, method not; HEAD rides on GET)", st == 405 and hd.get("allow") == "GET, HEAD"))
+
+# a path registered for two methods lists both in allow, in the order they were registered
+s = connect()
+s.send(b"PUT /users/42 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+st, hd, body = read_response(s)
+s.close()
+results.append(check("PUT /users/:id -> 405 with both methods of that path in registration order, HEAD riding on GET",
+                     st == 405 and hd.get("allow") == "GET, HEAD, POST"))
+
+# --- HEAD asks for the head of what GET would answer: the same status and length, no body ---
+def head_request(path):
+    """A HEAD read to the close: (status, headers, the bytes after the head)."""
+    s = connect()
+    s.send(f"HEAD {path} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n".encode())
+    raw, _ = read_to_close(s)
+    s.close()
+    head, _, body = raw.partition(b"\r\n\r\n")
+    lines = head.split(b"\r\n")
+    parts = lines[0].split(b" ")
+    headers = {}
+    for line in lines[1:]:
+        k, _, v = line.partition(b": ")
+        headers[k.decode().lower()] = v.decode()
+    return (int(parts[1]) if len(parts) > 1 else 0), headers, body
+
+
+for path in ("/", "/declared?n=5000", "/stream?n=50"):
+    gst, ghd, _ = get(path)
+    st, hd, body = head_request(path)
+    results.append(check(f"HEAD {path} -> the GET reply's head, and not one byte of its body",
+                         st == 200 and st == gst
+                         and hd.get("content-length") == ghd.get("content-length") and body == b""))
 
 # keep-alive: five requests on one connection
 s = connect()
@@ -191,13 +272,10 @@ results.append(check("half-close still answered", st == 200 and body == b"ok"))
 s = connect(timeout=3)
 try:
     s.send(b"GET / HTTP/1.1\r\nX-Pad: " + b"a" * 20000)
-    got = b""
-    try:
-        got = s.recv(64)
-    except (ConnectionResetError, socket.timeout):
-        got = b""
-    # either a 431 status or a clean close is acceptable
-    results.append(check("oversized headers refused/closed", got == b"" or got.startswith(b"HTTP/1.1 431")))
+    got, closed = read_to_close(s)
+    # either a 431 status or a clean close is acceptable; a read that times out is neither
+    results.append(check("oversized headers refused/closed",
+                         closed and (got == b"" or got.startswith(b"HTTP/1.1 431"))))
 finally:
     s.close()
 
@@ -220,17 +298,14 @@ results.append(check("200 concurrent connections answered", good))
 # a handler that ignores the body (here the 404 fallback) still leaves the connection in sync
 s = connect()
 s.send(b"POST /nope HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhelloGET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-raw = b""
-while True:                      # both replies may arrive in one packet: read to the close
-    chunk = s.recv(65536)
-    if not chunk: break
-    raw += chunk
+raw, closed = read_to_close(s)   # both replies may arrive in one packet: read to the close
 s.close()
 results.append(check("unread body drained, pipelined next request served",
-                     raw.startswith(b"HTTP/1.1 404") and raw.count(b"HTTP/1.1 200") == 1 and raw.endswith(b"ok")))
+                     closed and raw.startswith(b"HTTP/1.1 404")
+                     and raw.count(b"HTTP/1.1 200") == 1 and raw.endswith(b"ok")))
 
 # a 1 MB upload streamed through a 4 KB loop (the request buffer is 16 KB), then chunked
-hc = http.client.HTTPConnection("127.0.0.1", int(sys.argv[1]), timeout=10)
+hc = http.client.HTTPConnection("127.0.0.1", PORT, timeout=10)
 hc.request("POST", "/upload", body=b"x" * 1048576)
 r = hc.getresponse(); data = r.read()
 results.append(check("POST /upload 1 MB streamed in", r.status == 200 and data == b"1048576 bytes in 256 reads\n"))
@@ -245,20 +320,14 @@ results.append(check("POST /upload 256 KB chunked streamed in", r.status == 200 
 # --- chunk-exact reads on a raw socket: split size lines, an extension, trailers, pipelining ---
 def raw_exchange(pieces, pause=0.03):
     """Send the pieces with a pause between them, read until the server closes, and return the
-    responses as (status, body) pairs (all these replies carry a Content-Length)."""
+    responses as (status, body) pairs (all these replies carry a Content-Length). Whether the
+    server really closed is left in raw_exchange.closed, so an assertion about a close can say so
+    rather than pass on a read that timed out."""
     s = connect()
     for piece in pieces:
         s.sendall(piece)
         time.sleep(pause)
-    data = b""
-    while True:
-        try:
-            chunk = s.recv(65536)
-        except socket.timeout:
-            break
-        if not chunk:
-            break
-        data += chunk
+    data, raw_exchange.closed = read_to_close(s)
     s.close()
     out = []
     while b"\r\n\r\n" in data:
@@ -336,22 +405,26 @@ st, hd, body = get("/headers?n=15")
 results.append(check("15 reply headers beside the middleware's -> all taken", st == 200 and body == b"15\n" and hd.get("x-h14") == "v"))
 st, hd, body = get("/headers?n=16")
 results.append(check("one more -> refused, the reply still served with 15", st == 200 and body == b"15\n" and hd.get("x-h15") is None))
-# the reply head must fit 4 KB (IOXD_HEAD_CAP): a 3 KB header value goes, a 5 KB one cannot be built
-st, hd, body = get("/bighead?len=3000")
-results.append(check("a 3 KB reply header -> served", st == 200 and len(hd.get("x-big", "")) == 3000))
-rs = raw_exchange([b"GET /bighead?len=5000 HTTP/1.1\r\nHost: x\r\n\r\n"])
-results.append(check("a 5 KB reply header -> the reply cannot be built; the connection closes", rs == []))
-# the request keeps 32 query parameters; the rest are dropped
+# the added headers must fit the reply's head arena (IOXD_RESP_HEAD_CAP, 3 KB): a 3 KB value goes
+# minus what the middleware's own header took; a 5 KB one is refused by ioxd_header and the reply
+# goes out without it - the head is never left unbuildable
+st, hd, body = get("/bighead?len=2900")
+results.append(check("a 2.9 KB reply header -> sent", st == 200 and len(hd.get("x-big", "")) == 2900 and body == b"ok\n"))
+st, hd, body = get("/bighead?len=5000")
+results.append(check("a 5 KB reply header -> refused by ioxd_header, the reply still answered",
+                     st == 200 and "x-big" not in hd and body == b"refused\n"))
 st, hd, body = get("/params?" + "&".join(f"p{i}=1" for i in range(40)))
-results.append(check("40 query parameters -> 32 kept", st == 200 and body == b"32\n"))
+results.append(check("40 query parameters -> 400 (more than fit is never a partial view)", st == 400))
 # more request headers than the table holds is a parse failure: 400
 rs = raw_exchange([b"GET /health HTTP/1.1\r\nHost: x\r\n" + b"".join(b"x-h%d: v\r\n" % i for i in range(70)) + b"\r\n"])
 results.append(check("70 request headers -> 400 (the table holds 64)", len(rs) == 1 and rs[0][0] == 400))
 
-# --- TLS: the third port, kernel TLS after an OpenSSL handshake (tests/certs from mkcerts.sh) ---
-import os, ssl
-CERTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
-if os.path.exists(os.path.join(CERTS, "default", "cert.pem")):
+# --- TLS: the third port, kernel TLS after an OpenSSL handshake (the certificates the fixture was
+# started with, IOXD_CERTS, which run-suites.sh points at a copy of tests/certs) ---
+import os, ssl, subprocess
+HERE  = os.path.dirname(os.path.abspath(__file__))
+CERTS = os.environ.get("IOXD_CERTS") or os.path.join(HERE, "certs")
+if port_open(PORT + 2):
     def cert_der(host):
         return ssl.PEM_cert_to_DER_cert(open(os.path.join(CERTS, host, "cert.pem")).read())
 
@@ -372,6 +445,10 @@ if os.path.exists(os.path.join(CERTS, "default", "cert.pem")):
     s.close()
     s = tls_connect(server_hostname="sni.test")
     results.append(check("TLS: SNI sni.test -> that host's certificate", s.getpeercert(True) == cert_der("sni.test")))
+    s.close()
+    s = tls_connect(server_hostname="a.example.com")
+    results.append(check("TLS: SNI a.example.com -> the _.example.com wildcard certificate",
+                         s.getpeercert(True) == cert_der("_.example.com")))
     s.close()
     s = tls_connect(server_hostname="nobody.example")
     results.append(check("TLS: unknown SNI -> the default certificate", s.getpeercert(True) == cert_der("default")))
@@ -411,8 +488,35 @@ if os.path.exists(os.path.join(CERTS, "default", "cert.pem")):
         results.append(check("TLS: a TLS 1.2 client is refused", False))
     except ssl.SSLError:
         results.append(check("TLS: a TLS 1.2 client is refused", True))
+
+    # --- the store read again while it serves: a host's files are rewritten and POST /tls/reload
+    # switches to them; what was handed out before the reload came from the table in memory ---
+    live = tls_connect()                                   # kept open across the reload
+    live.send(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+    st, hd, body = read_response(live)
+    before = cert_der("sni.test")
+    subprocess.run(["sh", os.path.join(HERE, "mkcerts.sh"), CERTS, "sni.test"],
+                   check=True, stdout=subprocess.DEVNULL)
+    after = cert_der("sni.test")
+    s = tls_connect(server_hostname="sni.test")
+    stale = s.getpeercert(True)
+    s.close()
+    s = tls_connect()
+    s.send(b"POST /tls/reload HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+    st, hd, body = read_response(s)
+    s.close()
+    results.append(check("TLS: POST /tls/reload -> the directory read again", st == 200 and body == b"reloaded\n"))
+    s = tls_connect(server_hostname="sni.test")
+    fresh = s.getpeercert(True)
+    s.close()
+    results.append(check("TLS: new files for sni.test are served only after the reload",
+                         after != before and stale == before and fresh == after))
+    live.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    st, hd, body = read_response(live)
+    live.close()
+    results.append(check("TLS: the connection open across the reload still answers", st == 200 and body == b"ok"))
 else:
-    print("skip TLS: no tests/certs (run tests/mkcerts.sh)")
+    print(f"skip TLS: nothing listening on {PORT + 2} (a TLS=0 build has no third port)")
 
 # --- a second listener: the port after ours serves the same routes ---
 s = socket.create_connection(("127.0.0.1", PORT + 1), timeout=5)
@@ -432,17 +536,13 @@ results.append(check("GET /json/x -> 400 from the handler", st == 400))
 
 s = connect()
 s.send(b"GET /json/big?n=3000 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-raw = b""
-while True:
-    piece = s.recv(65536)
-    if not piece:
-        break
-    raw += piece
+raw, closed = read_to_close(s)
 s.close()
 head, _, rest = raw.partition(b"\r\n\r\n")
 doc = __import__("json").loads(dechunk(rest))
 results.append(check("GET /json/big -> 3000 objects streamed chunked, valid JSON",
-                     b"transfer-encoding: chunked" in head.lower() and len(doc) == 3000 and doc[2999] == {"i": 2999, "sq": 2999 * 2999}))
+                     closed and b"transfer-encoding: chunked" in head.lower()
+                     and len(doc) == 3000 and doc[2999] == {"i": 2999, "sq": 2999 * 2999}))
 
 # --- groups: prefixes chain, middleware wraps outer to inner, one endpoint's own middleware ---
 st, hd, body = get("/api/ping")
@@ -465,6 +565,16 @@ results.append(check("POST /users/new -> no POST on the static segment: falls th
                      rs == [(200, b"updated new\n")]))
 rs = raw_exchange([b"PUT /users/new HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"])
 results.append(check("PUT /users/new -> 405 (the path is known, no PUT anywhere on it)", len(rs) == 1 and rs[0][0] == 405))
+# an empty segment is no segment: the walk skips it, wherever it is
+st, hd, body = get("//health")
+results.append(check("GET //health -> the empty segment collapses: the same endpoint", st == 200 and body == b"ok"))
+st, hd, body = get("/api//admin/stats")
+results.append(check("GET /api//admin/stats -> collapsed too, and still gated by the subgroup",
+                     st == 401 and hd.get("x-api") == "v1"))
+# a group whose prefix is "": middleware around what is in it, no prefix of its own
+st, hd, body = get("/rooted")
+results.append(check("GET /rooted -> a group with an empty prefix wraps it and adds no path",
+                     st == 200 and body == b"rooted\n" and hd.get("x-rooted") == "yes" and hd.get("server") == "ioxd"))
 
 print("all passed" if all(results) else "FAILURES")
 sys.exit(0 if all(results) else 1)

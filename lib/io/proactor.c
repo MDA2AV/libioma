@@ -58,7 +58,7 @@ struct io_uring_sqe *ioxd__sqe(proactor_t *p)
     }
     if (!sqe) {
         fprintf(stderr, "[w%d] SQ still full after flushing: %s\n",
-                p->id, rc < 0 ? strerror(-rc) : "the kernel is not consuming it");
+                p->id, rc < 0 ? ioxd__errstr(-rc) : "the kernel is not consuming it");
         abort();
     }
     return sqe;
@@ -132,7 +132,7 @@ static void note_accept_error(struct listener *l, int result)
     if (now < l->err_log_at)
         return;
     fprintf(stderr, "[w%d] accept :%u: %s (%llu since the last line)\n",
-            l->p->id, l->port, strerror(-result), (unsigned long long)l->err_since_log);
+            l->p->id, l->port, ioxd__errstr(-result), (unsigned long long)l->err_since_log);
     l->err_since_log = 0;
     l->err_log_at    = now + 1;
 }
@@ -184,12 +184,12 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
         break;
     case TAG_CLOSE:                                  /* a failed close leaks a slot: say so */
         if (cqe->res < 0)
-            fprintf(stderr, "[w%d] close: %s\n", p->id, strerror(-cqe->res));
+            fprintf(stderr, "[w%d] close: %s\n", p->id, ioxd__errstr(-cqe->res));
         break;
     case TAG_DRAIN:                                  /* the shutdown's one blanket cancel */
         if (cqe->res < 0 && cqe->res != -ENOENT) {
             fprintf(stderr, "[w%d] cancel all: %s; cancelling connections one at a time\n",
-                    p->id, strerror(-cqe->res));
+                    p->id, ioxd__errstr(-cqe->res));
             p->cancel_each = true;
         }
         break;
@@ -356,7 +356,7 @@ void proactor_run(proactor_t *p)
 
     int rc = uring_init(&p->ring, RING_ENTRIES);     /* on this thread: DEFER_TASKRUN ties it here */
     if (rc < 0) {
-        fprintf(stderr, "[w%d] io_uring_setup: %s%s\n", p->id, strerror(-rc),
+        fprintf(stderr, "[w%d] io_uring_setup: %s%s\n", p->id, ioxd__errstr(-rc),
                 rc == -EPERM ? " (io_uring is disabled: see /proc/sys/kernel/io_uring_disabled)" : "");
         abort();
     }
@@ -402,7 +402,7 @@ void proactor_run(proactor_t *p)
 
         rc = uring_submit_wait(&p->ring, 1, &wait_at_most);    /* one syscall per batch */
         if (rc < 0 && rc != -ETIME && rc != -EINTR && rc != -EAGAIN && rc != -EBUSY) {
-            fprintf(stderr, "[w%d] io_uring_enter: %s\n", p->id, strerror(-rc));
+            fprintf(stderr, "[w%d] io_uring_enter: %s\n", p->id, ioxd__errstr(-rc));
             p->failed = rc;                          /* ioxd_run returns non-zero for it        */
             *p->stop  = 1;                           /* one ring is gone: retire the others too */
             break;

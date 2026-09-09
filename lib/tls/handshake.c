@@ -4,6 +4,7 @@
  * into the socket, so the kernel does every record from then on. See TLS.md.
  */
 #include "tls/tls.h"
+#include "io/internal.h"
 #include "tls/internal.h"
 
 #include <errno.h>
@@ -304,14 +305,14 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
 
     r = ioxd__setsockopt(c, SOL_TCP, TCP_ULP, "tls", sizeof "tls");
     if (r < 0) {
-        why = r == -ENOENT ? "kernel TLS unavailable: is the tls module loaded?" : strerror(-r);
+        why = r == -ENOENT ? "kernel TLS unavailable: is the tls module loaded?" : ioxd__errstr(-r);
         goto out;
     }
     r = install(c, TLS_TX, s.tx, 0);
     if (r == 0)
         r = install(c, TLS_RX, s.rx, (uint64_t)records);
     if (r < 0) {
-        why = r == KDF_FAILED ? "key derivation failed" : strerror(-r);
+        why = r == KDF_FAILED ? "key derivation failed" : ioxd__errstr(-r);
         goto out;
     }
     if (plain_len && !ioxd_pipereader_inject(&pipe->in, plain, plain_len)) {
