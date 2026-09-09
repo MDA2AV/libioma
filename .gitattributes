@@ -1,0 +1,6 @@
+# GitHub's language statistics count the library alone: everything else - the manual (generated
+# HTML), the tests and the build - is left out of them, and the vendored parser is marked as such.
+*               linguist-detectable=false
+lib/**          linguist-detectable=true
+manual/**       linguist-generated=true
+third_party/**  linguist-vendored=true
