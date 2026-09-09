@@ -43,6 +43,17 @@ typedef struct op {
     unsigned flags;
 } op_t;
 
+/* Stage the SQE as a one-shot op of the calling coroutine and park until its completion: the
+ * loop's TAG_OP case fills op->res and resumes us. The op lives on the caller's stack, which is
+ * frozen meanwhile, so the pointer in user_data stays good. */
+static inline int ioxd__io_await(struct io_uring_sqe *sqe, op_t *op)
+{
+    op->waiter     = ioxd__coro_current();
+    sqe->user_data = UD(op, TAG_OP);
+    ioxd__coro_yield();
+    return op->res;   /* NOLINT(clang-analyzer-core.uninitialized.UndefReturn): set by the loop before it resumed us */
+}
+
 #include <string.h>
 
 /* The text of an errno, for a log line. glibc's strerror has had a per-thread buffer since 2.32,

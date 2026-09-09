@@ -453,6 +453,17 @@ static void promise(ioxd_ctx *ctx)
         ioxd_printf(ctx, "%ld", i % 10);
 }
 
+/* GET /delay?ms=N - waits N ms on the ring, then answers; the worker serves others meanwhile. */
+static void delay_route(ioxd_ctx *ctx)
+{
+    int64_t ms = 100;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "ms"))
+            ioxd_to_i64(ctx->req.params[i].value, &ms);
+    int rc = ioxd_delay((unsigned)ms);
+    ioxd_printf(ctx, "waited %lld ms: %d\n", (long long)ms, rc);
+}
+
 /* The fallback for anything unrouted, replacing the built-in text 404. */
 static void not_found(ioxd_ctx *ctx)
 {
@@ -498,6 +509,7 @@ int main(void)
     IOXD_GET ("/headers",               headers);
     IOXD_GET ("/bighead",               bighead);
     IOXD_GET ("/status/:code",          status_route);
+    IOXD_GET ("/delay",                 delay_route);
     IOXD_GET ("/reflect",               reflect);
     IOXD_GET ("/promise",               promise);
     IOXD_GET ("/params",                params);

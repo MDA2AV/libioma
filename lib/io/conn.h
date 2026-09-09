@@ -101,7 +101,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *     [/ * The next received buffer, whole: the caller owns it until ioxd__bufring_retur]
  */
 
-/* await_op:
+/* (await_op, now ioxd__io_await in io/internal.h):
  * Stage a one-shot op and park until its CQE. The loop fills op->res and resumes us.
  */
 

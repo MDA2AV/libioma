@@ -9,14 +9,6 @@
 #include <time.h>
 #include <unistd.h>
 
-static int await_op(struct io_uring_sqe *sqe, op_t *op)
-{
-    op->waiter     = ioxd__coro_current();
-    sqe->user_data = UD(op, TAG_OP);
-    ioxd__coro_yield();
-    return op->res;   /* NOLINT(clang-analyzer-core.uninitialized.UndefReturn): set by the loop before it resumed us */
-}
-
 static void submit_cancel(proactor_t *p, uint64_t target_user_data)
 {
     struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
@@ -369,7 +361,7 @@ int ioxd__conn_recv_exact(conn_t *c, void *dst, size_t n)
         sqe->addr      = (uint64_t)(uintptr_t)at;
         sqe->len       = (uint32_t)left;
         sqe->msg_flags = MSG_WAITALL;
-        int got = await_op(sqe, &op);
+        int got = ioxd__io_await(sqe, &op);
         if (got < 0)
             return got;
         if (got == 0)
@@ -392,7 +384,7 @@ int ioxd__conn_setsockopt(conn_t *c, int level, int name, const void *val, size_
     sqe->optname = (uint32_t)name;
     sqe->optval  = (uint64_t)(uintptr_t)val;
     sqe->optlen  = (uint32_t)len;
-    int rc = await_op(sqe, &op);
+    int rc = ioxd__io_await(sqe, &op);
 
     if ((rc == -EOPNOTSUPP || rc == -EINVAL) && !c->p->ring.fixed_files)
         rc = setsockopt(c->fd, level, name, val, (socklen_t)len) < 0 ? -errno : 0;
@@ -409,7 +401,7 @@ int ioxd__conn_sendmsg(conn_t *c, const struct msghdr *msg)
     sqe->addr      = (uint64_t)(uintptr_t)msg;
     sqe->len       = 1;
     sqe->msg_flags = MSG_NOSIGNAL;
-    return await_op(sqe, &op);
+    return ioxd__io_await(sqe, &op);
 }
 
 int ioxd__conn_send(conn_t *c, const void *buf, size_t len)
@@ -425,7 +417,7 @@ int ioxd__conn_send(conn_t *c, const void *buf, size_t len)
         sqe->addr      = (uint64_t)(uintptr_t)src;
         sqe->len       = left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
         sqe->msg_flags = MSG_NOSIGNAL;
-        int n = await_op(sqe, &op);
+        int n = ioxd__io_await(sqe, &op);
         if (n < 0)
             return n;
         if (n == 0)

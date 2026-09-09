@@ -415,6 +415,23 @@ results.append(check("a 5 KB reply header -> refused by ioxd_header, the reply s
                      st == 200 and "x-big" not in hd and body == b"refused\n"))
 st, hd, body = get("/params?" + "&".join(f"p{i}=1" for i in range(40)))
 results.append(check("40 query parameters -> 400 (more than fit is never a partial view)", st == 400))
+# a delay parks the connection, not the worker: a second connection on the same 2-worker fixture
+# is answered while the first waits (both workers could be busy waiting if delays blocked)
+t0 = time.time()
+st, hd, body = get("/delay?ms=300")
+took = time.time() - t0
+results.append(check("GET /delay?ms=300 -> waited 300 ms on the ring", st == 200 and body == b"waited 300 ms: 0\n" and 0.29 <= took < 1.5))
+waiters = [connect() for _ in range(4)]
+for w in waiters:
+    w.send(b"GET /delay?ms=600 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+time.sleep(0.05)
+t0 = time.time()
+st, hd, body = get("/health")
+quick = time.time() - t0
+results.append(check("  /health answered in the meantime, not behind the delays", st == 200 and quick < 0.3))
+for w in waiters:
+    read_response(w); w.close()
+
 # more request headers than the table holds is a parse failure: 400
 rs = raw_exchange([b"GET /health HTTP/1.1\r\nHost: x\r\n" + b"".join(b"x-h%d: v\r\n" % i for i in range(70)) + b"\r\n"])
 results.append(check("70 request headers -> 400 (the table holds 64)", len(rs) == 1 and rs[0][0] == 400))

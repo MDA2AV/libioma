@@ -5,6 +5,7 @@
  * reserve/advance write straight into the slab.
  *
  *     make examples && ./ioxd-example-stream_response
+ *     curl -N http://127.0.0.1:8080/ticks                     # a line a quarter second, 20 of them
  *     curl -N http://127.0.0.1:8080/rows?n=100000            # chunked; -N shows it arriving
  *     curl -o /dev/null -w '%{size_download}\n' http://127.0.0.1:8080/blob?n=50000000
  *     curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body
@@ -26,6 +27,18 @@ static long count_param(const ioxd_ctx *ctx, long fallback)
             return (long)v;
     }
     return fallback;
+}
+
+/* GET /ticks: a live feed. ioxd_delay parks this connection's coroutine on the ring for the
+ * quarter second; the worker serves its other connections meanwhile, nothing blocks. */
+static void ticks(ioxd_ctx *ctx)
+{
+    for (int i = 1; i <= 20; i++) {
+        if (ioxd_printf(ctx, "tick %d\n", i) < 0 || ioxd_flush(ctx) < 0)
+            return;                                  /* the peer is gone */
+        if (ioxd_delay(250) != 0)
+            return;                                  /* the server is stopping */
+    }
 }
 
 /* GET /rows?n=: n lines. The slab streams by itself when it fills; the flush every 100 rows
@@ -62,6 +75,7 @@ static void blob(ioxd_ctx *ctx)
 
 int main(void)
 {
+    IOXD_GET("/ticks", ticks);
     IOXD_GET("/rows", rows);
     IOXD_GET("/blob", blob);
     ioxd_bind(8080, NULL);

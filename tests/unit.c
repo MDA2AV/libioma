@@ -443,12 +443,19 @@ static void test_config(void)
     CHECK(ioxd_configure(&(ioxd_config){ .stack_size = 4096 }) == -1);              /* the engine's frames alone are 44 KB */
     CHECK(ioxd_configure(&(ioxd_config){ .recv_buffers = 8, .recv_buffer_size = 64 }) == 0);   /* the starved test build */
     CHECK(ioxd_configure(&(ioxd_config){ 0 }) == 0);                                /* back to the defaults */
+
+/* ioxd_delay off a worker: nothing to wait on, and no sleeping either. */
+static void test_delay_off_worker(void)
+{
+    CHECK(ioxd_delay(1) == -1);
+    CHECK(ioxd_delay_ns(1) == -1);
 }
 
 int main(void)
 {
     test_integers();
     test_config();
+    test_delay_off_worker();
     test_json();
     test_doubles();
     test_bools();

@@ -1,3 +1,5 @@
+// ReSharper disable CppRedundantInlineSpecifier
+
 /*
  * http/internal.h - the helpers the HTTP plane's files share and no module owns. Private; not
  * installed. Each module's own entries are in its header (engine.h, router.h).

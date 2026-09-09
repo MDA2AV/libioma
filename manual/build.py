@@ -28,6 +28,7 @@ PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/json.h",   "ioxd_json",   "JSON written as you go; structs described once"),
     ("ioxd/pipe.h",   "ioxd_pipe",   "a connection as a pipe, for other protocols"),
     ("ioxd/run.h",    "ioxd_run",    "bind the ports, run the workers"),
+    ("ioxd/timer.h",  "ioxd_timer",  "a delay that parks the connection, not the worker"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
 ]
 
@@ -508,6 +509,7 @@ when the registered file table is on, which is the default.</p>
 <dt><a href="ioxd_json.html">&lt;ioxd/json.h&gt;</a></dt><dd>the JSON writer and IOXD_JSON_STRUCT</dd>
 <dt><a href="ioxd_pipe.html">&lt;ioxd/pipe.h&gt;</a></dt><dd>a connection as a pipe, for protocols other than HTTP</dd>
 <dt><a href="ioxd_run.html">&lt;ioxd/run.h&gt;</a></dt><dd>bind the ports, plain or TLS, run the workers</dd>
+<dt><a href="ioxd_timer.html">&lt;ioxd/timer.h&gt;</a></dt><dd>a delay that parks the connection, not the worker</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
 </dl>
 
@@ -666,6 +668,18 @@ int main(void)
 {
     ioxd_bind(8100, NULL);
     return ioxd_run_pipes(0, echo);
+}"""),
+    ],
+    "ioxd_timer": [
+        ("A feed that ticks: a line every quarter second, the connection parked in between while the worker serves the rest:",
+         """static void ticks(ioxd_ctx *ctx)
+{
+    for (int i = 1; i <= 20; i++) {
+        if (ioxd_printf(ctx, "tick %d\\n", i) < 0 || ioxd_flush(ctx) < 0)
+            return;                                   /* the peer is gone */
+        if (ioxd_delay(250) != 0)
+            return;                                   /* the server is stopping */
+    }
 }"""),
     ],
     "ioxd_tls": [

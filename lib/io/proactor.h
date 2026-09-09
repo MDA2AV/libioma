@@ -96,6 +96,10 @@ struct proactor {
 /* The worker thread's whole life: ring, buffers, listeners, loop until *stop, drain, teardown. */
 void ioxd__proactor_run(proactor_t *p);
 
+/* The worker this thread is, or nullptr off a worker: what a context-free call (ioxd_delay)
+ * stages its op on. */
+proactor_t *ioxd__proactor_current(void);
+
 /* Start a coroutine on this worker. Safe from the loop or from any coroutine on it. */
 void ioxd__proactor_spawn(proactor_t *p, void (*fn)(void *), void *arg);
 

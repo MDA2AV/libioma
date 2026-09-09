@@ -292,8 +292,16 @@ static unsigned fixed_slots(void)
     return n;
 }
 
+static thread_local proactor_t *current;
+
+proactor_t *ioxd__proactor_current(void)
+{
+    return current;
+}
+
 void ioxd__proactor_run(proactor_t *p)
 {
+    current = p;
     if (p->cpu >= 0)
         pin_to(p->cpu);
 
