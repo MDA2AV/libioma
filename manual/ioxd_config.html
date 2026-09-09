@@ -11,7 +11,7 @@
 <main>
 <div class="hdr"><span>IOXD_CONFIG(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_CONFIG(3)</span></div>
 <h2>NAME</h2>
-<p>ioxd/config.h - the runtime's knobs: the ring, the receive buffers, the coroutine stacks and the pools, per worker. Set once before <a href="ioxd_http.html#ioxd_run">ioxd_run</a>; the build's values are the defaults.</p>
+<p>ioxd/config.h - the runtime's knobs: the ring, the receive buffers, the coroutine stacks and the pools, per worker. Set once before <a href="ioxd_run.html#ioxd_run">ioxd_run</a>; the build's values are the defaults.</p>
 <h2>SYNOPSIS</h2>
 <pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
@@ -42,10 +42,10 @@
 <pre class="ex"><a href="#ioxd_config">ioxd_config</a> config = { .recv_buffers = <span class="c-num">8192</span> };
 <span class="c-kw">if</span> (<a href="#ioxd_configure">ioxd_configure</a>(&amp;config) &lt; <span class="c-num">0</span>)
     <span class="c-kw">return</span> <span class="c-num">1</span>;                                   <span class="c-cm">/* the reason is on stderr */</span>
-<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-<span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);</pre>
+<a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+<span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);</pre>
 <h2>SEE ALSO</h2>
-<p><a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<p><a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_CONFIG(3)</span></div>
 </main>
 </body>

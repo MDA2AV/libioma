@@ -48,7 +48,7 @@ ioxd_group *ioxd_group_new(ioxd_group *parent, <span class="c-kw">const</span> <
 <span class="c-ty">void</span>        ioxd_group_use(ioxd_group *group, ioxd_mw mw);
 </pre>
 <div class="text"><p>Endpoints live in groups, and groups nest. A group is a path prefix plus middleware: an endpoint "/users" in a group "/api" under a group "/v1" answers at "/v1/api/users", wrapped by the middleware of every group above it, outermost first, then its own. NULL as the group is the root: no prefix, and the middleware given to <a href="#ioxd_use">ioxd_use</a>. A prefix and what follows it are joined by a '/' when neither side brings one ("/api" and "users" is "/api/users"), and a repeated slash counts once.</p>
-<p>Register everything before <a href="ioxd_http.html#ioxd_run">ioxd_run</a>, from the main thread; methods, paths and prefixes are copied, so temporaries are fine, and anything registered once <a href="ioxd_http.html#ioxd_run">ioxd_run</a> has started is ignored with a line on stderr. <a href="ioxd_http.html#ioxd_run">ioxd_run</a> resolves it once: every endpoint's full path into a segment tree and its middleware into one flat chain, which the workers then share read-only. A request costs one walk down the tree - no scan, no regex - and one call through its chain.</p></div>
+<p>Register everything before <a href="ioxd_run.html#ioxd_run">ioxd_run</a>, from the main thread; methods, paths and prefixes are copied, so temporaries are fine, and anything registered once <a href="ioxd_run.html#ioxd_run">ioxd_run</a> has started is ignored with a line on stderr. <a href="ioxd_run.html#ioxd_run">ioxd_run</a> resolves it once: every endpoint's full path into a segment tree and its middleware into one flat chain, which the workers then share read-only. A request costs one walk down the tree - no scan, no regex - and one call through its chain.</p></div>
 <dl class="trail">
 <dt>ioxd_group_new</dt><dd>"/api"; "" for middleware only</dd>
 <dt>ioxd_group_use</dt><dd>wraps everything below it</dd>
@@ -116,7 +116,7 @@ IOXD_PATCH(path, handler, middleware...)
 IOXD_DELETE(path, handler, middleware...)
 IOXD_DEFAULT(handler)
 </pre>
-<div class="text"><p>A break, a return or a goto out of the block skips the loop's increment, so where the compiler has __attribute__((cleanup)) the pop is hung on the block's variable and runs on every way out; a block that ended on its own has already popped and nulled it. Elsewhere the plain form stands, and a group still open at <a href="ioxd_http.html#ioxd_run">ioxd_run</a> is reported.</p></div>
+<div class="text"><p>A break, a return or a goto out of the block skips the loop's increment, so where the compiler has __attribute__((cleanup)) the pop is hung on the block's variable and runs on every way out; a block that ended on its own has already popped and nulled it. Elsewhere the plain form stands, and a group still open at <a href="ioxd_run.html#ioxd_run">ioxd_run</a> is reported.</p></div>
 </div>
 <h2>EXAMPLES</h2>
 <p>The same registrations as calls and as a script:</p>
@@ -135,7 +135,7 @@ IOXD_DEFAULT(handler)
 }
 <a href="#IOXD_DEFAULT">IOXD_DEFAULT</a>(not_found);</pre>
 <h2>SEE ALSO</h2>
-<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_ROUTER(3)</span></div>
 </main>
 </body>

@@ -27,7 +27,7 @@ curl -i http://127.0.0.1:8080/api/v1/admin/stats            # 403 from the group
 curl -i -H 'X-Admin: 1' http://127.0.0.1:8080/api/v1/admin/stats
 curl -i http://127.0.0.1:8080/nowhere                       # the fallback, as JSON
 curl -i -X DELETE http://127.0.0.1:8080/api/v1/users/42     # 405 with an allow header</pre>
-<p><a href="ioxd_http.html#ioxd_run">ioxd_run</a> resolves it all once: every full path into a segment tree, every endpoint's middleware - the root's, then each group's from the outside in, then its own - into one flat chain. A request costs one walk and no scan.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+<p><a href="ioxd_run.html#ioxd_run">ioxd_run</a> resolves it all once: every full path into a segment tree, every endpoint's middleware - the root's, then each group's from the outside in, then its own - into one flat chain. A request costs one walk and no scan.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
 <span class="c-cm">/* --- middleware --- */</span>
 
@@ -106,8 +106,8 @@ curl -i -X DELETE http://127.0.0.1:8080/api/v1/users/42     # 405 with an allow 
     }
     <a href="ioxd_router.html#IOXD_DEFAULT">IOXD_DEFAULT</a>(not_found);
 
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="json">json.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-json
@@ -207,8 +207,8 @@ curl -i http://127.0.0.1:8080/health</pre>
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/users/:id"</span>, one_user);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/users"</span>,     many_users);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/health"</span>,    health);
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="middleware">middleware.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-middleware
@@ -285,8 +285,8 @@ curl -i -H 'Authorization: Bearer secret' http://127.0.0.1:8080/whoami</pre>
     <a href="ioxd_router.html#IOXD_USE">IOXD_USE</a>(timing);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/public"</span>, public_route);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/whoami"</span>, whoami, auth);               <span class="c-cm">/* this endpoint's own middleware, after the root's */</span>
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="pipes">pipes.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-pipes
@@ -351,8 +351,8 @@ printf '\0\0\0\5hello' | nc -q1 127.0.0.1 8100 | xxd     # 00000005 6f6c6c6568</
 
 <span class="c-ty">int</span> main(<span class="c-ty">void</span>)
 {
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8100</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_pipe.html#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-num">0</span>, frames);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8100</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-num">0</span>, frames);
 }</pre></div>
 <h3 id="static_files">static_files.c</h3>
 <div class="entry"><div class="text"><pre class="ex">mkdir -p www &amp;&amp; echo <span class="c-str">'&lt;h1&gt;hello&lt;/h1&gt;'</span> &gt; www/index.html &amp;&amp; echo <span class="c-str">'h1 { color: teal }'</span> &gt; www/site.css
@@ -462,8 +462,8 @@ curl -i -H <span class="c-str">'If-None-Match: "&lt;the etag&gt;"'</span> http:<
         g_dir = argv[<span class="c-num">1</span>];
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/"</span>,             index_route);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/static/:name"</span>, file_route);
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="stream_request">stream_request.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-stream_request
@@ -530,8 +530,8 @@ curl -H 'Transfer-Encoding: chunked' -T big http://127.0.0.1:8080/chunks</pre>
     <a href="ioxd_router.html#IOXD_POST">IOXD_POST</a>(<span class="c-str">"/upload"</span>, upload);
     <a href="ioxd_router.html#IOXD_PUT">IOXD_PUT</a> (<span class="c-str">"/chunks"</span>, chunks);
     <a href="ioxd_router.html#IOXD_POST">IOXD_POST</a>(<span class="c-str">"/chunks"</span>, chunks);
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="stream_response">stream_response.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-stream_response
@@ -589,10 +589,10 @@ curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body
 {
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/rows"</span>, rows);
     <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/blob"</span>, blob);
-    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
-    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
-<h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
+<h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_EXAMPLES(7)</span></div>
 </main>
 </body>

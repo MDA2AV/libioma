@@ -13,10 +13,9 @@
 /* A connection as a pipe: a reader over the bytes the kernel received and a writer over a slab.
  * Every call that must wait suspends the connection's coroutine, and the worker's loop resumes
  * it on the completion, so a handler reads and writes in straight-line code. The HTTP engine is
- * one such handler; ioxd_run_pipes runs one of yours on raw TCP connections instead. */
+ * one such handler; ioxd_run_pipes (ioxd/run.h) runs one of yours on raw TCP connections instead. */
 typedef struct ioxd_pipe ioxd_pipe;
-typedef void (*ioxd_pipe_handler)(ioxd_pipe *pipe);
-int ioxd_run_pipes(int workers, ioxd_pipe_handler fn);      /* like ioxd_run, over the ports ioxd_bind bound, without HTTP */
+typedef void (*ioxd_pipe_handler)(ioxd_pipe *pipe);         /* run one with ioxd_run_pipes (ioxd/run.h) */
 
 /* Reading. The live bytes are the ones received and not yet consumed, always handed out as one
  * contiguous span - in place in the kernel's buffer when they lie within one. read returns 1

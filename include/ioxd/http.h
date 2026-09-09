@@ -1,6 +1,6 @@
 /*
  * ioxd/http.h - the request, the response, the context a handler receives, the body read on
- * demand, the reply written as you go, and the run.
+ * demand, and the reply written as you go.
  */
 #pragma once
 
@@ -163,25 +163,6 @@ bool ioxd_header        (ioxd_ctx *ctx, const char *name, const char *value);
 bool ioxd_content_type  (ioxd_ctx *ctx, const char *type);                /* copied */
 bool ioxd_content_length(ioxd_ctx *ctx, size_t n);       /* stream a large body with a known length */
 int  ioxd_flush         (ioxd_ctx *ctx);                 /* send what is in the slab now (starts streaming) */
-
-/* ── run ───────────────────────────────────────────────────────────────────────────────── */
-
-/* Bind a port: plain HTTP when tls is NULL, TLS 1.3 terminated in the kernel otherwise, with the
- * certificate store from ioxd_certs_load (ioxd_tls(3) in the manual). Every bound port serves the same routes; bind as
- * many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full. */
-typedef struct ioxd_certs ioxd_certs;
-int ioxd_bind(int port, ioxd_certs *certs);
-
-/* Start `workers` proactor threads (<= 0: one per core) serving HTTP on every bound port, and
- * block until SIGINT/SIGTERM. Returns 0 on clean shutdown, non-zero when nothing was bound, when a
- * port could not be opened, when a worker failed, or when the limits above differ between this
- * header and the library (the context would not match). May be called again after it returns;
- * the ports stay bound. */
-int ioxd__run_http(int workers, size_t ctx_size);
-static inline int ioxd_run(int workers)
-{
-    return ioxd__run_http(workers, sizeof(ioxd_ctx));
-}
 
 /* The reason phrase for a status code ("OK", "Not Found", ...); "Unknown" if unlisted. */
 const char *ioxd_reason(int status);

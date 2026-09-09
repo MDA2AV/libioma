@@ -22,11 +22,12 @@ INCLUDE = os.path.join(ROOT, "include")
 
 PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/config.h", "ioxd_config", "the runtime's knobs"),
-    ("ioxd/http.h",   "ioxd_http",   "request, response, context, body, reply, the run"),
+    ("ioxd/http.h",   "ioxd_http",   "request, response, context, body, reply"),
     ("ioxd/router.h", "ioxd_router", "groups, endpoints, middleware; the script macros"),
     ("ioxd/slice.h",  "ioxd_slice",  "slices, conversions, key/value parsing"),
     ("ioxd/json.h",   "ioxd_json",   "JSON written as you go; structs described once"),
     ("ioxd/pipe.h",   "ioxd_pipe",   "a connection as a pipe, for other protocols"),
+    ("ioxd/run.h",    "ioxd_run",    "bind the ports, run the workers"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
 ]
 
@@ -484,7 +485,7 @@ read-only route tree and a TLS store's certificate table, which is reference cou
 <h3>Limits</h3>
 <p>A request head, and a body read whole, must fit the reader's 16 KB; streamed bodies have no limit. At most
 64 request headers, 32 query parameters, 8 route captures, 16 added reply headers within 3 KB. These size the
-context, so <a href="ioxd_http.html#ioxd_run">ioxd_run</a> refuses an application built with different values.
+context, so <a href="ioxd_run.html#ioxd_run">ioxd_run</a> refuses an application built with different values.
 The runtime's own sizes - the ring, the receive buffers, the coroutine stacks, the pools - are the
 <a href="ioxd_config.html">configuration</a>, per worker.</p>
 
@@ -499,11 +500,12 @@ when the registered file table is on, which is the default.</p>
 <dl class="files">
 <dt>&lt;ioxd.h&gt;</dt><dd>the whole API: an umbrella over the headers below</dd>
 <dt><a href="ioxd_config.html">&lt;ioxd/config.h&gt;</a></dt><dd>the runtime's knobs: ring, buffers, stacks, pools</dd>
-<dt><a href="ioxd_http.html">&lt;ioxd/http.h&gt;</a></dt><dd>request, response, context, body, reply, bind and run</dd>
+<dt><a href="ioxd_http.html">&lt;ioxd/http.h&gt;</a></dt><dd>request, response, context, body, reply</dd>
 <dt><a href="ioxd_router.html">&lt;ioxd/router.h&gt;</a></dt><dd>groups, endpoints, middleware, the script macros</dd>
 <dt><a href="ioxd_slice.html">&lt;ioxd/slice.h&gt;</a></dt><dd>slices, conversions, key/value parsing</dd>
 <dt><a href="ioxd_json.html">&lt;ioxd/json.h&gt;</a></dt><dd>the JSON writer and IOXD_JSON_STRUCT</dd>
 <dt><a href="ioxd_pipe.html">&lt;ioxd/pipe.h&gt;</a></dt><dd>a connection as a pipe, for protocols other than HTTP</dd>
+<dt><a href="ioxd_run.html">&lt;ioxd/run.h&gt;</a></dt><dd>bind the ports, plain or TLS, run the workers</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
 </dl>
 
@@ -755,7 +757,7 @@ def build():
                 if public:
                     for n in names:
                         index.setdefault(n, (page, anchor_id(n)))
-    index.setdefault("ioxd_run", ("ioxd_http", "ioxd_run"))
+    index.setdefault("ioxd_run", ("ioxd_run", "ioxd_run"))
     for header, page, subject, top_paras, entries in parsed:
         see = [(p, "3") for _h, p, _s in PAGES if p != page] + [("ioxd_examples", "7"), ("ioxd", "7")]
         out = render_page(header, page, subject, top_paras, entries, index, version_str, EXAMPLES.get(page, []), see)
