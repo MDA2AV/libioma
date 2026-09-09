@@ -143,7 +143,7 @@ s = connect()
 s.send(b"DELETE / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
 st, hd, body = read_response(s)
 s.close()
-results.append(check("DELETE / -> 405 with allow (path known, method not)", st == 405 and hd.get("allow") == "GET"))
+results.append(check("DELETE / -> 405 with allow (path known, method not; HEAD rides on GET)", st == 405 and hd.get("allow") == "GET, HEAD"))
 
 # keep-alive: five requests on one connection
 s = connect()

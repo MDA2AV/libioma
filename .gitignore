@@ -28,4 +28,5 @@ compile_commands.json
 tests/ioxd-test-server
 tests/ioxd-unit
 tests/ioxd-pipe-server
+tests/ioxd-router-test
 tests/certs/
