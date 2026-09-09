@@ -81,7 +81,7 @@ static int more(ioxd_pipereader *pr)
     if (pr->eof)
         return 0;
     struct rx_item item;
-    int rc = ioxd__await_item(pr->conn, &item);
+    int rc = ioxd__recv_item(pr->conn, &item);
     if (rc <= 0) {
         pr->eof = true;
         if (rc < 0)
@@ -334,7 +334,7 @@ int ioxd_pipewriter_flush(ioxd_pipewriter *pw)
     size_t total = pw->head + pw->len + pw->tail;
     if (total == 0)
         return 0;
-    int rc = await_send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    int rc = ioxd__send(pw->conn, pw->buf + pw->lead - pw->head, total);
     pw->head = pw->len = pw->tail = 0;
     if (rc < 0) {
         pw->failed = true;
@@ -379,7 +379,7 @@ int ioxd_pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
-    if (await_send(pw->conn, data, n) < 0) {
+    if (ioxd__send(pw->conn, data, n) < 0) {
         pw->failed = true;
         return -1;
     }

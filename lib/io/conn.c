@@ -306,7 +306,7 @@ void ioxd__conn_main(void *arg)
     conn_close(c);
 }
 
-int ioxd__await_item(conn_t *c, struct rx_item *out)
+int ioxd__recv_item(conn_t *c, struct rx_item *out)
 {
     for (;;) {
         if (c->rx_head != c->rx_tail) {
@@ -412,7 +412,7 @@ int ioxd__sendmsg(conn_t *c, const struct msghdr *msg)
     return await_op(sqe, &op);
 }
 
-int await_send(conn_t *c, const void *buf, size_t len)
+int ioxd__send(conn_t *c, const void *buf, size_t len)
 {
     const uint8_t *src  = buf;
     size_t         left = len;

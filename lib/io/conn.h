@@ -58,10 +58,11 @@ struct conn {
                                           /* returned conn becomes the head and points at the old one */
 };
 
-/* Awaits: call from a coroutine on the owning worker. The coroutine parks; the loop resumes it
- * when the completion arrives. */
-int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, else -errno     */
-int ioxd__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
+/* What a coroutine calls, on the owning worker: every one of these suspends it, and the loop
+ * resumes it when the completion arrives - so none is named for the waiting, each for what it
+ * does, after the syscall where there is one. */
+int ioxd__send     (conn_t *c, const void *buf, size_t len);   /* all of buf: len, else -errno                */
+int ioxd__recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive) */
 
 /* For a protocol prologue (TLS): stop the multishot recv so nothing more leaves the socket, take
  * what it already delivered, read exact byte counts straight from the socket, program the
@@ -207,7 +208,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * The connection's coroutine: run the worker's handler to completion, then close.
  */
 
-/* ioxd__await_item:
+/* ioxd__recv_item:
  * The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends
  * until one arrives; 1 with the item, 0 at the end of input, <0 an error.
  *   - ioxd__on_recv wakes us  [coro_yield();]
@@ -239,7 +240,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *     !c->p->ring.fixed_files)]
  */
 
-/* await_send:
+/* ioxd__send:
  * Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno.
  *   - no SIGPIPE; the loop finishes short sends (kernel TLS refuses MSG_WAITALL)
  *     [sqe->msg_flags = MSG_NOSIGNAL;]
