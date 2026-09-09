@@ -94,24 +94,39 @@ static void user_endpoint(ioxd_ctx *ctx)
     user_to_json(&j, &u);
 }
 
-/* The routes, then the ports, then the run. Plain HTTP on 8080; with a certificate directory on
- * the command line the same routes on 8443 over TLS 1.3 as well. The store holds one host per
- * subdirectory - <dir>/<host>/cert.pem and key.pem - and the client's SNI picks the host,
- * `default` answering for no name or an unknown one (TLS.md). The handshake is OpenSSL's; from
- * then on the kernel encrypts and decrypts, and a handler cannot tell the two ports apart. */
+/* The routes, the runtime's knobs, the ports, then the run. Plain HTTP on 8080; with a
+ * certificate directory on the command line the same routes on 8443 over TLS 1.3 as well. The
+ * store holds one host per subdirectory - <dir>/<host>/cert.pem and key.pem - and the client's
+ * SNI picks the host, `default` answering for no name or an unknown one (TLS.md). The handshake
+ * is OpenSSL's; from then on the kernel encrypts and decrypts, and a handler cannot tell the two
+ * ports apart. */
 int main(int argc, char **argv)
 {
     IOXD_GET ("/hello/:name",   hello);
     IOXD_GET ("/users/:id",     user_endpoint);
     IOXD_POST("/repeat/:times", repeat);
 
-    ioxd_configure(&(ioxd_config){ .recv_buffers = 8192 });   /* the runtime's knobs, per worker; a zero keeps its default */
+    /* Every field is per worker, and a zero keeps the build's default; a value the kernel or the
+     * engine would refuse is refused here, with the reason on stderr. The receive buffers are
+     * what the kernel delivers into: their count bounds how many deliveries may be in flight
+     * before recvs park (the log then says to raise it), their size what one delivery holds. */
+    ioxd_config config = {
+        .ring_entries     = 4096,                    /* submission queue depth; the completion queue is twice that */
+        .recv_buffers     = 8192,                    /* a power of two, at most 32768; 4096 by default */
+        .recv_buffer_size = 2048,                    /* bytes in each: a request head rarely needs more */
+        .stack_size       = 128 * 1024,              /* a connection's coroutine stack, above a 64 KB guard */
+        .idle_stacks      = 512,                     /* kept warm between connections, so churn pays no mmap */
+        .idle_connections = 1024,                    /* connection records kept warm, the same way */
+    };
+    if (ioxd_configure(&config) < 0)
+        return 1;
+
     ioxd_bind(8080, NULL);
     if (argc > 1) {
-        ioxd_certs *tls = ioxd_certs_load(argv[1]);
-        if (!tls)
+        ioxd_certs *certs = ioxd_certs_load(argv[1]);
+        if (!certs)
             return 1;                                /* the reason is on stderr: no `default`, a bad key, a TLS=0 build */
-        ioxd_bind(8443, tls);
+        ioxd_bind(8443, certs);
     }
     return ioxd_run(0);                              /* one worker per core, over both ports */
 }
