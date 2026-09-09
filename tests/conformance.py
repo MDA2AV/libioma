@@ -54,9 +54,10 @@ def exchange(raw, timeout=3):
     return data, closed
 
 
-def split_responses(data):
+def split_responses(data, head_first=False):
     """The responses in a byte stream, as (status, headers, body) triples; the head is parsed
-    strictly so a malformed head shows up as a failure, not as a guess."""
+    strictly so a malformed head shows up as a failure, not as a guess. head_first: the first
+    response answers a HEAD, so it ends at its blank line whatever its headers say."""
     out = []
     while data:
         if b"\r\n\r\n" not in data:
@@ -72,7 +73,9 @@ def split_responses(data):
             if not sep:
                 status = "MALFORMED"
             headers[k.decode(errors="replace").lower()] = v.decode(errors="replace")
-        if "transfer-encoding" in headers:
+        if head_first and not out:
+            body = b""
+        elif "transfer-encoding" in headers:
             body, rest = dechunk(rest)
         else:
             n = int(headers.get("content-length", "0"))
@@ -113,7 +116,6 @@ for name, head in [
     ("Content-Length empty",                b"Content-Length: \r\n"),
     ("two Content-Length that disagree",    b"Content-Length: 5\r\nContent-Length: 0\r\n"),
     ("Transfer-Encoding and Content-Length", b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n"),
-    ("TE.TE: chunked then identity",        b"Transfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n"),
     ("an obs-folded Content-Length",        b"Content-Length:\r\n 5\r\n"),
     ("an obs-folded Transfer-Encoding",     b"Transfer-Encoding:\r\n chunked\r\n"),
 ]:
@@ -124,6 +126,8 @@ for name, head in [
 check("an unknown transfer coding -> 501 and close", st == 501 and closed and n == 1)
 (st, hd, body), closed, n = one(b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked, gzip\r\n\r\nAAAAA" + SMUGGLE)
 check("chunked not the last coding -> 501 and close, nothing smuggled", st == 501 and closed and n == 1)
+(st, hd, body), closed, n = one(b"POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: identity\r\n\r\nAAAAA" + SMUGGLE)
+check("TE.TE: chunked then identity -> 501 and close, nothing smuggled", st == 501 and closed and n == 1)
 (st, hd, body), closed, n = one(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\nhello")
 check("two Content-Length that agree -> accepted", st == 200 and body == b"hello")
 
@@ -167,17 +171,17 @@ check("a chunk size line the reader cannot hold -> 400", st == 400 and closed)
 
 # ── replies that carry no body ───────────────────────────────────────────────────────────────
 data, closed = exchange(b"HEAD / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-rs = split_responses(data)
+rs = split_responses(data, head_first=True)
 check("HEAD / -> the GET's head, no body, then the pipelined GET answered",
       len(rs) == 2 and rs[0][0] == 200 and rs[0][1].get("content-length") == rs[1][1].get("content-length")
       and rs[0][2] == b"" and rs[1][2] == b"hello from ioxd\n")
 data, closed = exchange(b"HEAD /stream HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-rs = split_responses(data)
+rs = split_responses(data, head_first=True)
 check("HEAD of a streamed reply -> chunked head, no chunks, next request answered",
       len(rs) == 2 and rs[0][0] == 200 and rs[0][1].get("transfer-encoding") == "chunked" and rs[0][2] == b""
       and rs[1][2] == b"ok")
 data, closed = exchange(b"HEAD /nope HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
-rs = split_responses(data)
+rs = split_responses(data, head_first=True)
 check("HEAD of an unrouted path -> 404 head, no body", len(rs) == 2 and rs[0][0] == 404 and rs[0][2] == b"" and rs[1][2] == b"ok")
 
 for path, code, framing in [("/status/204", 204, None), ("/status/304", 304, None), ("/status/204?body=1", 204, None)]:

@@ -971,7 +971,7 @@ static bool starts_ci(ioxd_slice s, const char *lit)
 static int fill_request(ioxd_request *req, char *params_arena, size_t arena_cap)
 {
     ioxd_slice target = req->target;
-    if (starts_ci(target, "http://") || starts_ci(target, "https://")) {   /* absolute-form: RFC 9112 3.2.2 */
+    if (target.len && target.p[0] != '/' && (starts_ci(target, "http://") || starts_ci(target, "https://"))) {   /* absolute-form: RFC 9112 3.2.2 */
         size_t      skip  = target.p[4] == ':' ? 7 : 8;
         const char *slash = memchr(target.p + skip, '/', target.len - skip);
         target = slash ? (ioxd_slice){ slash, (size_t)(target.p + target.len - slash) } : (ioxd_slice){ "/", 1 };

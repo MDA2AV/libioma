@@ -34,12 +34,23 @@ static uint64_t now_ms(void)
  * kernel is holding completions it could not fit in the CQ and will not take more submissions, so
  * the retry enters with GETEVENTS to flush them: safe mid-batch, since the loop dispatches whatever
  * lands next time round. */
+/* Publish the CQ head for the entries taken so far: once per batch in the loop, and before any
+ * enter in the middle of one, so the kernel has room for what the enter completes. */
+static void publish_cq(proactor_t *p)
+{
+    if (p->cq_taken) {
+        uring_cq_advance(&p->ring, p->cq_taken);
+        p->cq_taken = 0;
+    }
+}
+
 struct io_uring_sqe *ioxd__sqe(proactor_t *p)
 {
     struct io_uring_sqe *sqe = uring_get_sqe(&p->ring);
     int rc = 0;
     for (int i = 0; !sqe && i < 16; i++) {
         ioxd__bufring_publish(&p->bufs);             /* the kernel must see staged returns before this enter */
+        publish_cq(p);                               /* and have room in the CQ for what it completes */
         rc = uring_submit(&p->ring);
         if (rc == -EBUSY || rc == -EAGAIN || rc == -EINTR)
             rc = uring_submit_wait(&p->ring, 0, nullptr);   /* reap without waiting; the CQ has room again */
@@ -397,14 +408,16 @@ void proactor_run(proactor_t *p)
             break;
         }
 
-        /* One CQE at a time, the head published per entry: a handler resuming in dispatch stages
-         * SQEs, and the kernel needs somewhere to put their completions before the batch is over. */
+        /* The batch, one CQE at a time, copied out before the handler runs: the head is published
+         * once at the end - or in ioxd__sqe, ahead of an enter in the middle of the batch, so the
+         * kernel has somewhere to put what that enter completes. */
         unsigned ready = uring_cq_ready(&p->ring);   /* read the tail once */
         for (unsigned i = 0; i < ready; i++) {
-            struct io_uring_cqe cqe = *uring_cqe_at(&p->ring, 0);
-            uring_cq_advance(&p->ring, 1);
+            struct io_uring_cqe cqe = *uring_cqe_at(&p->ring, p->cq_taken);
+            p->cq_taken++;
             dispatch(p, &cqe);                       /* handlers run in here */
         }
+        publish_cq(p);
         rearm_stalled(p);                            /* a close may have made room to accept again */
     }
 

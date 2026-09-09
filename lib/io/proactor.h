@@ -70,6 +70,7 @@ struct proactor {
 
     /* owned by the worker thread */
     struct uring              ring;
+    unsigned      cq_taken;              /* CQEs taken from the ring this batch, head not yet published */
     struct bufring            bufs;       /* the provided buffers recvs deliver into           */
     conn_t                  **starved;    /* connections parked on -ENOBUFS                    */
     unsigned                  nstarved, cap_starved;
