@@ -5,6 +5,7 @@
 #include <ioxd.h>
 
 #include <stdlib.h>
+#include <string.h>
 
 /* GET / */
 static void home(ioxd_ctx *ctx)
@@ -264,6 +265,47 @@ static void json_big(ioxd_ctx *ctx)
     ioxd_json_end(&j);
 }
 
+/* GET /headers?n=N - adds N headers; reports how many the reply took (IOXD_MAX_RESP_HEADERS). */
+static void headers(ioxd_ctx *ctx)
+{
+    static const char *names[32] = {
+        "x-h00", "x-h01", "x-h02", "x-h03", "x-h04", "x-h05", "x-h06", "x-h07", "x-h08", "x-h09", "x-h10",
+        "x-h11", "x-h12", "x-h13", "x-h14", "x-h15", "x-h16", "x-h17", "x-h18", "x-h19", "x-h20", "x-h21",
+        "x-h22", "x-h23", "x-h24", "x-h25", "x-h26", "x-h27", "x-h28", "x-h29", "x-h30", "x-h31",
+    };
+    int64_t n = 0;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "n"))
+            ioxd_to_i64(ctx->req.params[i].value, &n);
+    int taken = 0;
+    for (int64_t i = 0; i < n && i < 32; i++)
+        taken += ioxd_header(ctx, names[i], "v");
+    ioxd_printf(ctx, "%d\n", taken);
+}
+
+/* GET /bighead?len=N - one header whose value is N bytes: past the reply head's capacity the
+ * reply cannot be built and the connection closes without one. */
+static void bighead(ioxd_ctx *ctx)
+{
+    static char value[8192];
+    int64_t     len = 0;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "len"))
+            ioxd_to_i64(ctx->req.params[i].value, &len);
+    if (len < 0 || len >= (int64_t)sizeof value)
+        len = sizeof value - 1;
+    memset(value, 'v', (size_t)len);
+    value[len] = '\0';
+    ioxd_header(ctx, "x-big", value);
+    ioxd_text(ctx, "ok\n");
+}
+
+/* GET /params?... - how many query parameters the request kept (IOXD_MAX_PARAMS). */
+static void params(ioxd_ctx *ctx)
+{
+    ioxd_printf(ctx, "%zu\n", ctx->req.n_params);
+}
+
 /* Middleware: stamps a Server header, then runs the rest of the chain. Setting headers before
  * calling ioxd_next_run means they land even on a reply that streams (afterwards the head may
  * already be on the wire); c->status and the rest are there to inspect on the way back out.
@@ -314,6 +356,9 @@ int main(void)
     IOXD_POST("/chunks",                chunks);
     IOXD_GET ("/json/:id",              json_item);
     IOXD_GET ("/json/big",              json_big);          /* static beside the capture */
+    IOXD_GET ("/headers",               headers);
+    IOXD_GET ("/bighead",               bighead);
+    IOXD_GET ("/params",                params);
     IOXD_DEFAULT(not_found);
 
     /* groups: /api with middleware of its own (IOXD_USE inside a block adds to that group; listing

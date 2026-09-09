@@ -264,6 +264,9 @@ def raw_exchange(pieces, pause=0.03):
     while b"\r\n\r\n" in data:
         head, _, rest = data.partition(b"\r\n\r\n")
         status = int(head.split(b" ")[1])
+        if b"transfer-encoding: chunked" in head.lower():   # a streamed reply: the last on the connection
+            out.append((status, dechunk(rest)))
+            break
         n = 0
         for line in head.split(b"\r\n"):
             if line.lower().startswith(b"content-length:"):
@@ -315,6 +318,36 @@ except Exception:
     st, hd, body = None, {}, b""
 s.close()
 results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+# --- the limits, at their boundaries: known, and the buffers can grow later ---
+# a request head must fit the 16 KB gathering buffer (IOXD_PIPE_GATHER): 431 past it
+big = b"x" * 15000
+st, hd, body = get("/health", extra=b"x-pad: " + big + b"\r\n")
+results.append(check("a 15 KB request head -> 200 (gathered across receives)", st == 200 and body == b"ok"))
+rs = raw_exchange([b"GET /health HTTP/1.1\r\nHost: x\r\nx-pad: " + b"x" * 16400 + b"\r\n\r\n"])
+results.append(check("a request head over 16 KB -> 431", len(rs) == 1 and rs[0][0] == 431))
+# a whole-body read must fit the same buffer with the head: 413 past it (streaming reads have no limit)
+rs = raw_exchange([b"POST /echo HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 16000\r\n\r\n" + b"e" * 16000])
+results.append(check("a 16000-byte body read whole -> echoed", rs == [(200, b"e" * 16000)]))
+rs = raw_exchange([b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 16400\r\n\r\n" + b"e" * 16400])
+results.append(check("a 16400-byte body read whole -> 413", len(rs) == 1 and rs[0][0] == 413))
+# the reply takes at most 16 headers (IOXD_MAX_RESP_HEADERS); the root middleware's server header
+# is one of them, so the handler gets 15, and the 16th is refused while the reply still goes out
+st, hd, body = get("/headers?n=15")
+results.append(check("15 reply headers beside the middleware's -> all taken", st == 200 and body == b"15\n" and hd.get("x-h14") == "v"))
+st, hd, body = get("/headers?n=16")
+results.append(check("one more -> refused, the reply still served with 15", st == 200 and body == b"15\n" and hd.get("x-h15") is None))
+# the reply head must fit 4 KB (IOXD_HEAD_CAP): a 3 KB header value goes, a 5 KB one cannot be built
+st, hd, body = get("/bighead?len=3000")
+results.append(check("a 3 KB reply header -> served", st == 200 and len(hd.get("x-big", "")) == 3000))
+rs = raw_exchange([b"GET /bighead?len=5000 HTTP/1.1\r\nHost: x\r\n\r\n"])
+results.append(check("a 5 KB reply header -> the reply cannot be built; the connection closes", rs == []))
+# the request keeps 32 query parameters; the rest are dropped
+st, hd, body = get("/params?" + "&".join(f"p{i}=1" for i in range(40)))
+results.append(check("40 query parameters -> 32 kept", st == 200 and body == b"32\n"))
+# more request headers than the table holds is a parse failure: 400
+rs = raw_exchange([b"GET /health HTTP/1.1\r\nHost: x\r\n" + b"".join(b"x-h%d: v\r\n" % i for i in range(70)) + b"\r\n"])
+results.append(check("70 request headers -> 400 (the table holds 64)", len(rs) == 1 and rs[0][0] == 400))
+
 # --- TLS: the third port, kernel TLS after an OpenSSL handshake (tests/certs from mkcerts.sh) ---
 import os, ssl
 CERTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
@@ -366,6 +399,12 @@ if os.path.exists(os.path.join(CERTS, "default", "cert.pem")):
     head, _, rest = raw.partition(b"\r\n\r\n")
     doc = __import__("json").loads(dechunk(rest))
     results.append(check("TLS: 3000 objects streamed chunked over kernel TX, valid JSON", len(doc) == 3000))
+    s = tls_connect()
+    s.send(b"POST /upload HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: 1048576\r\n\r\n")
+    s.sendall(b"u" * 1048576)
+    st, hd, body = read_response(s)
+    results.append(check("TLS: a 1 MB upload streamed through kernel RX -> 256 reads", st == 200 and body == b"1048576 bytes in 256 reads\n"))
+    s.close()
     try:
         s = tls_connect(max_version=ssl.TLSVersion.TLSv1_2)
         s.close()

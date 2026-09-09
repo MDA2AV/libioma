@@ -102,18 +102,20 @@ $(PIPESRV): tests/pipe-server.c libioxd.a
 	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 CHECK_PORT ?= 8099
-PIPE_PORT  ?= 8101                       # the fixture takes CHECK_PORT and the one after
+PIPE_PORT  ?= 8102                       # the fixture takes CHECK_PORT and the two after (plain, TLS)
+TLS_PYTHON ?= python3                    # a python with tlslite-ng, for tests/tls_early.py (skips itself otherwise)
 check: $(TESTSRV) $(UNIT) $(PIPESRV)
 	@./$(UNIT) || exit 1; \
 	 [ -f tests/certs/default/cert.pem ] || sh tests/mkcerts.sh tests/certs >/dev/null; \
 	 IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) IOXD_CERTS=tests/certs ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
 	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(CHECK_PORT) " && break; sleep 0.1; done; \
 	 python3 tests/smoke.py $(CHECK_PORT); s=$$?; python3 tests/stress.py $(CHECK_PORT); t=$$?; \
+	 $(TLS_PYTHON) tests/tls_early.py $$(($(CHECK_PORT) + 2)); e=$$?; \
 	 kill -INT $$pid; wait $$pid 2>/dev/null; \
 	 ./$(PIPESRV) $(PIPE_PORT) >/dev/null 2>&1 & pid=$$!; \
 	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(PIPE_PORT) " && break; sleep 0.1; done; \
 	 python3 tests/pipes.py $(PIPE_PORT); u=$$?; \
-	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t | u))
+	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t | e | u))
 
 # --- pkg-config ---
 ioxd.pc: ioxd.pc.in
