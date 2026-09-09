@@ -9,10 +9,9 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <stdlib.h>
-#include <string.h>
 
 struct client_pipe {
-    struct ioxd_pipe pipe;
+    ioxd_pipe pipe;
     conn_t          *conn;
     char             gather[IOXD_PIPE_GATHER];
     char             slab[IOXD_PIPE_LEAD + IOXD_PIPE_CAP + IOXD_PIPE_SLACK];

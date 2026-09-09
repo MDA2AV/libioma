@@ -9,14 +9,9 @@
 #include <stdint.h>
 
 #include "io/coro.h"
+#include "io/spsc.h"
 
 /* tunables (override with -D) */
-#ifndef RX_QUEUE
-#define RX_QUEUE      64                  /* undelivered slices one connection may hold, pow 2  */
-#endif
-static_assert(((unsigned)RX_QUEUE & ((unsigned)RX_QUEUE - 1U)) == 0 && RX_QUEUE >= 2,
-              "RX_QUEUE: a power of two (RX_MASK is a bit mask over it)");
-#define RX_MASK       (RX_QUEUE - 1U)
 #ifndef CONN_POOL_MAX
 #define CONN_POOL_MAX 1024                /* idle conn_t kept warm per worker by default (ioxd_config.idle_connections) */
 #endif
@@ -27,11 +22,6 @@ struct listener;                          /* io/proactor.h: the port it was acce
 struct msghdr;                            /* <sys/socket.h>, for ioxd__conn_sendmsg          */
 
 /* A slice the kernel delivered into a provided buffer, waiting for the handler to read it. */
-struct rx_item {
-    uint8_t *ptr;
-    uint32_t len;
-    uint16_t buf_id;
-};
 
 enum recv_state {
     RECV_ARMED,                           /* multishot recv in flight; the kernel may post CQEs */
@@ -45,8 +35,7 @@ struct conn {
     proactor_t     *p;
     struct listener *listener;            /* the port it came in on: plain or TLS               */
     coro_t         *waiter;               /* coroutine parked waiting for bytes, or nullptr      */
-    struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
-    unsigned        rx_head, rx_tail;
+    struct spsc     rx;                   /* delivered while nobody was reading (io/spsc.h)     */
     enum recv_state recv;
     bool            pausing;              /* a cancel is in flight to pause the recv           */
     bool            cancelling;           /* a cancel is in flight: do not stage a second one  */

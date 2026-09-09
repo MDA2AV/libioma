@@ -51,8 +51,7 @@ conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd)
     c->p          = p;
     c->listener   = l;
     c->waiter     = nullptr;
-    c->rx_head    = 0;
-    c->rx_tail    = 0;
+    ioxd__spsc_reset(&c->rx);
     c->recv       = RECV_ARMED;
     c->pausing    = false;
     c->cancelling = false;
@@ -160,7 +159,7 @@ void ioxd__conn_on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     uint16_t buf_id  = (uint16_t)(flags >> (unsigned)IORING_CQE_BUFFER_SHIFT);
 
     trace("[w%d] recv fd=%d result=%d more=%d buf=%d buf_id=%u queued=%u state=%d closed=%d eof=%d\n",
-          p->id, c->fd, result, more, has_buf, buf_id, c->rx_tail - c->rx_head, c->recv, c->closed, c->eof);
+          p->id, c->fd, result, more, has_buf, buf_id, ioxd__spsc_count(&c->rx), c->recv, c->closed, c->eof);
 
     if (!more)
         c->cancelling = false;
@@ -213,14 +212,14 @@ void ioxd__conn_on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
         wake_reader(c);
     } else if (c->closed) {
         ioxd__bufring_return(&p->bufs, buf_id);
-    } else if (c->rx_tail - c->rx_head == RX_QUEUE) {
+    } else if (ioxd__spsc_full(&c->rx)) {
         ioxd__bufring_return(&p->bufs, buf_id);
         end_input(c, -ENOBUFS);
         if (more)
             cancel_recv(p, c);
         wake_reader(c);
     } else {
-        struct rx_item *item = &c->rx[c->rx_tail++ & RX_MASK];
+        struct rx_item *item = ioxd__spsc_push(&c->rx);
         item->ptr = ioxd__bufring_at(&p->bufs, buf_id);
         item->len = (uint32_t)result;
         item->buf_id = buf_id;
@@ -269,7 +268,7 @@ void ioxd__conn_close(conn_t *c)
     proactor_t *p = c->p;
     c->closed = true;
     trace("[w%d] close fd=%d state=%d eof=%d err=%d queued=%u\n",
-          p->id, c->fd, c->recv, c->eof, c->err, c->rx_tail - c->rx_head);
+          p->id, c->fd, c->recv, c->eof, c->err, ioxd__spsc_count(&c->rx));
 
     if (c->recv == RECV_ARMED) {
         cancel_recv(p, c);
@@ -279,8 +278,8 @@ void ioxd__conn_close(conn_t *c)
         c->recv = RECV_DONE;
         c->refs--;
     }
-    while (c->rx_head != c->rx_tail)
-        ioxd__bufring_return(&p->bufs, c->rx[c->rx_head++ & RX_MASK].buf_id);
+    while (!ioxd__spsc_empty(&c->rx))
+        ioxd__bufring_return(&p->bufs, ioxd__spsc_pop(&c->rx).buf_id);
 
     ioxd__conn_close_socket(p, c->fd);
     conn_unref(c);
@@ -301,9 +300,8 @@ void ioxd__conn_main(void *arg)
 int ioxd__conn_recv_item(conn_t *c, struct rx_item *out)
 {
     for (;;) {
-        if (c->rx_head != c->rx_tail) {
-            *out = c->rx[c->rx_head & RX_MASK];
-            c->rx_head++;
+        if (!ioxd__spsc_empty(&c->rx)) {
+            *out = ioxd__spsc_pop(&c->rx);
             return 1;
         }
         if (c->eof)

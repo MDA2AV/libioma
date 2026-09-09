@@ -278,7 +278,7 @@ int ioxd__pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
         return pr->error;
     ioxd_slice l = live_span(pr);
     while (l.len <= pr->examined) {
-        if (pr->conn->rx_head == pr->conn->rx_tail)
+        if (ioxd__spsc_empty(&pr->conn->rx))
             return 0;
         int rc = more(pr);
         if (rc <= 0)
