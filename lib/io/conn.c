@@ -383,6 +383,19 @@ int ioxd__setsockopt(conn_t *c, int level, int name, const void *val, size_t len
     return rc;
 }
 
+int ioxd__sendmsg(conn_t *c, const struct msghdr *msg)
+{
+    op_t op;
+    struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+    sqe->opcode    = IORING_OP_SENDMSG;
+    sqe->fd        = c->fd;
+    sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
+    sqe->addr      = (uint64_t)(uintptr_t)msg;
+    sqe->len       = 1;
+    sqe->msg_flags = MSG_NOSIGNAL;
+    return await_op(sqe, &op);
+}
+
 int await_send(conn_t *c, const void *buf, size_t len)
 {
     const uint8_t *src  = buf;

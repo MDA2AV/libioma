@@ -14,6 +14,7 @@
 #if IOXD_TLS
 
 #include <linux/tls.h>
+#include <sys/socket.h>
 #include <netinet/tcp.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
@@ -160,9 +161,9 @@ static size_t record_len(ioxd_slice live)
  * OpenSSL, keeping the plaintext aside. The count consumed is the RX record sequence. */
 static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, unsigned char *plain, size_t *plain_len)
 {
-    ioxd_pipereader *pr = &pipe->in;
-    conn_t          *c  = pr->conn;
-    unsigned char    tail[RECORD_MAX];
+    ioxd_pipereader *pr   = &pipe->in;
+    conn_t          *c    = pr->conn;
+    unsigned char   *tail = plain + PLAIN_MAX;        /* scratch for a split record, past the plaintext */
     long             records = 0;
     for (;;) {
         ioxd_slice live = { nullptr, 0 };
@@ -243,7 +244,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
         why = "input ended after the handshake";
         goto out;
     }
-    plain = malloc(PLAIN_MAX);
+    plain = malloc(PLAIN_MAX + RECORD_MAX);          /* plaintext, then room for a split record: off the coroutine's stack */
     size_t plain_len = 0;
     long records = plain ? drain_records(pipe, ssl, rbio, plain, &plain_len) : -1;
     if (records < 0) {
@@ -273,7 +274,7 @@ out:
         fprintf(stderr, "ioxd_tls: connection dropped: %s\n", why);
     explicit_bzero(&s, sizeof s);
     if (plain) {
-        explicit_bzero(plain, PLAIN_MAX);
+        explicit_bzero(plain, PLAIN_MAX + RECORD_MAX);
         free(plain);
     }
     if (ssl) {
@@ -286,6 +287,23 @@ out:
     return why ? -1 : 0;
 }
 
+void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
+{
+    unsigned char alert[2] = { 1, 0 };                /* warning, close_notify */
+    struct iovec  iov      = { alert, sizeof alert };
+    union {
+        char           buf[CMSG_SPACE(sizeof(unsigned char))];
+        struct cmsghdr align;
+    } ctl = {};
+    struct msghdr msg = { .msg_iov = &iov, .msg_iovlen = 1, .msg_control = ctl.buf, .msg_controllen = sizeof ctl.buf };
+    struct cmsghdr *cm = CMSG_FIRSTHDR(&msg);
+    cm->cmsg_level = SOL_TLS;
+    cm->cmsg_type  = TLS_SET_RECORD_TYPE;
+    cm->cmsg_len   = CMSG_LEN(sizeof(unsigned char));
+    *CMSG_DATA(cm) = 21;                              /* the alert record type */
+    ioxd__sendmsg(pipe->in.conn, &msg);
+}
+
 #else /* built without TLS */
 
 int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
@@ -293,6 +311,11 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
     (void)pipe;
     (void)tls;
     return -1;
+}
+
+void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
+{
+    (void)pipe;
 }
 
 #endif

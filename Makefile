@@ -104,6 +104,7 @@ $(PIPESRV): tests/pipe-server.c libioxd.a
 CHECK_PORT ?= 8099
 PIPE_PORT  ?= 8102                       # the fixture takes CHECK_PORT and the two after (plain, TLS)
 TLS_PYTHON ?= python3                    # a python with tlslite-ng, for tests/tls_early.py (skips itself otherwise)
+TLSFUZZER  ?=                            # a tlsfuzzer checkout, for `make check-tlsfuzzer` (TLS_PYTHON must have its requirements)
 check: $(TESTSRV) $(UNIT) $(PIPESRV)
 	@./$(UNIT) || exit 1; \
 	 [ -f tests/certs/default/cert.pem ] || sh tests/mkcerts.sh tests/certs >/dev/null; \
@@ -140,3 +141,18 @@ uninstall:
 
 clean:
 	rm -rf obj libioxd.a libioxd.so $(EXAMPLES) $(TESTSRV) $(PIPESRV) $(UNIT) ioxd.pc
+
+# tlsfuzzer's TLS 1.3 conformance scripts that apply to a TLS 1.3-only, one-suite server; the
+# fixture must be up on CHECK_PORT with IOXD_CERTS (as `make check` runs it). Expected to pass:
+# the rest of the suite probes AES-256, TLS 1.2 fallback and alerts we do not send (TLS.md).
+TLSFUZZER_SCRIPTS := conversation zero-length-data record-padding unrecognised-groups keyshare-omitted rsa-signatures
+.PHONY: check-tlsfuzzer
+check-tlsfuzzer: $(TESTSRV)
+	@[ -n "$(TLSFUZZER)" ] || { echo "set TLSFUZZER=<checkout> (git clone https://github.com/tlsfuzzer/tlsfuzzer)"; exit 2; }
+	@[ -f tests/certs/default/cert.pem ] || sh tests/mkcerts.sh tests/certs >/dev/null
+	@IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) IOXD_CERTS=tests/certs ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
+	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$$(($(CHECK_PORT) + 2)) " && break; sleep 0.1; done; \
+	 rc=0; for t in $(TLSFUZZER_SCRIPTS); do \
+	   (cd $(TLSFUZZER) && $(abspath $(TLS_PYTHON)) scripts/test-tls13-$$t.py -h 127.0.0.1 -p $$(($(CHECK_PORT) + 2)) >/dev/null 2>&1) \
+	     && echo "ok   tlsfuzzer test-tls13-$$t" || { echo "FAIL tlsfuzzer test-tls13-$$t"; rc=1; }; \
+	 done; kill -INT $$pid; wait $$pid 2>/dev/null; exit $$rc

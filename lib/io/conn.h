@@ -22,6 +22,7 @@
 typedef struct proactor proactor_t;
 typedef struct conn     conn_t;
 struct listener;                          /* io/proactor.h: the port it was accepted on */
+struct msghdr;                            /* <sys/socket.h>, for ioxd__sendmsg          */
 
 /* A slice the kernel delivered into a provided buffer, waiting for the handler to read it. */
 struct rx_item {
@@ -66,6 +67,7 @@ int  ioxd__recv_pause (conn_t *c);                        /* 0 once stopped; -1 
 void ioxd__recv_resume(conn_t *c);
 int  ioxd__recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into dst, or <0                     */
 int  ioxd__setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
+int  ioxd__sendmsg    (conn_t *c, const struct msghdr *msg);   /* one sendmsg, for a message with control data */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
 conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the pool, or fresh  */

@@ -118,8 +118,9 @@ conn.write(b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n")
 status, body = read_reply(conn)
 conn.closeSocket = False                         # close() sends close_notify but leaves the socket to us
 conn.close()
-eof = held.sock.recv(1) == b""
-check("close_notify from the client -> the server closes the connection", body == b"ok" and eof)
+tail = held.sock.recv(64)                        # the server's own close_notify (one encrypted record), then EOF
+eof = tail == b"" or (tail[0] == 0x17 and held.sock.recv(1) == b"")
+check("close_notify from the client -> the server sends its own and closes", body == b"ok" and eof)
 
 # 5. garbage after the handshake: the kernel cannot decrypt it and the server closes
 conn, held = connect()

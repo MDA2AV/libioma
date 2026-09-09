@@ -1,5 +1,20 @@
 # TLS: one way, in the kernel (design, branch `streams`)
 
+**Status.** Built: `lib/tls/store.c` (the store, SNI, reload) and `lib/tls/handshake.c` (the prologue
+and the handoff); `ioxd_listen(port, ioxd_tls_new(dir))`. Verified by the smoke suite through
+Python's `ssl` (default certificate, SNI, an unknown name, a POST body and a 1 MB upload through
+kernel RX, keep-alive, a 3000-object reply through kernel TX, a refused TLS 1.2 client), by
+`tests/tls_early.py` with tlslite-ng at the wire level (the request in the same TCP write as the
+client's Finished, whole and with its record cut in two with a pause; two early requests; a
+close_notify; a corrupted record), by six of tlsfuzzer's TLS 1.3 scripts (`make check-tlsfuzzer`), and
+by a testssl.sh scan (TLS 1.3 only, forward-secret AEAD only). Known limits, all deliberate for now:
+one suite, TLS_AES_128_GCM_SHA256 - AES-256-GCM and ChaCha20-Poly1305 are one table entry each in
+the store and one key-size case in the handoff; no tickets, no 0-RTT, no client certificates; the
+server sends close_notify when it closes, but a control record from the peer after the handoff
+(an alert, a KeyUpdate, an over-long record) ends the connection without an alert of ours, since
+the plain recv only reports it as an error - seeing record types would mean recvmsg with control
+data on the multishot recv. The rotation watcher is the next step (FILES.md shares it).
+
 ## The shape
 
 Kernel TLS handles the record layer of an ordinary socket - encrypt on send, decrypt on receive -

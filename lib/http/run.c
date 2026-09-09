@@ -137,8 +137,11 @@ static int prologue(struct ioxd_pipe *pipe)
 
 static void serve_http(struct ioxd_pipe *pipe)
 {
-    if (prologue(pipe) == 0)
-        ioxd__serve(pipe);
+    if (prologue(pipe) != 0)
+        return;
+    ioxd__serve(pipe);
+    if (pipe->in.conn->listener->tls)
+        ioxd__tls_close_notify(pipe);
 }
 
 int ioxd_run(int workers, int port)
@@ -151,8 +154,11 @@ static ioxd_pipe_handler g_pipe_handler;
 
 static void serve_pipe(struct ioxd_pipe *pipe)
 {
-    if (prologue(pipe) == 0)
-        g_pipe_handler(pipe);
+    if (prologue(pipe) != 0)
+        return;
+    g_pipe_handler(pipe);
+    if (pipe->in.conn->listener->tls)
+        ioxd__tls_close_notify(pipe);
 }
 
 int ioxd_run_pipes(int workers, int port, ioxd_pipe_handler fn)
