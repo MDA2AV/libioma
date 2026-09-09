@@ -114,7 +114,7 @@ int main(int argc, char **argv)
         .ring_entries     = 4096,                    /* submission queue depth; the completion queue is twice that */
         .recv_buffers     = 8192,                    /* a power of two, at most 32768; 4096 by default */
         .recv_buffer_size = 2048,                    /* bytes in each: a request head rarely needs more */
-        .stack_size       = 128 * 1024,              /* a connection's coroutine stack, above a 64 KB guard */
+        .stack_size       = 128UL * 1024,            /* a connection's coroutine stack, above a 64 KB guard */
         .idle_stacks      = 512,                     /* kept warm between connections, so churn pays no mmap */
         .idle_connections = 1024,                    /* connection records kept warm, the same way */
     };
