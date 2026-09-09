@@ -22,5 +22,3 @@ int main(void)
 The manual, with every header, whole example programs and how to build, is at
 **[mda2av.github.io/libioxd](https://mda2av.github.io/libioxd/)**. `make` builds the library and the
 examples; `make check` runs the tests.
-
-MIT licensed.
