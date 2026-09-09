@@ -3,7 +3,7 @@
  * header of a 405, HEAD answered by GET, decoded captures, the middleware chain, and the
  * diagnostics that guard registration. Requests are driven straight through the dispatcher with
  * a context built by hand - one whose reply is marked failed, so the body writes of the built-in
- * fallbacks go nowhere and nothing here touches the wire. `make check` runs it after the unit
+ * fallbacks go nowhere and nothing here touches the wire. `make check` runs it beside the unit
  * test.
  */
 #include <ioxd.h>

@@ -1,6 +1,14 @@
 # ioxide's TCP core, read for a minimal stackful C runtime
 
-> Note: this is the design record for **ioxd** (github.com/MDA2AV/ioxd). Paths like `ioxide/...` and `ringzero/...` refer to the author's sibling repos (github.com/MDA2AV/ioxide, github.com/MDA2AV/ringzero); ioxd itself is the `stackful/`→`ioxd/` runtime described in section 3 and shipped in this repository.
+> **Historical.** This is the v1 design record for **ioxd** (github.com/MDA2AV/ioxd): the reading
+> of ioxide's TCP core and the ~500-line runtime planned from it, written before any of it was
+> built. It does **not** describe what shipped. The v1 sketched here uses liburing, one-shot
+> accept/recv/send, no provided buffers and files named `worker.c`/`listener.c`; the library has
+> raw io_uring with no liburing, multishot accept and recv over a provided buffer ring, and the
+> layout in [`ARCHITECTURE.md`](ARCHITECTURE.md), which supersedes this document. Kept for the
+> reasoning - why a stackful coroutine removes half of ioxide's machinery, and the pitfalls in
+> section 4, which still hold. Paths like `ioxide/...` and `ringzero/...` are the author's sibling
+> repos (github.com/MDA2AV/ioxide, github.com/MDA2AV/ringzero).
 
 
 Scope: `ioxide/src/ioxide` — `io_uring/Ring.cs`, `Native/*`, `Reactor/*`, `Reactor/Transport/Tcp/*`,

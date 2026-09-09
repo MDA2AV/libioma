@@ -1,12 +1,15 @@
 /*
- * proactor.h - one worker: one thread, one io_uring, one SO_REUSEPORT listener, one provided
- * buffer ring, and the coroutines that run on it. The connections it serves are io/conn.h. Thread-per-core, shared-nothing: nothing in
- * here is touched by any other thread except the stop flag.
+ * proactor.h - one worker: one thread, one io_uring, one SO_REUSEPORT socket per listening port,
+ * one provided buffer ring, and the coroutines that run on it. The connections it serves are
+ * io/conn.h. Thread-per-core, shared-nothing: nothing in here is touched by any other thread
+ * except the stop flag.
  *
  * The loop: run freshly spawned coroutines, re-arm recvs parked on -ENOBUFS, publish and enter
- * once (submit everything staged, wait for >= 1 completion), then dispatch the CQ batch one entry
- * at a time, publishing the head per entry so the ring keeps room mid-batch. Dispatching resumes
- * handler coroutines inline, so the sends they stage ride the next enter together with the batch.
+ * once (submit everything staged, wait for >= 1 completion), then dispatch the CQ batch, each CQE
+ * copied out of the ring before its handler runs. The head is published once at the end of the
+ * batch - and in ioxd__sqe ahead of an enter made in the middle of one, so the kernel has room for
+ * what that enter completes. Dispatching resumes handler coroutines inline, so the sends they
+ * stage ride the next enter together with the batch.
  *
  * On stop the loop does not simply leave: it cancels the accepts and everything in flight, then
  * keeps running until the last connection has closed itself or a two-second grace period is up,
@@ -88,7 +91,7 @@ struct proactor {
     int                       failed;     /* 0, or the -errno that retired this worker         */
 };
 
-/* The worker thread's whole life: ring, buffers, listener, loop until *stop, teardown. */
+/* The worker thread's whole life: ring, buffers, listeners, loop until *stop, drain, teardown. */
 void proactor_run(proactor_t *p);
 
 /* Start a coroutine on this worker. Safe from the loop or from any coroutine on it. */

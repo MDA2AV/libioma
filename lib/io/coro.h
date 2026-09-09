@@ -1,10 +1,13 @@
 /*
  * coro.h - stackful coroutines for one proactor thread.
  *
- * A coroutine runs on its own mmap'd stack with a guard page. Suspending saves the callee-saved
- * registers and switches to the loop's stack; resuming is the reverse. Everything on the
- * coroutine's stack stays exactly where it was while it is parked, which is what lets an
- * io_uring completion be routed to a struct that lives in an await's frame.
+ * A coroutine runs on its own mmap'd stack with an unmapped guard region (CORO_GUARD) below it.
+ * Suspending saves the callee-saved registers and switches to the loop's stack; resuming is the
+ * reverse. Everything on the coroutine's stack stays exactly where it was while it is parked,
+ * which is what lets an io_uring completion be routed to a struct that lives in an await's frame.
+ *
+ * A finished coroutine's stack is not unmapped but pooled per thread, guard still armed, and
+ * handed to the next coro_create; past CORO_POOL_MAX idle stacks it is unmapped instead.
  *
  * Discipline: only the loop calls coro_resume, only a coroutine calls coro_yield. A coroutine
  * that wants to start another one hands it to the scheduler (proactor_spawn); resuming from
@@ -31,14 +34,15 @@ typedef struct coro {
     size_t  size;             /* mapping size, guard included                         */
     void  (*fn)(void *);
     void   *arg;
-    bool    done;             /* fn returned; the next resume-return frees the stack  */
+    bool    done;             /* fn returned; the next resume-return recycles the stack */
     struct coro *next;        /* scheduler's ready-list link                          */
 } coro_t;
 
 /* Allocate a stack and forge its first frame. The descriptor lives at the top of that stack. */
 CORO_API coro_t *coro_create(void (*fn)(void *), void *arg, size_t stack_bytes);
 
-/* Loop only. Run c until it yields; if it finished, its stack is unmapped before returning. */
+/* Loop only. Run c until it yields; if it finished, its stack goes to the pool (or is unmapped
+ * past CORO_POOL_MAX) before returning. */
 CORO_API void coro_resume(coro_t *c);
 
 /* Coroutine only. Back to the loop; returns when the loop resumes this coroutine again. */

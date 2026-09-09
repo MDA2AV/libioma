@@ -2,19 +2,21 @@
 
 **Status.** Steps 1 to 4 below are on the branch: `io/pipe.h` (reader, writer), the HTTP engine
 reading through the reader with the in-place fast path, and the public `ioxd_pipe` with
-`ioxd_run_pipes`, a line-echo fixture and its tests. The reader's verbs ended up as examine /
-drop / keep / copy rather than one `advance(consumed, examined)`, because kept bytes - the
-request model's slices - need to stay put, which Pipelines has no notion of. Open, to talk
-about: the public surface (run_begin/run stay private for now); outbound connections
-(`ioxd_connect` on IORING_OP_CONNECT, the same pipe over a socket to a database or a peer);
-a second transport (QUIC, TLS) and whether that wants a vtable; letting the live bytes sit in a
-second kernel buffer while a run continues in the first, so streamed bodies never copy twice.
+`ioxd_run_pipes`, a line-echo fixture and its tests. The reader's verbs ended up as read /
+examine / drop / keep / release / copy, with run_begin and run below them, rather than one
+`advance(consumed, examined)`, because kept bytes - the request model's slices - need to stay
+put, which Pipelines has no notion of. TLS arrived as a prologue over the same pipe rather than
+as a second transport (TLS.md), so no vtable was needed. Open, to talk about: the public surface
+(run_begin/run stay private for now); outbound connections (`ioxd_connect` on
+IORING_OP_CONNECT, the same pipe over a socket to a database or a peer); QUIC, and whether that
+wants a vtable; letting the live bytes sit in a second kernel buffer while a run continues in
+the first, so streamed bodies never copy twice.
 
 ## Why
 
-Today the I/O plane offers two primitives, `await_recv` and `await_send`, and the HTTP engine
-builds everything else on them: a 16 KB request buffer it fills and parses, a reply slab it
-appends to and flushes. Both are streams in all but name. Naming them, and moving them below the
+Before this work the I/O plane offered two primitives, a recv await and a send await, and the
+HTTP engine built everything else on them: a 16 KB request buffer it filled and parsed, a reply
+slab it appended to and flushed. Both are streams in all but name. Naming them, and moving them below the
 HTTP engine, gives three things:
 
 1. a transport-independent surface, so a raw TCP server, a WebSocket upgrade or a TLS layer
@@ -45,9 +47,14 @@ on the context, for handlers that format straight into the reply.
 
 **`ioxd_pipereader`** - the connection's received bytes, one contiguous span at a time.
 
-    int    ioxd_pipereader_read   (r, ioxd_slice *span);        /* what is buffered, contiguous; waits for more when the caller examined it all; 0 at EOF, -1 on error */
-    void   ioxd_pipereader_advance(r, size_t consumed, size_t examined);   /* consumed: gone (provided buffers returned to the ring); examined: do not wake me until more than this arrives */
-    int    ioxd_pipereader_copy   (r, void *dst, size_t n);     /* the Stream-style read: up to n bytes into dst */
+    int         ioxd_pipereader_read     (r, ioxd_slice *live);  /* the live bytes, contiguous, once some are unexamined; waits for more otherwise; 0 at EOF, <0 on error */
+    void        ioxd_pipereader_examine  (r, size_t n);          /* looked at n of them: do not hand back the same bytes, wait for more */
+    void        ioxd_pipereader_drop     (r, size_t n);          /* consume n (clamped to what is live); the kernel buffer goes back once nothing is left in it */
+    const char *ioxd_pipereader_keep     (r, size_t n);          /* consume n but leave them where they are, contiguous with the run; where they are, or NULL: no room, or n past the live bytes */
+    void        ioxd_pipereader_run_begin(r);                    /* freeze the run in progress; the next keep starts another */
+    ioxd_slice  ioxd_pipereader_run      (r);                    /* the run in progress, wherever it ended up */
+    void        ioxd_pipereader_release  (r);                    /* forget every kept byte; the live ones stay */
+    int         ioxd_pipereader_copy     (r, void *dst, size_t n);   /* the Stream-style read: up to n bytes into dst */
 
 Why one span and not a list of segments. io_uring hands data over as provided buffers, each a
 pointer and a length, and the reader keeps them as such internally (the rx queue does already).
@@ -59,25 +66,28 @@ ours to write and to keep fast. So the reader coalesces, and it does so lazily:
 
 - when everything buffered lies in one provided buffer - a whole request head in one receive,
   the common case - `read` returns that buffer's bytes in place: zero copy, the buffer stays
-  owned by the connection until `advance` consumes past it;
-- when the data spans buffers, `read` copies the pieces into the connection's request buffer
+  owned by the connection until `drop` consumes past it;
+- when the data spans buffers, `read` copies the pieces into the connection's gathering buffer
   (16 KB, on the coroutine's stack: no allocation) and returns that. Spanning requests pay the
   copy they pay today; nothing else does.
 
 That is Kestrel's `IsSingleSegment` fast path, kept inside the reader rather than in every
-parser, and `advance(consumed, examined)` is Pipelines' contract: `consumed` releases buffers,
-`examined` keeps `read` from returning the same incomplete head twice - it suspends until more
-arrives instead.
+parser. Pipelines' one `advance(consumed, examined)` became two verbs, `drop` and `examine`, plus
+`keep` for the third case Pipelines has no name for: `drop` releases buffers, `examine` keeps
+`read` from returning the same incomplete head twice - it suspends until more arrives instead - and
+`keep` consumes without moving, because the request model's slices have to stay valid. Kept bytes
+form a run; `run_begin` closes one off and pins the kernel buffer it sits in, so pointers already
+handed out stay good until `release`.
 
-**`ioxd_stream`** - one connection's reader and writer together, what a handler of a non-HTTP
-protocol would receive.
+**`ioxd_pipe`** - one connection's reader and writer together, what a handler of a non-HTTP
+protocol receives (`include/ioxd/pipe.h` for the public verbs, `lib/io/pipe.h` for the rest).
 
 ## The HTTP engine on top
 
 - `read_head`: `reader_read` gives a span; `phr_parse_request` runs on it. In the common case
   that is the provided buffer itself - no copy - and the request's slices point into it; the
-  buffer stays owned by the connection until the reply is finished, when `advance` returns it.
-  A head that spans receives arrives coalesced in the request buffer, as today.
+  head is `keep`t, so the buffer stays owned by the connection until the reply is finished, when
+  `release` returns it. A head that spans receives arrives coalesced in the gathering buffer.
 - Body reads (`ioxd_body_all`, `read_until`, `read_next_chunk`) run the chunk parser on spans
   the same way; the whole read wants contiguous output and gets it from the same coalescing.
 - Pipelining falls out: the bytes after a request are simply not consumed.
@@ -99,8 +109,8 @@ protocol would receive.
 1. Writer: reserve/advance/write/flush/send in the io plane; the response on it;
    `ioxd_reserve`/`ioxd_advance` public. Small, no behaviour change, measurable.
 2. Reader with `copy` only (Stream semantics) and the engine's `read_head` and body stage on it,
-   still copying. Same behaviour, same numbers expected. Removes `await_recv` from the engine.
-3. Spans + `advance(consumed, examined)`, then the zero-copy single-buffer path. This is the
+   still copying. Same behaviour, same numbers expected. Removes the recv await from the engine.
+3. Spans + examine/drop/keep, then the zero-copy single-buffer path. This is the
    step with a payoff and the risk; it gets the fragmentation validator and the raw-socket
    smoke tests.
-4. `ioxd_stream` public, with a raw TCP entry point, once the HTTP engine is a clean client of it.
+4. `ioxd_pipe` public, with a raw TCP entry point, once the HTTP engine is a clean client of it.

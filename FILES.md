@@ -1,5 +1,8 @@
 # Static files over the ring (design, branch `streams`)
 
+**Status.** None of this is built: there is no `ioxd_files_*` in the library, no tail capture in
+the router and no `lib/io/watch.c`. This is the design, written down before the work.
+
 The model is ioxide.file's: small, hot files served from a baked, immutable snapshot; large files
 as positional ring reads or, better, spliced from the descriptor straight into the socket - no
 thread pool either way, and with kernel TLS the splice is encrypted on its way through.
@@ -27,8 +30,10 @@ old name, a new inode, and the old watch dies with the old one. So the watch is 
 one per directory in the tree (inotify watches are cheap; an asset tree of a few hundred
 directories is nothing), and the events that mean "the content under this name is different" are
 `IN_CLOSE_WRITE` (a write in place finished), `IN_MOVED_TO` (the atomic replace landed),
-`IN_CREATE` and `IN_DELETE`. The descriptor is read as an ordinary ring read by the same control
-coroutine that watches certificates - it is one facility, `lib/io/watch.c`, with two clients.
+`IN_CREATE` and `IN_DELETE`. The descriptor would be read as an ordinary ring read by the same
+control coroutine that watches certificates - one facility, `lib/io/watch.c`, with two clients.
+Neither the watcher nor that file exists yet; the certificate store's own rotation watcher is
+planned in the same terms (TLS.md), and today it reloads only when the application says so.
 
 Events are debounced, then the changed entries are confirmed with `statx` against the snapshot
 (inode, size, mtime), re-baked, and a new snapshot is published: an atomic pointer with a

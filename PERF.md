@@ -31,13 +31,18 @@ profiles score.
 | Request model: the query split into `params` eagerly, header names lower-cased at parse (8 bytes a step) so handlers compare with plain `ioxd_slice_eq` | about −1% each; the price of direct data access |
 | Parse straight from the provided buffer when a whole request sits in one (the pipe's reader keeps it in place; the copy happens only for a request that spans receives) | neutral, as predicted: the copy it removes was under 1% |
 | gcc 14 and C23 (was gcc 13 and gnu11) | neutral: 1.23M vs 1.22M req/s keep-alive and equal churn, wrk and oha, three interleaved rounds on 4 reactors. The standard changes what the compiler accepts, not the code it emits |
+| The review hardening: the request framing checked before a handler sees it, reply headers copied and validated into the response's arena, and the loop's own bookkeeping | about −1%: 1.258M → 1.245M req/s keep-alive, medians of interleaved wrk rounds on 4 reactors. Paid for correctness; the CQ head is still published once per batch |
 
-The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
-`BUF_SIZE`/`BUF_COUNT`/`RING_ENTRIES`/`RX_QUEUE`/`STACK_SIZE`/`CORO_POOL_MAX`/`CONN_POOL_MAX` are
+The `-D` switches: `FIXED_FILES=0` disables the registered file table and `NO_REG_RING` the
+registered ring fd - both features fall back at runtime on kernels that lack them anyway. The rest
+are the tunables, each defined where it is used: `BUF_SIZE` and `BUF_COUNT` in `lib/io/bufring.h`,
+`RX_QUEUE` and `CONN_POOL_MAX` in `lib/io/conn.h`, `CORO_POOL_MAX` (and `CORO_GUARD`) in
+`lib/io/coro.c`, `RING_ENTRIES`, `STACK_SIZE` and `FIXED_FILES` itself in `lib/io/proactor.h`.
+
 A recv that finds the ring empty is logged, at most once a second per worker, with counts:
-`ioxd: [w3] recv found no provided buffer N times ...: raise BUF_COUNT`. That line is the signal to raise
-`-DBUF_COUNT` (a power of two, up to 65536; each buffer is `BUF_SIZE` bytes of the per-worker slab).
-in `lib/io/bufring.h` and `lib/io/proactor.h`. Both ring features fall back at runtime on kernels that lack them.
+`ioxd: [w3] recv found no provided buffer N times (M in total, K connections parked): raise
+BUF_COUNT`. That line is the signal to raise `-DBUF_COUNT` (a power of two, at most 32768 - the
+kernel refuses a ring of 65536 entries; each buffer is `BUF_SIZE` bytes of the per-worker slab).
 
 ### How to do PGO
 
