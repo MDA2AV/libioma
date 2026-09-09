@@ -3,9 +3,9 @@
  * traffic secrets caught by the keylog callback, HKDF-Expand-Label into key and IV, and the keys
  * into the socket, so the kernel does every record from then on. See TLS.md.
  */
-#include "tls/tls.h"
+#include "tls/handshake.h"
+#include "tls/store.h"
 #include "io/internal.h"
-#include "tls/internal.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -50,11 +50,20 @@ static const char *ssl_error_text(void)
     return text;
 }
 
+/* The value of a hex digit, or -1. */
+static int hexdigit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
 /* 64 hex characters into 32 bytes. */
 static bool unhex(const char *hex, unsigned char *out)
 {
     for (size_t i = 0; i < SECRET_LEN; i++) {
-        int hi = ioxd__hexdigit(hex[2 * i]), lo = ioxd__hexdigit(hex[2 * i + 1]);
+        int hi = hexdigit(hex[2 * i]), lo = hexdigit(hex[2 * i + 1]);
         if (hi < 0 || lo < 0)
             return false;
         out[i] = (unsigned char)((unsigned)hi << 4 | (unsigned)lo);

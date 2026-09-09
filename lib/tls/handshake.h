@@ -1,6 +1,7 @@
 /*
- * tls/tls.h - what the runner needs from the TLS plane: the prologue a TLS connection runs before
- * its handler. The store itself is the public ioxd/tls.h.
+ * tls/handshake.h - the prologue a TLS connection runs before its handler, and the alert it sends
+ * when it ends; for the runner. The keylog callback is here too: the store installs it on every
+ * context it makes, and this is where the secrets it catches are wanted.
  */
 #pragma once
 
@@ -14,3 +15,9 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls);
 /* Tell the peer the connection is ending: a close_notify alert, sent as a TLS control record
  * through the kernel. Best effort, for a connection whose prologue succeeded. */
 void ioxd__tls_close_notify(struct ioxd_pipe *pipe);
+
+#if IOXD_TLS
+#include <openssl/ssl.h>
+
+void ioxd__tls_keylog(const SSL *ssl, const char *line);         /* catches the traffic secrets */
+#endif

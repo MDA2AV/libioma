@@ -8,9 +8,9 @@
  * name one: the ClientHello callback is installed once, when the context is built, and finds the
  * table through the SSL its handshake holds a reference for.
  */
-#include "tls/tls.h"
+#include "tls/store.h"
+#include "tls/handshake.h"
 #include "io/internal.h"
-#include "tls/internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
