@@ -78,7 +78,7 @@ target_include_directories(ioxd
             lib
             third_party/picohttpparser)
 target_compile_definitions(ioxd PRIVATE _GNU_SOURCE)
-# TLS: OpenSSL for the handshake only; the kernel does the records (TLS.md).
+# TLS: OpenSSL for the handshake only; the kernel does the records.
 option(IOXD_TLS "TLS listeners (needs OpenSSL 3)" ON)
 if(IOXD_TLS)
     find_package(OpenSSL 3 REQUIRED)

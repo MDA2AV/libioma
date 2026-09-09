@@ -97,7 +97,7 @@ static void user_endpoint(ioxd_ctx *ctx)
 /* The routes, the runtime's knobs, the ports, then the run. Plain HTTP on 8080; with a
  * certificate directory on the command line the same routes on 8443 over TLS 1.3 as well. The
  * store holds one host per subdirectory - <dir>/<host>/cert.pem and key.pem - and the client's
- * SNI picks the host, `default` answering for no name or an unknown one (TLS.md). The handshake
+ * SNI picks the host, `default` answering for no name or an unknown one (ioxd_tls(3) in the manual). The handshake
  * is OpenSSL's; from then on the kernel encrypts and decrypts, and a handler cannot tell the two
  * ports apart. */
 int main(int argc, char **argv)

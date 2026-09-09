@@ -11,7 +11,7 @@
  *
  * The reads are read(2), synchronous on the worker: what the page cache holds comes back at
  * once, a cold file stalls that worker's other connections for the read. Serving files through
- * io_uring, with a snapshot in memory and change detection, is FILES.md - designed, not built.
+ * io_uring, with a snapshot in memory and change detection, is designed but not built yet.
  */
 #include <ioxd.h>
 

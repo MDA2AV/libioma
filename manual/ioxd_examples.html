@@ -359,7 +359,7 @@ make examples &amp;&amp; ./ioxd-example-static_files www
 curl -i http:<span class="c-cm">//127.0.0.1:8080/</span>
 curl -i http:<span class="c-cm">//127.0.0.1:8080/static/site.css</span>
 curl -i -H <span class="c-str">'If-None-Match: "&lt;the etag&gt;"'</span> http:<span class="c-cm">//127.0.0.1:8080/static/site.css   # 304</span></pre>
-<p>The reads are read(2), synchronous on the worker: what the page cache holds comes back at once, a cold file stalls that worker's other connections for the read. Serving files through io_uring, with a snapshot in memory and change detection, is FILES.md - designed, not built.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+<p>The reads are read(2), synchronous on the worker: what the page cache holds comes back at once, a cold file stalls that worker's other connections for the read. Serving files through io_uring, with a snapshot in memory and change detection, is designed but not built yet.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
 <span class="c-pp">#include &lt;fcntl.h&gt;</span>
 <span class="c-pp">#include &lt;limits.h&gt;</span>

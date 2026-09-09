@@ -32,7 +32,7 @@ WARN    := -Wall -Wextra $(STD)
 # grows: stack clash protection makes the compiler emit those probes.
 HARDEN  := $(shell $(CC) -Werror -fstack-clash-protection -x c -c /dev/null -o /dev/null 2>/dev/null && echo -fstack-clash-protection)
 CPP     := -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
-# TLS: OpenSSL for the handshake only; the kernel does the records (TLS.md). make TLS=0 leaves it out.
+# TLS: OpenSSL for the handshake only; the kernel does the records. make TLS=0 leaves it out.
 TLS     ?= 1
 ifeq ($(TLS),1)
 CPP     += -DIOXD_TLS=1
@@ -208,7 +208,7 @@ clean:
 
 # tlsfuzzer's TLS 1.3 conformance scripts that apply to a TLS 1.3-only, one-suite server; the
 # fixture must be up on CHECK_PORT with IOXD_CERTS (as `make check` runs it). Expected to pass:
-# the rest of the suite probes AES-256, TLS 1.2 fallback and alerts we do not send (TLS.md).
+# the rest of the suite probes AES-256, TLS 1.2 fallback and alerts we do not send.
 TLSFUZZER_SCRIPTS := conversation zero-length-data record-padding unrecognised-groups keyshare-omitted rsa-signatures
 .PHONY: check-tlsfuzzer
 check-tlsfuzzer: $(TESTSRV)

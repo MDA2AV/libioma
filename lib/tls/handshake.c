@@ -1,7 +1,8 @@
 /*
  * tls/handshake.c - the prologue of a TLS connection: an OpenSSL handshake over the pipe, the
  * traffic secrets caught by the keylog callback, HKDF-Expand-Label into key and IV, and the keys
- * into the socket, so the kernel does every record from then on. See TLS.md.
+ * into the socket, so the kernel does every record from then on. The design is in the TLS
+ * notes (notes/TLS.md, kept beside the repository rather than in it).
  */
 #include "tls/handshake.h"
 #include "tls/store.h"

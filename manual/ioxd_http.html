@@ -191,7 +191,7 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx);
 <span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_certs ioxd_certs;
 <span class="c-ty">int</span> ioxd_bind(<span class="c-ty">int</span> port, ioxd_certs *certs);
 </pre>
-<div class="text"><p>Bind a port: plain HTTP when tls is NULL, TLS 1.3 terminated in the kernel otherwise, with the certificate store from <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a> (TLS.md). Every bound port serves the same routes; bind as many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full.</p></div>
+<div class="text"><p>Bind a port: plain HTTP when tls is NULL, TLS 1.3 terminated in the kernel otherwise, with the certificate store from <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a> (ioxd_tls(3) in the manual). Every bound port serves the same routes; bind as many as you need (at most 8), then run. -1 if refused: a bad port, or the table is full.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_run">

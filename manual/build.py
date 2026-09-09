@@ -508,8 +508,8 @@ when the registered file table is on, which is the default.</p>
 </dl>
 
 <h2>SEE ALSO</h2>
-<p><a href="functions.html">every public name</a>, and in the repository: README.md, ARCHITECTURE.md (how the
-runtime works), TLS.md, PERF.md, REVIEW.md.</p>
+<p><a href="functions.html">every public name</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, and the
+repository at <a href="https://github.com/MDA2AV/libioxd">github.com/MDA2AV/libioxd</a>.</p>
 """
 
 EXAMPLES = {
@@ -817,8 +817,8 @@ header declares. Start with the overview.</p>
 <table>{rows}
 <tr><td><a href="functions.html">functions(3)</a></td><td></td><td>every public name, alphabetically</td></tr></table>
 <h2>SEE ALSO</h2>
-<p>The repository's README.md, ARCHITECTURE.md (how the runtime works, for those who change it), TLS.md,
-PERF.md and REVIEW.md. This manual is built by <code>manual/build.py</code>; <code>make manual</code> refreshes it.</p>
+<p>The repository at <a href="https://github.com/MDA2AV/libioxd">github.com/MDA2AV/libioxd</a>. This manual is built
+from the headers by <code>manual/build.py</code>; <code>make manual</code> refreshes it.</p>
 """
     with open(os.path.join(HERE, "index.html"), "w") as f:
         f.write(page_html("index", "", front, version_str).replace("<title>index() - libioxd manual</title>", "<title>libioxd manual</title>")

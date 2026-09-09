@@ -1,5 +1,5 @@
 /*
- * ioxd/tls.h - TLS 1.3, terminated in the kernel after an OpenSSL handshake (TLS.md): a store of
+ * ioxd/tls.h - TLS 1.3, terminated in the kernel after an OpenSSL handshake: a store of
  * certificates to listen with.
  */
 #pragma once
