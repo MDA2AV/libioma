@@ -1,17 +1,19 @@
 obj/
+obj-tiny/
 *.o
 
 # libraries and examples
-libioma.a
-libioma.so
-libioma.so.*
-ioma-hello
-ioma.pc
+libioxd.a
+libioxd.so
+libioxd.so.*
+libioxd-tiny.a
+ioxd-hello
+ioxd.pc
 
 # old binaries
-ioma
-ioma-tiny
-ioma-trace
+/ioxd
+ioxd-tiny
+ioxd-trace
 stackful
 stackful-tiny
 stackful-trace
@@ -25,5 +27,10 @@ compile_commands.json
 
 # IDE
 .idea/
-tests/ioma-test-server
-tests/ioma-unit
+tests/ioxd-test-server
+tests/ioxd-test-server-tiny
+tests/ioxd-unit
+tests/ioxd-pipe-server
+tests/ioxd-router-test
+tests/certs/
+__pycache__/

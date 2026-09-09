@@ -1,0 +1,39 @@
+# The manual, on GitHub Pages: built from the headers by manual/build.py on every push, and
+# deployed with the Pages actions (the repository's Pages source is "GitHub Actions").
+name: manual
+
+on:
+  push:
+    branches: [main, streams]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - name: build the manual from the headers
+        run: python3 manual/build.py
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: manual
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

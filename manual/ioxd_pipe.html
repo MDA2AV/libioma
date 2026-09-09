@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ioxd_pipe(3) - libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>IOXD_PIPE(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_PIPE(3)</span></div>
+<h2>NAME</h2>
+<p>ioxd/pipe.h - a connection as a pipe: a reader over the bytes the kernel received and a writer over a slab, for handlers of protocols other than HTTP.</p>
+<h2>SYNOPSIS</h2>
+<pre class="syn">#include &lt;ioxd.h&gt;
+
+typedef struct <a href="#ioxd_pipe">ioxd_pipe</a> <a href="#ioxd_pipe">ioxd_pipe</a>;
+typedef void (*<a href="#ioxd_pipe_handler">ioxd_pipe_handler</a>)(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe);
+int <a href="#ioxd_run_pipes">ioxd_run_pipes</a>(int workers, <a href="#ioxd_pipe_handler">ioxd_pipe_handler</a> fn);
+#define <a href="#IOXD_PIPE_GONE">IOXD_PIPE_GONE</a> (-1)
+#define <a href="#IOXD_PIPE_FULL">IOXD_PIPE_FULL</a> (-2)
+int         <a href="#ioxd_pipe_read">ioxd_pipe_read</a>   (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> *live);
+void        <a href="#ioxd_pipe_examine">ioxd_pipe_examine</a>(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, size_t n);
+void        <a href="#ioxd_pipe_drop">ioxd_pipe_drop</a>   (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, size_t n);
+const char *<a href="#ioxd_pipe_keep">ioxd_pipe_keep</a>   (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, size_t n);
+void        <a href="#ioxd_pipe_release">ioxd_pipe_release</a>(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe);
+int         <a href="#ioxd_pipe_copy">ioxd_pipe_copy</a>   (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, void *dst, size_t n);
+void  *<a href="#ioxd_pipe_reserve">ioxd_pipe_reserve</a>(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, size_t n);
+void   <a href="#ioxd_pipe_advance">ioxd_pipe_advance</a>(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, size_t n);
+int    <a href="#ioxd_pipe_write">ioxd_pipe_write</a>  (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, const void *data, size_t n);
+int    <a href="#ioxd_pipe_flush">ioxd_pipe_flush</a>  (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe);
+int    <a href="#ioxd_pipe_send">ioxd_pipe_send</a>   (<a href="#ioxd_pipe">ioxd_pipe</a> *pipe, const void *data, size_t n);</pre>
+<h2>DESCRIPTION</h2>
+<h3>pipes</h3>
+<div class="entry">
+<pre class="decl" id="ioxd_pipe">
+typedef struct ioxd_pipe ioxd_pipe;
+typedef void (*ioxd_pipe_handler)(ioxd_pipe *pipe);
+int ioxd_run_pipes(int workers, ioxd_pipe_handler fn);
+</pre>
+<div class="text"><p>A connection as a pipe: a reader over the bytes the kernel received and a writer over a slab. Every call that must wait suspends the connection's coroutine, and the worker's loop resumes it on the completion, so a handler reads and writes in straight-line code. The HTTP engine is one such handler; <a href="#ioxd_run_pipes">ioxd_run_pipes</a> runs one of yours on raw TCP connections instead.</p></div>
+<dl class="trail">
+<dt>ioxd_run_pipes</dt><dd>like <a href="ioxd_http.html#ioxd_run">ioxd_run</a>, over the ports <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a> bound, without HTTP</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="IOXD_PIPE_GONE">
+#define IOXD_PIPE_GONE (-1)
+#define IOXD_PIPE_FULL (-2)
+int         ioxd_pipe_read   (ioxd_pipe *pipe, ioxd_slice *live);
+void        ioxd_pipe_examine(ioxd_pipe *pipe, size_t n);
+void        ioxd_pipe_drop   (ioxd_pipe *pipe, size_t n);
+const char *ioxd_pipe_keep   (ioxd_pipe *pipe, size_t n);
+void        ioxd_pipe_release(ioxd_pipe *pipe);
+int         ioxd_pipe_copy   (ioxd_pipe *pipe, void *dst, size_t n);
+</pre>
+<div class="text"><p>Reading. The live bytes are the ones received and not yet consumed, always handed out as one contiguous span - in place in the kernel's buffer when they lie within one. read returns 1 with them once some are unexamined, otherwise it waits for more; examine says how many were looked at without being consumed, so the next read waits for more rather than returning the same bytes; drop consumes (never more than is live); keep consumes but leaves the bytes where they are, contiguous with earlier kept bytes and valid until release - it returns where they are, or NULL when they would not fit the pipe's buffer (the pipe is then FULL) or n is more than is live; copy is the plain read into your own buffer. read and copy return 0 at the end of input, <a href="#IOXD_PIPE_GONE">IOXD_PIPE_GONE</a> on a dead peer, <a href="#IOXD_PIPE_FULL">IOXD_PIPE_FULL</a> when kept plus live bytes would exceed the pipe's buffer (16 KB). A handler that returns with bytes still in the writer's slab has them sent before the connection closes.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_pipe_reserve">
+void  *ioxd_pipe_reserve(ioxd_pipe *pipe, size_t n);
+void   ioxd_pipe_advance(ioxd_pipe *pipe, size_t n);
+int    ioxd_pipe_write  (ioxd_pipe *pipe, const void *data, size_t n);
+int    ioxd_pipe_flush  (ioxd_pipe *pipe);
+int    ioxd_pipe_send   (ioxd_pipe *pipe, const void *data, size_t n);
+</pre>
+<div class="text"><p>Writing: a slab, sent on flush. reserve n bytes to write into directly and advance by what was written, or write to copy in; send is write then flush. -1 once the peer is gone.</p></div>
+</div>
+<h2>EXAMPLES</h2>
+<p>A line echo server on raw TCP: read until a newline, answer, repeat:</p>
+<pre class="ex">static void echo(<a href="#ioxd_pipe">ioxd_pipe</a> *pipe)
+{
+    for (;;) {
+        <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> live;
+        int rc = <a href="#ioxd_pipe_read">ioxd_pipe_read</a>(pipe, &amp;live);         /* one contiguous span, or waits */
+        if (rc &lt;= 0)
+            return;                                   /* 0: the peer is done; &lt;0: gone or FULL */
+        const char *nl = memchr(live.p, '\n', live.len);
+        if (!nl) {
+            <a href="#ioxd_pipe_examine">ioxd_pipe_examine</a>(pipe, live.len);        /* seen it all: the next read waits for more */
+            continue;
+        }
+        size_t n = (size_t)(nl - live.p) + 1;
+        if (<a href="#ioxd_pipe_send">ioxd_pipe_send</a>(pipe, live.p, n) &lt; 0)
+            return;
+        <a href="#ioxd_pipe_drop">ioxd_pipe_drop</a>(pipe, n);
+    }
+}
+
+int main(void)
+{
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8100, NULL);
+    return <a href="#ioxd_run_pipes">ioxd_run_pipes</a>(0, echo);
+}</pre>
+<h2>SEE ALSO</h2>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_PIPE(3)</span></div>
+</main>
+</body>
+</html>

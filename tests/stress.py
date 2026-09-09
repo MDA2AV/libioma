@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 """Pressure on the ugly paths: python3 tests/stress.py [port].
 
-Run it against the default build, and against a tiny-buffer build that starves the provided
-buffer group on every request and overflows the per-connection queue at the first stall:
-
-    gcc -O2 -g -Wall -Iinclude -Ithird_party/picohttpparser -pthread \\
-        -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4 \\
-        playground/hello/main.c src/*.c src/*.S \\
-        third_party/picohttpparser/picohttpparser.c -o ioma-tiny
+`make check` runs it against the default build; `make check-tiny` runs it against a build with
+-DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4, which starves the provided buffer group on every
+request and overflows the per-connection queue at the first stall.
 
 At shutdown the server must report "0 still open" on every worker.
 """
@@ -18,7 +14,7 @@ import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
 REQ = b"GET /health HTTP/1.1\r\nHost: x\r\n\r\n"
-OK = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\nserver: ioma\r\n\r\nok"
+OK = b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 2\r\nserver: ioxd\r\n\r\nok"
 
 
 def connect(timeout=5):
@@ -67,7 +63,7 @@ results = []
 #    handlers hand buffers back. Every client still gets its answer.
 N = 64
 conns = [connect() for _ in range(N)]
-big = b"GET /health HTTP/1.1\r\nX-A: " + b"a" * 3000 + b"\r\n\r\n"
+big = b"GET /health HTTP/1.1\r\nHost: x\r\nX-A: " + b"a" * 3000 + b"\r\n\r\n"
 for s in conns:
     s.send(big)
 good = all(recv_exact(s, len(OK)) == OK for s in conns)
@@ -81,19 +77,24 @@ results.append(check("server healthy after starvation", healthy()))
 #    point the server ends its input and cancels the multishot. Our sendall then stalls (the
 #    server stopped reading); closing with unread data RSTs the socket, which fails the parked
 #    send and lets the handler finish. Nothing may wedge.
+FLOOD_LIMIT = 20                                  # seconds: the send timeout above, with room
 s = connect(timeout=3)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
 t0 = time.time()
+outcome = "sent all"                              # what must not happen: the whole flood taken in
 try:
     s.sendall(REQ * 400000)                       # ~11 MB of requests -> ~28 MB of answers
-    outcome = "sent all"
 except socket.timeout:
     outcome = "stalled (server stopped reading)"
 except (ConnectionResetError, BrokenPipeError):
     outcome = "reset by server"
+took = time.time() - t0
 s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))   # RST on close
 s.close()
-results.append(check(f"flood without reading: {outcome} after {time.time() - t0:.1f}s", True))
+# Taking it all would mean ~28 MB of answers buffered for a client that reads none; the server
+# must end our input instead, and decide it while we are still sending, not eventually.
+results.append(check(f"flood without reading: {outcome} after {took:.1f}s",
+                     outcome != "sent all" and took < FLOOD_LIMIT))
 results.append(check("server healthy after flood", healthy()))
 
 # 3. Reset in the middle of a request: the multishot recv completes with -ECONNRESET.

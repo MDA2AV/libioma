@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ioxd_router(3) - libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>IOXD_ROUTER(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_ROUTER(3)</span></div>
+<h2>NAME</h2>
+<p>ioxd/router.h - groups, endpoints and middleware, and the same as a script.</p>
+<h2>SYNOPSIS</h2>
+<pre class="syn">#include &lt;ioxd.h&gt;
+
+typedef struct <a href="#ioxd_group">ioxd_group</a>    <a href="#ioxd_group">ioxd_group</a>;
+typedef struct <a href="#ioxd_endpoint">ioxd_endpoint</a> <a href="#ioxd_endpoint">ioxd_endpoint</a>;
+<a href="#ioxd_group">ioxd_group</a> *<a href="#ioxd_group_new">ioxd_group_new</a>(<a href="#ioxd_group">ioxd_group</a> *parent, const char *prefix);
+void        <a href="#ioxd_group_use">ioxd_group_use</a>(<a href="#ioxd_group">ioxd_group</a> *group, <a href="ioxd_http.html#ioxd_mw">ioxd_mw</a> mw);
+<a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_route">ioxd_route</a>(<a href="#ioxd_group">ioxd_group</a> *group, const char *method, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+void           <a href="#ioxd_endpoint_use">ioxd_endpoint_use</a>(<a href="#ioxd_endpoint">ioxd_endpoint</a> *endpoint, <a href="ioxd_http.html#ioxd_mw">ioxd_mw</a> mw);
+static inline <a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_get">ioxd_get</a>   (<a href="#ioxd_group">ioxd_group</a> *g, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+static inline <a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_post">ioxd_post</a>  (<a href="#ioxd_group">ioxd_group</a> *g, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+static inline <a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_put">ioxd_put</a>   (<a href="#ioxd_group">ioxd_group</a> *g, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+static inline <a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_patch">ioxd_patch</a> (<a href="#ioxd_group">ioxd_group</a> *g, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+static inline <a href="#ioxd_endpoint">ioxd_endpoint</a> *<a href="#ioxd_delete">ioxd_delete</a>(<a href="#ioxd_group">ioxd_group</a> *g, const char *path, <a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+void <a href="#ioxd_use">ioxd_use</a>(<a href="ioxd_http.html#ioxd_mw">ioxd_mw</a> mw);
+void <a href="#ioxd_default">ioxd_default</a>(<a href="ioxd_http.html#ioxd_handler">ioxd_handler</a> fn);
+#define <a href="#IOXD_MAX_MW">IOXD_MAX_MW</a> 16
+<a href="#IOXD_GROUP">IOXD_GROUP</a>(prefix, middleware...) { ... }
+<a href="#IOXD_USE">IOXD_USE</a>(middleware)
+<a href="#IOXD_ROUTE">IOXD_ROUTE</a>(method, path, handler, middleware...)
+<a href="#IOXD_GET">IOXD_GET</a>(path, handler, middleware...)
+<a href="#IOXD_POST">IOXD_POST</a>(path, handler, middleware...)
+<a href="#IOXD_PUT">IOXD_PUT</a>(path, handler, middleware...)
+<a href="#IOXD_PATCH">IOXD_PATCH</a>(path, handler, middleware...)
+<a href="#IOXD_DELETE">IOXD_DELETE</a>(path, handler, middleware...)
+<a href="#IOXD_DEFAULT">IOXD_DEFAULT</a>(handler)</pre>
+<h2>DESCRIPTION</h2>
+<h3>routing</h3>
+<div class="entry">
+<pre class="decl" id="ioxd_group">
+typedef struct ioxd_group    ioxd_group;
+typedef struct ioxd_endpoint ioxd_endpoint;
+ioxd_group *ioxd_group_new(ioxd_group *parent, const char *prefix);
+void        ioxd_group_use(ioxd_group *group, ioxd_mw mw);
+</pre>
+<div class="text"><p>Endpoints live in groups, and groups nest. A group is a path prefix plus middleware: an endpoint "/users" in a group "/api" under a group "/v1" answers at "/v1/api/users", wrapped by the middleware of every group above it, outermost first, then its own. NULL as the group is the root: no prefix, and the middleware given to <a href="#ioxd_use">ioxd_use</a>. A prefix and what follows it are joined by a '/' when neither side brings one ("/api" and "users" is "/api/users"), and a repeated slash counts once.</p>
+<p>Register everything before <a href="ioxd_http.html#ioxd_run">ioxd_run</a>, from the main thread; methods, paths and prefixes are copied, so temporaries are fine, and anything registered once <a href="ioxd_http.html#ioxd_run">ioxd_run</a> has started is ignored with a line on stderr. <a href="ioxd_http.html#ioxd_run">ioxd_run</a> resolves it once: every endpoint's full path into a segment tree and its middleware into one flat chain, which the workers then share read-only. A request costs one walk down the tree - no scan, no regex - and one call through its chain.</p></div>
+<dl class="trail">
+<dt>ioxd_group_new</dt><dd>"/api"; "" for middleware only</dd>
+<dt>ioxd_group_use</dt><dd>wraps everything below it</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_route">
+ioxd_endpoint *ioxd_route(ioxd_group *group, const char *method, const char *path, ioxd_handler fn);
+void           ioxd_endpoint_use(ioxd_endpoint *endpoint, ioxd_mw mw);
+</pre>
+<div class="text"><p>An endpoint: method matched exactly, except that HEAD is answered by the GET of a path that has no HEAD of its own; path matched by segment below the group's prefix, with :name captures ("/users/:id") landing in req.route_params. A static segment beats a capture at any depth, and a static path that lacks the method falls through to a capture route that has it. A trailing slash is tolerated. Segments are matched as they arrive on the wire, so an escape in a static segment does not match it, but a captured value is handed over percent-decoded ("/users/a%2Fb" captures "a/b") - raw in the rare case that it does not fit <a href="ioxd_http.html#IOXD_ROUTE_ARENA">IOXD_ROUTE_ARENA</a>.</p></div>
+<dl class="trail">
+<dt>ioxd_endpoint_use</dt><dd>wraps this one only</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_get">
+static inline ioxd_endpoint *ioxd_get   (ioxd_group *g, const char *path, ioxd_handler fn);
+static inline ioxd_endpoint *ioxd_post  (ioxd_group *g, const char *path, ioxd_handler fn);
+static inline ioxd_endpoint *ioxd_put   (ioxd_group *g, const char *path, ioxd_handler fn);
+static inline ioxd_endpoint *ioxd_patch (ioxd_group *g, const char *path, ioxd_handler fn);
+static inline ioxd_endpoint *ioxd_delete(ioxd_group *g, const char *path, ioxd_handler fn);
+</pre>
+<div class="text"><p>The verbs, for short: <a href="#ioxd_get">ioxd_get</a>(api, "/users/:id", user).</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_use">
+void ioxd_use(ioxd_mw mw);
+</pre>
+<div class="text"><p>Root middleware: every request, the fallbacks included.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_default">
+void ioxd_default(ioxd_handler fn);
+</pre>
+<div class="text"><p>The fallback when no path matches (a built-in 404 by default). A path that matches without the method gets a built-in 405 whose allow header lists every method that path has, on a capture route too. Both run behind the root's middleware only, so that allow header names methods a group's own middleware would otherwise have gated.</p></div>
+</div>
+<h3>the same, as a script</h3>
+<div class="entry">
+<pre class="decl" id="IOXD_MAX_MW">
+#define IOXD_MAX_MW 16
+</pre>
+<div class="text"><p>Registration as a block-structured script: a current group, which the block after <a href="#IOXD_GROUP">IOXD_GROUP</a> sets (the root outside any block), endpoints registered into it, with their own middleware listed after the handler, and <a href="#IOXD_USE">IOXD_USE</a> adding middleware to it - so a group's middleware is either listed after its prefix or added with <a href="#IOXD_USE">IOXD_USE</a> inside its block. Plain functions underneath, so everything is type-checked; a group's block runs exactly once, and leaving it early - break, return, goto - still closes the group.</p>
+<pre class="ex"><a href="#IOXD_USE">IOXD_USE</a>(log);
+<a href="#IOXD_GET">IOXD_GET</a>("/", home);
+<a href="#IOXD_GROUP">IOXD_GROUP</a>("/api", api_header) {
+    <a href="#IOXD_GET">IOXD_GET</a>("/ping", ping);
+    <a href="#IOXD_GROUP">IOXD_GROUP</a>("/admin", require_token) {
+        <a href="#IOXD_GET">IOXD_GET</a>("/stats", stats, timing);
+    }
+}</pre></div>
+<dl class="trail">
+<dt>IOXD_MAX_MW</dt><dd>middleware per group and per endpoint</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="IOXD_GROUP">
+IOXD_GROUP(prefix, middleware...) { ... }
+IOXD_USE(middleware)
+IOXD_ROUTE(method, path, handler, middleware...)
+IOXD_GET(path, handler, middleware...)
+IOXD_POST(path, handler, middleware...)
+IOXD_PUT(path, handler, middleware...)
+IOXD_PATCH(path, handler, middleware...)
+IOXD_DELETE(path, handler, middleware...)
+IOXD_DEFAULT(handler)
+</pre>
+<div class="text"><p>A break, a return or a goto out of the block skips the loop's increment, so where the compiler has __attribute__((cleanup)) the pop is hung on the block's variable and runs on every way out; a block that ended on its own has already popped and nulled it. Elsewhere the plain form stands, and a group still open at <a href="ioxd_http.html#ioxd_run">ioxd_run</a> is reported.</p></div>
+</div>
+<h2>EXAMPLES</h2>
+<p>The same registrations as calls and as a script:</p>
+<pre class="ex"><a href="#ioxd_group">ioxd_group</a> *api = <a href="#ioxd_group_new">ioxd_group_new</a>(NULL, "/api");
+<a href="#ioxd_group_use">ioxd_group_use</a>(api, auth);
+<a href="#ioxd_get">ioxd_get</a>(api, "/users/:id", user);                    /* GET /api/users/:id, behind auth */
+<a href="#ioxd_endpoint_use">ioxd_endpoint_use</a>(<a href="#ioxd_post">ioxd_post</a>(api, "/users", create), audit);
+
+<a href="#IOXD_USE">IOXD_USE</a>(log);                                        /* root middleware: every request */
+<a href="#IOXD_GROUP">IOXD_GROUP</a>("/api", auth) {
+    <a href="#IOXD_GET">IOXD_GET</a> ("/users/:id", user);
+    <a href="#IOXD_POST">IOXD_POST</a>("/users",     create, audit);
+    <a href="#IOXD_GROUP">IOXD_GROUP</a>("/admin", require_token) {
+        <a href="#IOXD_GET">IOXD_GET</a>("/stats", stats);
+    }
+}
+<a href="#IOXD_DEFAULT">IOXD_DEFAULT</a>(not_found);</pre>
+<h2>SEE ALSO</h2>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_ROUTER(3)</span></div>
+</main>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>LIBIOXD</span><span>libioxd Programmer's Manual</span><span>LIBIOXD</span></div>
+<h1>libioxd manual</h1>
+<p>The manual of libioxd, an HTTP/1.1 server library on io_uring for Linux, in the shape of man pages:
+one page per public header, generated from the headers themselves, so what a page says is what the
+header declares. Start with the overview.</p>
+<h2>SECTION 7: OVERVIEW</h2>
+<table><tr><td><a href="ioxd.7.html">ioxd(7)</a></td><td></td><td>the library, its model and its limits</td></tr></table>
+<h2>SECTION 3: HEADERS</h2>
+<table><tr><td><a href="ioxd_config.html">ioxd_config(3)</a></td><td>&lt;ioxd/config.h&gt;</td><td>the runtime's knobs</td></tr>
+<tr><td><a href="ioxd_http.html">ioxd_http(3)</a></td><td>&lt;ioxd/http.h&gt;</td><td>request, response, context, body, reply, the run</td></tr>
+<tr><td><a href="ioxd_router.html">ioxd_router(3)</a></td><td>&lt;ioxd/router.h&gt;</td><td>groups, endpoints, middleware; the script macros</td></tr>
+<tr><td><a href="ioxd_slice.html">ioxd_slice(3)</a></td><td>&lt;ioxd/slice.h&gt;</td><td>slices, conversions, key/value parsing</td></tr>
+<tr><td><a href="ioxd_json.html">ioxd_json(3)</a></td><td>&lt;ioxd/json.h&gt;</td><td>JSON written as you go; structs described once</td></tr>
+<tr><td><a href="ioxd_pipe.html">ioxd_pipe(3)</a></td><td>&lt;ioxd/pipe.h&gt;</td><td>a connection as a pipe, for other protocols</td></tr>
+<tr><td><a href="ioxd_tls.html">ioxd_tls(3)</a></td><td>&lt;ioxd/tls.h&gt;</td><td>a certificate store, for a TLS port</td></tr>
+<tr><td><a href="functions.html">functions(3)</a></td><td></td><td>every public name, alphabetically</td></tr></table>
+<h2>SEE ALSO</h2>
+<p>The repository's README.md, ARCHITECTURE.md (how the runtime works, for those who change it), TLS.md,
+PERF.md and REVIEW.md. This manual is built by <code>manual/build.py</code>; <code>make manual</code> refreshes it.</p>
+
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>LIBIOXD</span></div>
+</main>
+</body>
+</html>

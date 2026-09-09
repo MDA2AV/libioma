@@ -1,0 +1,8 @@
+/* The dynamic symbol table of libioxd.so: the public names and nothing else. Everything the
+ * library uses internally - the vendored parser included - stays local, so a consumer can neither
+ * bind to it nor have one of its own names interposed on it. Both build systems pass this to the
+ * linker with -Wl,--version-script. */
+{
+    global: ioxd_*;
+    local:  *;
+};

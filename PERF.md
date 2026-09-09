@@ -1,6 +1,6 @@
 # Performance notes
 
-What has been tried on libioma, what it measured, and what is left. Numbers are saturated
+What has been tried on libioxd, what it measured, and what is left. Numbers are saturated
 keep-alive throughput of the HttpArena baseline handler with the server pinned to 4 cores of an
 i9-14900K and the load on other cores, unless stated otherwise. Run-to-run noise is about ±1%, so
 treat anything under that as "no change". Connection churn is the same load with one request per
@@ -28,15 +28,24 @@ profiles score.
 | Registered ring fd (`IORING_REGISTER_RING_FDS`) | not measurable |
 | Registered file table: direct accept into slots, recv/send/close by index | keep-alive not measurable; churn +3%; connections no longer consume process fds |
 | PGO (`-fprofile-generate`, train, `-fprofile-use`) on top of LTO | +1.5–2% |
-| Request model: the query split into `params` eagerly, header names lower-cased at parse (8 bytes a step) so handlers compare with plain `ioma_slice_eq` | about −1% each; the price of direct data access |
+| Request model: the query split into `params` eagerly, header names lower-cased at parse (8 bytes a step) so handlers compare with plain `ioxd_slice_eq` | about −1% each; the price of direct data access |
+| Parse straight from the provided buffer when a whole request sits in one (the pipe's reader keeps it in place; the copy happens only for a request that spans receives) | neutral, as predicted: the copy it removes was under 1% |
 | gcc 14 and C23 (was gcc 13 and gnu11) | neutral: 1.23M vs 1.22M req/s keep-alive and equal churn, wrk and oha, three interleaved rounds on 4 reactors. The standard changes what the compiler accepts, not the code it emits |
+| The review hardening: the request framing checked before a handler sees it, reply headers copied and validated into the response's arena, and the loop's own bookkeeping | about −1%: 1.258M → 1.245M req/s keep-alive, medians of interleaved wrk rounds on 4 reactors. Paid for correctness; the CQ head is still published once per batch |
 
-The `-D` switches: `FIXED_FILES=0` disables the file table, `NO_REG_RING` the registered ring fd,
-`BUF_SIZE`/`BUF_COUNT`/`RING_ENTRIES`/`RX_QUEUE`/`STACK_SIZE`/`CORO_POOL_MAX`/`CONN_POOL_MAX` are
+The `-D` switches: `FIXED_FILES=0` disables the registered file table and `NO_REG_RING` the
+registered ring fd - both features fall back at runtime on kernels that lack them anyway. The rest
+are the tunables' defaults, each defined where it is used: `BUF_SIZE` and `BUF_COUNT` in
+`lib/io/bufring.h`, `RX_QUEUE` and `CONN_POOL_MAX` in `lib/io/conn.h`, `CORO_POOL_MAX` and
+`CORO_GUARD` in `lib/io/coro.h` and `lib/io/coro.c`, `RING_ENTRIES`, `STACK_SIZE` and
+`FIXED_FILES` itself in `lib/io/proactor.h`. An application sets the ring, the buffers, the stack
+and the pools per worker at run time instead, with `ioxd_configure` (`ioxd/config.h`), so a
+deployment tunes them without rebuilding the library; `RX_QUEUE` and `FIXED_FILES` stay build-time.
+
 A recv that finds the ring empty is logged, at most once a second per worker, with counts:
-`ioma: [w3] recv found no provided buffer N times ...: raise BUF_COUNT`. That line is the signal to raise
-`-DBUF_COUNT` (a power of two, up to 65536; each buffer is `BUF_SIZE` bytes of the per-worker slab).
-in `src/io/proactor.h`. Both ring features fall back at runtime on kernels that lack them.
+`ioxd: [w3] recv found no provided buffer N times (M in total, K connections parked): raise
+BUF_COUNT`. That line is the signal to raise `-DBUF_COUNT` (a power of two, at most 32768 - the
+kernel refuses a ring of 65536 entries; each buffer is `BUF_SIZE` bytes of the per-worker slab).
 
 ### How to do PGO
 
@@ -60,10 +69,10 @@ At saturation the per-request cost is about 3 µs on the i9 and about 15 µs on 
 and nearly all of it is the kernel: the multishot recv delivery, the send, the TCP stack. The
 userspace work (parse, route, serialize, two coroutine switches in and two out) is well under a
 microsecond. That is why the remaining wins are in the low single digits: the peers pay the same
-kernel cost, and libioma, libreactor and libxev land within a couple of percent of each other.
+kernel cost, and libioxd, libreactor and libxev land within a couple of percent of each other.
 
 The 8-CPU saturation profile is the one place where every percent still matters: at the offered
-500K req/s libioma sits at ~100% CPU on those cores, and queueing latency explodes near full
+500K req/s libioxd sits at ~100% CPU on those cores, and queueing latency explodes near full
 utilisation, so a 2% cut in CPU per request buys far more than 2% in latency.
 
 ## Not worth it here
@@ -78,6 +87,5 @@ utilisation, so a 2% cut in CPU per request buys far more than 2% in latency.
 
 ## Still open
 
-- **Parse straight from the provided buffer** when a whole request sits in one, skipping the copy in `await_recv`. Small.
 - **Connection steering** (`SO_INCOMING_CPU`, reuseport BPF) so a connection is served by the worker on its NIC queue's CPU. Real on a NIC, irrelevant on the loopback the benchmark uses.
 - **Profiling on the benchmark host itself** with `perf`, to see the split of that 15 µs. This is the one thing that could reveal something not visible from the i9.
