@@ -13,39 +13,39 @@
 <h2>NAME</h2>
 <p>ioxd/tls.h - TLS 1.3, terminated in the kernel after an OpenSSL handshake (TLS.md): a store of certificates to listen with.</p>
 <h2>SYNOPSIS</h2>
-<pre class="syn">#include &lt;ioxd.h&gt;
+<pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
-<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *<a href="#ioxd_certs_load">ioxd_certs_load</a>(const char *dir);
-int <a href="#ioxd_certs_reload">ioxd_certs_reload</a>(<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs);
-void <a href="#ioxd_certs_free">ioxd_certs_free</a>(<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs);</pre>
+<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *<a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-kw">const</span> <span class="c-ty">char</span> *dir);
+<span class="c-ty">int</span> <a href="#ioxd_certs_reload">ioxd_certs_reload</a>(<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs);
+<span class="c-ty">void</span> <a href="#ioxd_certs_free">ioxd_certs_free</a>(<a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs);</pre>
 <h2>DESCRIPTION</h2>
 <div class="entry">
 <pre class="decl" id="ioxd_certs_load">
-ioxd_certs *ioxd_certs_load(const char *dir);
+ioxd_certs *ioxd_certs_load(<span class="c-kw">const</span> <span class="c-ty">char</span> *dir);
 </pre>
 <div class="text"><p>A store from a directory: &lt;dir&gt;/&lt;host&gt;/cert.pem (the chain) and key.pem for each hostname, `default` for no SNI or no match, `_.example.com` for *.example.com. `default` is required - without it nothing can answer a name we do not have. NULL, with the reason on stderr, when nothing loads or the build has no TLS. Then: <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(port, store).</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_certs_reload">
-int ioxd_certs_reload(ioxd_certs *certs);
+<span class="c-ty">int</span> ioxd_certs_reload(ioxd_certs *certs);
 </pre>
 <div class="text"><p>Read the directory again and switch to what it holds. A host that fails to load - unreadable, mismatched, not valid yet, expired - keeps its old certificate, and the host answering for unmatched SNI keeps answering. Safe while serving: handshakes in flight finish on the table they started with, and reloads serialise against each other. 0, or -1 when nothing could be loaded at all, in which case what was serving still is.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_certs_free">
-void ioxd_certs_free(ioxd_certs *certs);
+<span class="c-ty">void</span> ioxd_certs_free(ioxd_certs *certs);
 </pre>
 <div class="text"><p>Give the store back: its certificates and the store itself, once the last handshake holding a table of it has finished. Not while a listener still uses it - every TLS connection takes a reference through the store - so this is for a store that was never listened on, or for after <a href="ioxd_http.html#ioxd_run">ioxd_run</a> has returned. NULL is a no-op.</p></div>
 </div>
 <h2>EXAMPLES</h2>
 <p>A TLS port beside a plain one; the files rotated, then reloaded:</p>
-<pre class="ex"><a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs = <a href="#ioxd_certs_load">ioxd_certs_load</a>("/etc/ioxd/certs");   /* &lt;dir&gt;/&lt;host&gt;/cert.pem and key.pem; `default` required */
-if (!certs)
-    return 1;
-<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
-<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8443, certs);
-/* ... later, after new files were written: */
-<a href="#ioxd_certs_reload">ioxd_certs_reload</a>(certs);                               /* a host that fails keeps its old certificate */</pre>
+<pre class="ex"><a href="ioxd_http.html#ioxd_certs">ioxd_certs</a> *certs = <a href="#ioxd_certs_load">ioxd_certs_load</a>(<span class="c-str">"/etc/ioxd/certs"</span>);   <span class="c-cm">/* &lt;dir&gt;/&lt;host&gt;/cert.pem and key.pem; `default` required */</span>
+<span class="c-kw">if</span> (!certs)
+    <span class="c-kw">return</span> <span class="c-num">1</span>;
+<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8443</span>, certs);
+<span class="c-cm">/* ... later, after new files were written: */</span>
+<a href="#ioxd_certs_reload">ioxd_certs_reload</a>(certs);                               <span class="c-cm">/* a host that fails keeps its old certificate */</span></pre>
 <h2>SEE ALSO</h2>
 <p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_TLS(3)</span></div>

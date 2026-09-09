@@ -14,22 +14,22 @@ body {
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .crumbs { padding: .5em 1.5em; border-bottom: 1px solid var(--rule); color: var(--dim); }
-main { max-width: 100ch; margin: 0 auto; padding: 1em 1.5em 4em; }
+main { max-width: 136ch; margin: 0 auto; padding: 1em 1.5em 4em; }
 .hdr, .ftr { display: flex; justify-content: space-between; font-weight: bold; }
 .ftr { margin-top: 3em; font-weight: normal; color: var(--dim); }
 h1 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .5em; }
 h2 { font-size: 1em; font-weight: bold; margin: 1.8em 0 .5em; letter-spacing: .02em; }
 h3 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .4em 3ch; }
 h3::before { content: ""; }
-main > p, .entry, dl, pre, .text { margin-left: 7ch; }
-main > pre.ex, main > pre.syn { margin-left: 7ch; }
-p { margin: .5em 0; }
-pre { margin: .5em 0; white-space: pre-wrap; word-break: break-word; }
+main > p, .entry, dl, pre, .text { margin-left: 5ch; }
+main > pre.ex, main > pre.syn { margin-left: 5ch; }
+p { margin: .5em 0; max-width: 110ch; }
+pre { margin: .5em 0; white-space: pre; overflow-x: auto; }     /* code stays on its lines; a long one scrolls */
 pre.syn { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
 pre.decl { font-weight: bold; margin: 1.2em 0 .3em; }
 pre.ex { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
 .entry { margin-top: .4em; }
-.entry .text { margin-left: 4ch; }
+.entry .text { margin-left: 3ch; max-width: 110ch; }
 .entry .text pre.ex, .text pre.ex { margin-left: 0; }
 dl.trail { margin: .3em 0 0 4ch; }
 dl.trail dt { font-weight: bold; margin-top: .4em; }
@@ -40,6 +40,22 @@ table { border-collapse: collapse; margin-left: 7ch; }
 td, th { text-align: left; padding: .25em 1.5em .25em 0; vertical-align: top; }
 th { font-weight: bold; }
 .dim { color: var(--dim); }
+/* C, highlighted by build.py */
+.c-cm  { color: #6a737d; font-style: italic; }
+.c-pp  { color: #8a3fa8; }
+.c-str { color: #0a7a3b; }
+.c-num { color: #b35c00; }
+.c-kw  { color: #1d4ed8; font-weight: bold; }
+.c-ty  { color: #0e7490; }
+pre.decl .c-ty, pre.decl .c-kw { font-weight: bold; }
+@media (prefers-color-scheme: dark) {
+  .c-cm  { color: #8b949e; }
+  .c-pp  { color: #d2a8ff; }
+  .c-str { color: #7ee787; }
+  .c-num { color: #ffa657; }
+  .c-kw  { color: #79c0ff; }
+  .c-ty  { color: #56d4dd; }
+}
 @media (max-width: 700px) {
   main > p, .entry, dl, pre, .text, table, h3 { margin-left: 1ch; }
   .hdr span:nth-child(2), .ftr span:nth-child(2) { display: none; }

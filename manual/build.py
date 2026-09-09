@@ -264,6 +264,39 @@ def esc(t):
     return html.escape(t, quote=False)
 
 
+# C, highlighted at build time: no script on the page, and the library's names still become links
+# (the linker runs on the result, and matches nothing inside a tag). Each match is one span.
+C_TOKENS = re.compile(r"""
+    (?P<cm>/\*.*?\*/|//[^\n]*)
+  | (?P<pp>^[ \t]*\#[^\n]*)
+  | (?P<str>"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])+')
+  | (?P<num>\b(?:0[xX][0-9A-Fa-f]+|\d+(?:\.\d*)?(?:[eE][+-]?\d+)?)[uUlLfF]*\b)
+  | (?P<kw>\b(?:if|else|for|while|do|return|break|continue|switch|case|default|goto|sizeof
+        |static|inline|const|struct|union|enum|typedef|extern|volatile|register|restrict
+        |_Atomic|_Generic|_Thread_local|thread_local|true|false|NULL|nullptr)\b)
+  | (?P<ty>\b(?:void|char|short|int|long|unsigned|signed|float|double|bool|size_t|ssize_t
+        |u?int(?:8|16|32|64)_t|uintptr_t|intptr_t|time_t)\b)
+""", re.S | re.M | re.X)
+
+
+SHELL_WORDS = ("make", "curl", "printf", "head", "sh ", "cc ", "$", "python3", "nc ", "openssl", "gcc")
+
+
+def highlight(code):
+    """C with its tokens in spans; a shell transcript (the lines a comment shows to run) as it is."""
+    first = next((ln.strip() for ln in code.split("\n") if ln.strip()), "")
+    if first.startswith(SHELL_WORDS):
+        return esc(code)
+    out, at = [], 0
+    for m in C_TOKENS.finditer(code):
+        out.append(esc(code[at:m.start()]))
+        kind = m.lastgroup
+        out.append(f'<span class="c-{kind}">{esc(m.group(0))}</span>')
+        at = m.end()
+    out.append(esc(code[at:]))
+    return "".join(out)
+
+
 def anchor_id(name):
     return re.sub(r"[^A-Za-z0-9_]", "_", name)
 
@@ -272,7 +305,7 @@ def render_paras(paras, link):
     out = []
     for p in paras:
         if isinstance(p, tuple):
-            out.append('<pre class="ex">' + link(esc(p[1])) + "</pre>")
+            out.append('<pre class="ex">' + link(highlight(p[1])) + "</pre>")
         else:
             out.append("<p>" + link(esc(p)) + "</p>")
     return "\n".join(out)
@@ -347,7 +380,7 @@ def render_page(header, page, subject, top_paras, entries, index, version_str, e
     body.append("<h2>NAME</h2>")
     body.append(f"<p>{esc(header)} - {link(esc(subject))}</p>")
     body.append("<h2>SYNOPSIS</h2>")
-    body.append("<pre class=\"syn\">#include &lt;ioxd.h&gt;\n\n" + link(esc(synopsis_of(entries))) + "</pre>")
+    body.append("<pre class=\"syn\">" + link(highlight("#include <ioxd.h>\n\n" + synopsis_of(entries))) + "</pre>")
     body.append("<h2>DESCRIPTION</h2>")
     if len(top_paras) > 1:
         body.append(render_paras(top_paras[1:], link))
@@ -368,7 +401,7 @@ def render_page(header, page, subject, top_paras, entries, index, version_str, e
             for code, trailing, names, _p in pub:
                 for n in names[1:]:
                     body.append(f'<span id="{anchor_id(n)}"></span>')
-                body.append(esc(shown(code)))
+                body.append(highlight(shown(code)))
             body.append("</pre>")
         if e.paras:
             body.append('<div class="text">' + render_paras(e.paras, link) + "</div>")
@@ -386,7 +419,7 @@ def render_page(header, page, subject, top_paras, entries, index, version_str, e
         body.append("<h2>EXAMPLES</h2>")
         for title, code in examples:
             body.append(f"<p>{link(esc(title))}</p>")
-            body.append('<pre class="ex">' + link(esc(code)) + "</pre>")
+            body.append('<pre class="ex">' + link(highlight(code)) + "</pre>")
     body.append("<h2>SEE ALSO</h2>")
     body.append("<p>" + ", ".join(f'<a href="{p}.html">{p}({s})</a>' for p, s in see_also) + "</p>")
     return page_html(page, "3", "\n".join(body), version_str)
@@ -659,22 +692,22 @@ body {
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .crumbs { padding: .5em 1.5em; border-bottom: 1px solid var(--rule); color: var(--dim); }
-main { max-width: 100ch; margin: 0 auto; padding: 1em 1.5em 4em; }
+main { max-width: 136ch; margin: 0 auto; padding: 1em 1.5em 4em; }
 .hdr, .ftr { display: flex; justify-content: space-between; font-weight: bold; }
 .ftr { margin-top: 3em; font-weight: normal; color: var(--dim); }
 h1 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .5em; }
 h2 { font-size: 1em; font-weight: bold; margin: 1.8em 0 .5em; letter-spacing: .02em; }
 h3 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .4em 3ch; }
 h3::before { content: ""; }
-main > p, .entry, dl, pre, .text { margin-left: 7ch; }
-main > pre.ex, main > pre.syn { margin-left: 7ch; }
-p { margin: .5em 0; }
-pre { margin: .5em 0; white-space: pre-wrap; word-break: break-word; }
+main > p, .entry, dl, pre, .text { margin-left: 5ch; }
+main > pre.ex, main > pre.syn { margin-left: 5ch; }
+p { margin: .5em 0; max-width: 110ch; }
+pre { margin: .5em 0; white-space: pre; overflow-x: auto; }     /* code stays on its lines; a long one scrolls */
 pre.syn { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
 pre.decl { font-weight: bold; margin: 1.2em 0 .3em; }
 pre.ex { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
 .entry { margin-top: .4em; }
-.entry .text { margin-left: 4ch; }
+.entry .text { margin-left: 3ch; max-width: 110ch; }
 .entry .text pre.ex, .text pre.ex { margin-left: 0; }
 dl.trail { margin: .3em 0 0 4ch; }
 dl.trail dt { font-weight: bold; margin-top: .4em; }
@@ -685,6 +718,22 @@ table { border-collapse: collapse; margin-left: 7ch; }
 td, th { text-align: left; padding: .25em 1.5em .25em 0; vertical-align: top; }
 th { font-weight: bold; }
 .dim { color: var(--dim); }
+/* C, highlighted by build.py */
+.c-cm  { color: #6a737d; font-style: italic; }
+.c-pp  { color: #8a3fa8; }
+.c-str { color: #0a7a3b; }
+.c-num { color: #b35c00; }
+.c-kw  { color: #1d4ed8; font-weight: bold; }
+.c-ty  { color: #0e7490; }
+pre.decl .c-ty, pre.decl .c-kw { font-weight: bold; }
+@media (prefers-color-scheme: dark) {
+  .c-cm  { color: #8b949e; }
+  .c-pp  { color: #d2a8ff; }
+  .c-str { color: #7ee787; }
+  .c-num { color: #ffa657; }
+  .c-kw  { color: #79c0ff; }
+  .c-ty  { color: #56d4dd; }
+}
 @media (max-width: 700px) {
   main > p, .entry, dl, pre, .text, table, h3 { margin-left: 1ch; }
   .hdr span:nth-child(2), .ftr span:nth-child(2) { display: none; }
@@ -738,7 +787,7 @@ def build():
         toc.append(f'<tr><td><a href="#{name}">{esc(fn)}</a></td><td>{link(esc(title))}</td></tr>')
         parts.append(f'<h3 id="{name}">{esc(fn)}</h3>')
         parts.append('<div class="entry"><div class="text">' + render_paras(intro[1:], link) + "</div>"
-                     '<pre class="ex">' + link(esc(code.rstrip())) + "</pre></div>")
+                     '<pre class="ex">' + link(highlight(code.rstrip())) + "</pre></div>")
     parts.insert(2, "<table>" + "\n".join(toc) + "</table>")
     parts.append("<h2>SEE ALSO</h2><p>" + ", ".join(f'<a href="{p}.html">{p}(3)</a>' for _h, p, _s in PAGES) + ', <a href="ioxd.7.html">ioxd(7)</a></p>')
     with open(os.path.join(HERE, "ioxd_examples.html"), "w") as f:

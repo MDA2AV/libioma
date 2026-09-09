@@ -13,37 +13,37 @@
 <h2>NAME</h2>
 <p>ioxd/config.h - the runtime's knobs: the ring, the receive buffers, the coroutine stacks and the pools, per worker. Set once before <a href="ioxd_http.html#ioxd_run">ioxd_run</a>; the build's values are the defaults.</p>
 <h2>SYNOPSIS</h2>
-<pre class="syn">#include &lt;ioxd.h&gt;
+<pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
-typedef struct { ... } <a href="#ioxd_config">ioxd_config</a>;
-int <a href="#ioxd_configure">ioxd_configure</a>(const <a href="#ioxd_config">ioxd_config</a> *config);</pre>
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> { ... } <a href="#ioxd_config">ioxd_config</a>;
+<span class="c-ty">int</span> <a href="#ioxd_configure">ioxd_configure</a>(<span class="c-kw">const</span> <a href="#ioxd_config">ioxd_config</a> *config);</pre>
 <h2>DESCRIPTION</h2>
 <div class="entry">
 <pre class="decl" id="ioxd_config">
-typedef struct ioxd_config {
-    unsigned ring_entries;      /* submission queue entries, the completion queue twice that; a power of two, at most 32768; 4096 */
-    unsigned recv_buffers;      /* provided receive buffers; a power of two, at most 32768; 4096 */
-    unsigned recv_buffer_size;  /* bytes in each, 64 to 1 MB; 2048 */
-    size_t   stack_size;        /* a connection's coroutine stack, above a 64 KB guard; at least 64 KB; 128 KB */
-    unsigned idle_stacks;       /* stacks kept warm for the next connections; 512 */
-    unsigned idle_connections;  /* connection records kept warm; 1024 */
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_config {
+    <span class="c-ty">unsigned</span> ring_entries;      <span class="c-cm">/* submission queue entries, the completion queue twice that; a power of two, at most 32768; 4096 */</span>
+    <span class="c-ty">unsigned</span> recv_buffers;      <span class="c-cm">/* provided receive buffers; a power of two, at most 32768; 4096 */</span>
+    <span class="c-ty">unsigned</span> recv_buffer_size;  <span class="c-cm">/* bytes in each, 64 to 1 MB; 2048 */</span>
+    <span class="c-ty">size_t</span>   stack_size;        <span class="c-cm">/* a connection's coroutine stack, above a 64 KB guard; at least 64 KB; 128 KB */</span>
+    <span class="c-ty">unsigned</span> idle_stacks;       <span class="c-cm">/* stacks kept warm for the next connections; 512 */</span>
+    <span class="c-ty">unsigned</span> idle_connections;  <span class="c-cm">/* connection records kept warm; 1024 */</span>
 } ioxd_config;
 </pre>
 <div class="text"><p>Every field is per worker, and a zero field keeps its default. The receive buffers are what the kernel delivers into, so their count bounds how much may be in flight before recvs park on -ENOBUFS (the log says "raise recv_buffers" when that happens) and their size bounds what one delivery holds; a worker's slab is count x size bytes.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_configure">
-int ioxd_configure(const ioxd_config *config);
+<span class="c-ty">int</span> ioxd_configure(<span class="c-kw">const</span> ioxd_config *config);
 </pre>
 <div class="text"><p>Apply a configuration to the runs that follow. -1, with the reason on stderr, when a value is refused - nothing changes then. <a href="#ioxd_configure">ioxd_configure</a>(&amp;(<a href="#ioxd_config">ioxd_config</a>){ 0 }) is the defaults.</p></div>
 </div>
 <h2>EXAMPLES</h2>
 <p>Twice the receive buffers, before the run; every other field keeps its default:</p>
-<pre class="ex"><a href="#ioxd_config">ioxd_config</a> config = { .recv_buffers = 8192 };
-if (<a href="#ioxd_configure">ioxd_configure</a>(&amp;config) &lt; 0)
-    return 1;                                   /* the reason is on stderr */
-<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
-return <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(0);</pre>
+<pre class="ex"><a href="#ioxd_config">ioxd_config</a> config = { .recv_buffers = <span class="c-num">8192</span> };
+<span class="c-kw">if</span> (<a href="#ioxd_configure">ioxd_configure</a>(&amp;config) &lt; <span class="c-num">0</span>)
+    <span class="c-kw">return</span> <span class="c-num">1</span>;                                   <span class="c-cm">/* the reason is on stderr */</span>
+<a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+<span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);</pre>
 <h2>SEE ALSO</h2>
 <p><a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_CONFIG(3)</span></div>

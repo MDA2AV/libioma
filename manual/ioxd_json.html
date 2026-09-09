@@ -13,83 +13,83 @@
 <h2>NAME</h2>
 <p>ioxd/json.h - JSON written as you go, and a struct described once, serialized with one call.</p>
 <h2>SYNOPSIS</h2>
-<pre class="syn">#include &lt;ioxd.h&gt;
+<pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
 
-#define <a href="#IOXD_JSON_DEPTH">IOXD_JSON_DEPTH</a> 63
-typedef struct { ... } <a href="#ioxd_json">ioxd_json</a>;
+<span class="c-pp">#define <a href="#IOXD_JSON_DEPTH">IOXD_JSON_DEPTH</a> 63</span>
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> { ... } <a href="#ioxd_json">ioxd_json</a>;
 <a href="#ioxd_json">ioxd_json</a> <a href="#ioxd_json_reply">ioxd_json_reply</a>(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx);
-<a href="#ioxd_json">ioxd_json</a> <a href="#ioxd_json_pipe">ioxd_json_pipe</a> (struct <a href="ioxd_pipe.html#ioxd_pipe">ioxd_pipe</a> *pipe);
-<a href="#ioxd_json">ioxd_json</a> <a href="#ioxd_json_mem">ioxd_json_mem</a>  (char *buf, size_t cap, size_t *len);
-bool <a href="#ioxd_json_object">ioxd_json_object</a>(<a href="#ioxd_json">ioxd_json</a> *j);
-bool <a href="#ioxd_json_array">ioxd_json_array</a> (<a href="#ioxd_json">ioxd_json</a> *j);
-bool <a href="#ioxd_json_end">ioxd_json_end</a>   (<a href="#ioxd_json">ioxd_json</a> *j);
-bool <a href="#ioxd_json_done">ioxd_json_done</a>  (<a href="#ioxd_json">ioxd_json</a> *j);
-bool <a href="#ioxd_json_key">ioxd_json_key</a>   (<a href="#ioxd_json">ioxd_json</a> *j, const char *name);
-bool <a href="#ioxd_json_string">ioxd_json_string</a>(<a href="#ioxd_json">ioxd_json</a> *j, <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> s);
-bool <a href="#ioxd_json_cstr">ioxd_json_cstr</a>  (<a href="#ioxd_json">ioxd_json</a> *j, const char *s);
-bool <a href="#ioxd_json_int">ioxd_json_int</a>   (<a href="#ioxd_json">ioxd_json</a> *j, int64_t v);
-bool <a href="#ioxd_json_uint">ioxd_json_uint</a>  (<a href="#ioxd_json">ioxd_json</a> *j, uint64_t v);
-bool <a href="#ioxd_json_double">ioxd_json_double</a>(<a href="#ioxd_json">ioxd_json</a> *j, double v);
-bool <a href="#ioxd_json_float">ioxd_json_float</a> (<a href="#ioxd_json">ioxd_json</a> *j, float v);
-bool <a href="#ioxd_json_bool">ioxd_json_bool</a>  (<a href="#ioxd_json">ioxd_json</a> *j, bool v);
-bool <a href="#ioxd_json_null">ioxd_json_null</a>  (<a href="#ioxd_json">ioxd_json</a> *j);
-bool <a href="#ioxd_json_raw">ioxd_json_raw</a>   (<a href="#ioxd_json">ioxd_json</a> *j, <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> json);
+<a href="#ioxd_json">ioxd_json</a> <a href="#ioxd_json_pipe">ioxd_json_pipe</a> (<span class="c-kw">struct</span> <a href="ioxd_pipe.html#ioxd_pipe">ioxd_pipe</a> *pipe);
+<a href="#ioxd_json">ioxd_json</a> <a href="#ioxd_json_mem">ioxd_json_mem</a>  (<span class="c-ty">char</span> *buf, <span class="c-ty">size_t</span> cap, <span class="c-ty">size_t</span> *len);
+<span class="c-ty">bool</span> <a href="#ioxd_json_object">ioxd_json_object</a>(<a href="#ioxd_json">ioxd_json</a> *j);
+<span class="c-ty">bool</span> <a href="#ioxd_json_array">ioxd_json_array</a> (<a href="#ioxd_json">ioxd_json</a> *j);
+<span class="c-ty">bool</span> <a href="#ioxd_json_end">ioxd_json_end</a>   (<a href="#ioxd_json">ioxd_json</a> *j);
+<span class="c-ty">bool</span> <a href="#ioxd_json_done">ioxd_json_done</a>  (<a href="#ioxd_json">ioxd_json</a> *j);
+<span class="c-ty">bool</span> <a href="#ioxd_json_key">ioxd_json_key</a>   (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *name);
+<span class="c-ty">bool</span> <a href="#ioxd_json_string">ioxd_json_string</a>(<a href="#ioxd_json">ioxd_json</a> *j, <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> s);
+<span class="c-ty">bool</span> <a href="#ioxd_json_cstr">ioxd_json_cstr</a>  (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *s);
+<span class="c-ty">bool</span> <a href="#ioxd_json_int">ioxd_json_int</a>   (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-ty">int64_t</span> v);
+<span class="c-ty">bool</span> <a href="#ioxd_json_uint">ioxd_json_uint</a>  (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-ty">uint64_t</span> v);
+<span class="c-ty">bool</span> <a href="#ioxd_json_double">ioxd_json_double</a>(<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-ty">double</span> v);
+<span class="c-ty">bool</span> <a href="#ioxd_json_float">ioxd_json_float</a> (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-ty">float</span> v);
+<span class="c-ty">bool</span> <a href="#ioxd_json_bool">ioxd_json_bool</a>  (<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-ty">bool</span> v);
+<span class="c-ty">bool</span> <a href="#ioxd_json_null">ioxd_json_null</a>  (<a href="#ioxd_json">ioxd_json</a> *j);
+<span class="c-ty">bool</span> <a href="#ioxd_json_raw">ioxd_json_raw</a>   (<a href="#ioxd_json">ioxd_json</a> *j, <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> json);
 <a href="#IOXD_JSON_VALUE">IOXD_JSON_VALUE</a>(<a href="#ioxd_json">ioxd_json</a> *j, x)
-<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(<a href="#ioxd_json">ioxd_json</a> *j, const char *name, x)
+<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(<a href="#ioxd_json">ioxd_json</a> *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *name, x)
 <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(name, FIELDS)
 <a href="#IOXD_JSON_WRITER">IOXD_JSON_WRITER</a>(name, FIELDS)</pre>
 <h2>DESCRIPTION</h2>
 <h3>JSON, written as you go</h3>
 <div class="entry">
 <pre class="decl" id="IOXD_JSON_DEPTH">
-#define IOXD_JSON_DEPTH 63
-typedef struct ioxd_json {
-    enum {
+<span class="c-pp">#define IOXD_JSON_DEPTH 63</span>
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_json {
+    <span class="c-kw">enum</span> {
         IOXD_JSON_TO_REPLY,
         IOXD_JSON_TO_PIPE,
         IOXD_JSON_TO_MEM,
     } kind;
 
-    union {
+    <span class="c-kw">union</span> {
         ioxd_ctx         *ctx;
-        struct ioxd_pipe *pipe;
-        struct { char *p; size_t cap, *len; } mem;
+        <span class="c-kw">struct</span> ioxd_pipe *pipe;
+        <span class="c-kw">struct</span> { <span class="c-ty">char</span> *p; <span class="c-ty">size_t</span> cap, *len; } mem;
     } to;
 
-    uint64_t has_value;                         /* per level: a value is there, so a comma is due */
-    uint64_t is_object;                         /* per level: it closes with '}' rather than ']'  */
-    unsigned depth;
-    bool     after_key;                         /* the next value follows a key: no comma        */
-    bool     failed;
+    <span class="c-ty">uint64_t</span> has_value;                         <span class="c-cm">/* per level: a value is there, so a comma is due */</span>
+    <span class="c-ty">uint64_t</span> is_object;                         <span class="c-cm">/* per level: it closes with '}' rather than ']'  */</span>
+    <span class="c-ty">unsigned</span> depth;
+    <span class="c-ty">bool</span>     after_key;                         <span class="c-cm">/* the next value follows a key: no comma        */</span>
+    <span class="c-ty">bool</span>     failed;
 } ioxd_json;
 ioxd_json ioxd_json_reply(ioxd_ctx *ctx);
-ioxd_json ioxd_json_pipe (struct ioxd_pipe *pipe);
-ioxd_json ioxd_json_mem  (char *buf, size_t cap, size_t *len);
-bool ioxd_json_object(ioxd_json *j);
-bool ioxd_json_array (ioxd_json *j);
-bool ioxd_json_end   (ioxd_json *j);
-bool ioxd_json_done  (ioxd_json *j);
-bool ioxd_json_key   (ioxd_json *j, const char *name);
-bool ioxd_json_string(ioxd_json *j, ioxd_slice s);
-bool ioxd_json_cstr  (ioxd_json *j, const char *s);
-bool ioxd_json_int   (ioxd_json *j, int64_t v);
-bool ioxd_json_uint  (ioxd_json *j, uint64_t v);
-bool ioxd_json_double(ioxd_json *j, double v);
-bool ioxd_json_float (ioxd_json *j, float v);
-bool ioxd_json_bool  (ioxd_json *j, bool v);
-bool ioxd_json_null  (ioxd_json *j);
-bool ioxd_json_raw   (ioxd_json *j, ioxd_slice json);
+ioxd_json ioxd_json_pipe (<span class="c-kw">struct</span> ioxd_pipe *pipe);
+ioxd_json ioxd_json_mem  (<span class="c-ty">char</span> *buf, <span class="c-ty">size_t</span> cap, <span class="c-ty">size_t</span> *len);
+<span class="c-ty">bool</span> ioxd_json_object(ioxd_json *j);
+<span class="c-ty">bool</span> ioxd_json_array (ioxd_json *j);
+<span class="c-ty">bool</span> ioxd_json_end   (ioxd_json *j);
+<span class="c-ty">bool</span> ioxd_json_done  (ioxd_json *j);
+<span class="c-ty">bool</span> ioxd_json_key   (ioxd_json *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *name);
+<span class="c-ty">bool</span> ioxd_json_string(ioxd_json *j, ioxd_slice s);
+<span class="c-ty">bool</span> ioxd_json_cstr  (ioxd_json *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *s);
+<span class="c-ty">bool</span> ioxd_json_int   (ioxd_json *j, <span class="c-ty">int64_t</span> v);
+<span class="c-ty">bool</span> ioxd_json_uint  (ioxd_json *j, <span class="c-ty">uint64_t</span> v);
+<span class="c-ty">bool</span> ioxd_json_double(ioxd_json *j, <span class="c-ty">double</span> v);
+<span class="c-ty">bool</span> ioxd_json_float (ioxd_json *j, <span class="c-ty">float</span> v);
+<span class="c-ty">bool</span> ioxd_json_bool  (ioxd_json *j, <span class="c-ty">bool</span> v);
+<span class="c-ty">bool</span> ioxd_json_null  (ioxd_json *j);
+<span class="c-ty">bool</span> ioxd_json_raw   (ioxd_json *j, ioxd_slice json);
 </pre>
 <div class="text"><p>A forward-only JSON writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation. The bytes go straight into the reply - or a raw pipe, or a buffer - escaped as they are written, and stream out as the slab fills. Nesting and commas are tracked, so a handler just says what it means:</p>
-<pre class="ex"><a href="#ioxd_json">ioxd_json</a> j = <a href="#ioxd_json_reply">ioxd_json_reply</a>(ctx);                  // content-type: application/json
+<pre class="ex"><a href="#ioxd_json">ioxd_json</a> j = <a href="#ioxd_json_reply">ioxd_json_reply</a>(ctx);                  <span class="c-cm">// content-type: application/json</span>
 <a href="#ioxd_json_object">ioxd_json_object</a>(&amp;j);
-    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, "id");    <a href="#ioxd_json_int">ioxd_json_int</a>(&amp;j, id);
-    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, "name");  <a href="#ioxd_json_string">ioxd_json_string</a>(&amp;j, name);
-    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, "tags");  <a href="#ioxd_json_array">ioxd_json_array</a>(&amp;j);
-        <a href="#ioxd_json_cstr">ioxd_json_cstr</a>(&amp;j, "new");
+    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"id"</span>);    <a href="#ioxd_json_int">ioxd_json_int</a>(&amp;j, id);
+    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"name"</span>);  <a href="#ioxd_json_string">ioxd_json_string</a>(&amp;j, name);
+    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"tags"</span>);  <a href="#ioxd_json_array">ioxd_json_array</a>(&amp;j);
+        <a href="#ioxd_json_cstr">ioxd_json_cstr</a>(&amp;j, <span class="c-str">"new"</span>);
     <a href="#ioxd_json_end">ioxd_json_end</a>(&amp;j);
 <a href="#ioxd_json_end">ioxd_json_end</a>(&amp;j);
-if (!<a href="#ioxd_json_done">ioxd_json_done</a>(&amp;j)) { ... }                     // whole: nothing failed, nothing open</pre>
+<span class="c-kw">if</span> (!<a href="#ioxd_json_done">ioxd_json_done</a>(&amp;j)) { ... }                     <span class="c-cm">// whole: nothing failed, nothing open</span></pre>
 <p>Strings are emitted byte for byte, with only '"', '\' and the control characters escaped: invalid UTF-8 goes out exactly as it came in, so untrusted input has to be validated first. Every call returns false once the sink is gone (the peer left; the buffer is full), the nesting passed <a href="#IOXD_JSON_DEPTH">IOXD_JSON_DEPTH</a>, or the call had no place in the document - a key outside an object, a value where a key was due, an end with nothing open. The rest is then dropped, so checking the last call is enough; check done() after it to catch an end that was never written.</p></div>
 <dl class="trail">
 <dt>IOXD_JSON_DEPTH</dt><dd>levels: one bit of each mask below apiece</dd>
@@ -116,7 +116,7 @@ IOXD_JSON_VALUE(ioxd_json *j, x)
 </div>
 <div class="entry">
 <pre class="decl" id="IOXD_JSON_FIELD">
-IOXD_JSON_FIELD(ioxd_json *j, const char *name, x)
+IOXD_JSON_FIELD(ioxd_json *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *name, x)
 </pre>
 <div class="text"><p>A key and its value in one line. The answer goes through a function so that a field written for its effect - `<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n);` - is a plain statement and not a value the compiler sees discarded, while `if (<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n))` still reads it.</p></div>
 </div>
@@ -126,12 +126,12 @@ IOXD_JSON_STRUCT(name, FIELDS)
 IOXD_JSON_WRITER(name, FIELDS)
 </pre>
 <div class="text"><p>A struct described once, serialized with one call. The description is a list of fields, each line its kind, its C type (or, for a nested struct, that struct's name) and its name:</p>
-<pre class="ex">#define USER_FIELDS(X)                       \
-    X(VALUE,    int64_t,      id)            \
-    X(VALUE,    const char *, name)          \
+<pre class="ex"><span class="c-pp">#define USER_FIELDS(X)                       \</span>
+    X(VALUE,    <span class="c-ty">int64_t</span>,      id)            \
+    X(VALUE,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, name)          \
     X(OBJECT,   address,      address)       \
     X(OPTIONAL, address,      billing)       \
-    X(ARRAY,    const char *, tags,   n_tags)    \
+    X(ARRAY,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, tags,   n_tags)    \
     X(OBJECTS,  order,        orders, n_orders)
 <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(user, USER_FIELDS)</pre>
 <p>VALUE is a scalar, written by its C type; OBJECT a nested struct held by value; OPTIONAL a pointer to one, null where the pointer is NULL; ARRAY scalars and the field holding their count; OBJECTS the same for nested structs. <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a> defines the struct and the function - struct user, and user_to_json(<a href="#ioxd_json">ioxd_json</a> *, const struct user *); <a href="#IOXD_JSON_WRITER">IOXD_JSON_WRITER</a> only the function, for a struct declared elsewhere with the same fields. A nested struct's own <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a> comes first. Counts are size_t; arrays are pointers to their first element. A note beside a field is written as a block comment, the way playground/hello/main.c writes them: a // one would run on through the backslash and swallow the lines after it.</p></div>
@@ -140,28 +140,28 @@ IOXD_JSON_WRITER(name, FIELDS)
 <p>Written as you go, straight into the reply:</p>
 <pre class="ex"><a href="#ioxd_json">ioxd_json</a> j = <a href="#ioxd_json_reply">ioxd_json_reply</a>(ctx);
 <a href="#ioxd_json_object">ioxd_json_object</a>(&amp;j);
-    <a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, "id", id);
-    <a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, "name", name);
-    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, "tags"); <a href="#ioxd_json_array">ioxd_json_array</a>(&amp;j);
-        <a href="#ioxd_json_cstr">ioxd_json_cstr</a>(&amp;j, "new");
+    <a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"id"</span>, id);
+    <a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"name"</span>, name);
+    <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"tags"</span>); <a href="#ioxd_json_array">ioxd_json_array</a>(&amp;j);
+        <a href="#ioxd_json_cstr">ioxd_json_cstr</a>(&amp;j, <span class="c-str">"new"</span>);
     <a href="#ioxd_json_end">ioxd_json_end</a>(&amp;j);
 <a href="#ioxd_json_end">ioxd_json_end</a>(&amp;j);</pre>
 <p>A struct described once, nested objects and arrays included:</p>
-<pre class="ex">#define ORDER_FIELDS(X)        \
-    X(VALUE,   int,    number)  \
-    X(VALUE,   double, total)
+<pre class="ex"><span class="c-pp">#define ORDER_FIELDS(X)        \</span>
+    X(VALUE,   <span class="c-ty">int</span>,    number)  \
+    X(VALUE,   <span class="c-ty">double</span>, total)
 <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(order, ORDER_FIELDS)
 
-#define USER_FIELDS(X)                         \
-    X(VALUE,   int64_t,      id)               \
-    X(VALUE,   const char *, name)             /* NULL comes out as null */ \
-    X(ARRAY,   const char *, tags,   n_tags)   \
+<span class="c-pp">#define USER_FIELDS(X)                         \</span>
+    X(VALUE,   <span class="c-ty">int64_t</span>,      id)               \
+    X(VALUE,   <span class="c-kw">const</span> <span class="c-ty">char</span> *, name)             <span class="c-cm">/* NULL comes out as null */</span> \
+    X(ARRAY,   <span class="c-kw">const</span> <span class="c-ty">char</span> *, tags,   n_tags)   \
     X(OBJECTS, order,        orders, n_orders)
 <a href="#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(user, USER_FIELDS)
 
-struct user u = { .id = 42, .name = "Zoe", .tags = tags, .n_tags = 2, .orders = orders, .n_orders = 1 };
+<span class="c-kw">struct</span> user u = { .id = <span class="c-num">42</span>, .name = <span class="c-str">"Zoe"</span>, .tags = tags, .n_tags = <span class="c-num">2</span>, .orders = orders, .n_orders = <span class="c-num">1</span> };
 <a href="#ioxd_json">ioxd_json</a> j = <a href="#ioxd_json_reply">ioxd_json_reply</a>(ctx);
-user_to_json(&amp;j, &amp;u);                                 /* {"id":42,"name":"Zoe","tags":[...],"orders":[{...}]} */</pre>
+user_to_json(&amp;j, &amp;u);                                 <span class="c-cm">/* {"id":42,"name":"Zoe","tags":[...],"orders":[{...}]} */</span></pre>
 <h2>SEE ALSO</h2>
 <p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_JSON(3)</span></div>
