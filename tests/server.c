@@ -113,7 +113,7 @@ static void greet(ioxd_ctx *ctx)
     ioxd_slice body = ioxd_body_all(ctx);
     ioxd_kv    form[8];
     char       arena[512];
-    size_t     n = ioxd_kv_parse(body.p, body.len, form, 8, arena, sizeof arena);
+    size_t     n = ioxd_kv_parse(body.p, body.len, form, 8, arena, sizeof arena, NULL);
 
     ioxd_slice name = { "stranger", 8 };
     for (size_t i = 0; i < n; i++)

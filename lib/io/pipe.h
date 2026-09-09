@@ -42,7 +42,7 @@ void        ioxd_pipereader_close    (ioxd_pipereader *pr);                    /
 int         ioxd_pipereader_read     (ioxd_pipereader *pr, ioxd_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
 void        ioxd_pipereader_examine  (ioxd_pipereader *pr, size_t n);          /* looked at n live bytes: the next read waits for more */
 void        ioxd_pipereader_drop     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes */
-const char *ioxd_pipereader_keep     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes, kept: contiguous with the run; nullptr when there is no room */
+const char *ioxd_pipereader_keep     (ioxd_pipereader *pr, size_t n);          /* consume n live bytes but keep them, contiguous with the run; where they are, or nullptr: no room (FULL), or n past the live bytes */
 void        ioxd_pipereader_run_begin(ioxd_pipereader *pr);                    /* freeze the run; the next keep starts another */
 ioxd_slice  ioxd_pipereader_run      (const ioxd_pipereader *pr);              /* the run in progress */
 void        ioxd_pipereader_release  (ioxd_pipereader *pr);                    /* forget every kept byte; live bytes stay */

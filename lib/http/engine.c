@@ -11,6 +11,7 @@
 #include "io/pipe.h"
 #include "picohttpparser.h"
 
+#include <limits.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -26,6 +27,9 @@
 #endif
 #ifndef IOXD_DRAIN_MAX
 #define IOXD_DRAIN_MAX    (1024UL * 1024)   /* unread body discarded after a handler before we close instead */
+#endif
+#ifndef IOXD_TRAILER_MAX
+#define IOXD_TRAILER_MAX  4096      /* bytes of chunked trailers taken before the body is a 400 */
 #endif
 
 /* serve() hands req.headers to picohttpparser as its header array: a kv (two slices) must lay
@@ -44,6 +48,9 @@ struct serve_state {
     bool         body_whole;                /* ioxd_body_all kept it                              */
     int          body_err;                  /* 0, a status to answer (400, 413), or -1: peer gone */
     size_t       chunk_left;                /* data bytes of the current chunk still to deliver   */
+    bool         head_only;                 /* a HEAD request: the reply's body stays unsent      */
+    bool         no_body;                   /* decided with the head: HEAD, 1xx, 204, 304         */
+    bool         continue_sent;             /* the 100 Continue an Expect asked for went out      */
 };
 #define STATE(ctx)  ((struct serve_state *)(ctx)->priv)
 #define READER(ctx) (&STATE(ctx)->pipe->in)
@@ -68,37 +75,60 @@ static bool eq_ci(const char *a, size_t an, const char *b, size_t bn)
     return true;
 }
 
-/* Parse a decimal size; stops at the first non-digit. */
-static size_t parse_size(const char *s, size_t n)
+/* A Content-Length value: decimal digits and nothing else, into *out; false for anything else,
+ * including a number too large for size_t. Anything looser lets one request smuggle another
+ * behind a proxy that reads the value differently. */
+static bool parse_length(const char *s, size_t n, size_t *out)
 {
+    if (n == 0)
+        return false;
     size_t v = 0;
     for (size_t i = 0; i < n; i++) {
-        if (s[i] < '0' || s[i] > '9') break;
-        v = v * 10 + (size_t)(s[i] - '0');
+        unsigned d = (unsigned char)s[i] - (unsigned)'0';    /* wraps huge for a non-digit */
+        if (d > 9 || v > (SIZE_MAX - d) / 10)
+            return false;
+        v = v * 10 + d;
     }
-    return v;
+    *out = v;
+    return true;
+}
+
+/* The comma-separated tokens of a list header value, one per call from *at, blanks trimmed;
+ * false once the list is done. */
+static bool next_token(const char *value, size_t len, size_t *at, ioxd_slice *tok)
+{
+    while (*at < len && (value[*at] == ' ' || value[*at] == ',' || value[*at] == '\t')) (*at)++;
+    if (*at >= len)
+        return false;
+    size_t start = *at;
+    while (*at < len && value[*at] != ',') (*at)++;
+    size_t end = *at;                                      /* trim trailing blanks */
+    while (end > start && (value[end - 1] == ' ' || value[end - 1] == '\t')) end--;
+    *tok = (ioxd_slice){ value + start, end - start };
+    return true;
 }
 
 /* Is `tok` one of the comma-separated tokens in the header value [s, s+n)? Case-insensitive. */
 static bool token_present_ci(const char *value, size_t len, const char *tok)
 {
-    size_t tok_len = strlen(tok);
-    size_t at = 0;
-    while (at < len) {
-        while (at < len && (value[at] == ' ' || value[at] == ',' || value[at] == '\t')) at++;
-        size_t start = at;
-        while (at < len && value[at] != ',') at++;
-        size_t end = at;                                   /* trim trailing blanks */
-        while (end > start && (value[end - 1] == ' ' || value[end - 1] == '\t')) end--;
-        if (eq_ci(value + start, end - start, tok, tok_len)) return true;
-        at++;
-    }
+    size_t     tok_len = strlen(tok), at = 0;
+    ioxd_slice t;
+    while (next_token(value, len, &at, &t))
+        if (eq_ci(t.p, t.len, tok, tok_len))
+            return true;
     return false;
 }
 
-/* The three headers the engine itself needs; p == nullptr when absent. */
+/* What the engine picks from the request headers as it lower-cases their names: the framing
+ * fields, Host, Connection and Expect - and whether they make a request it must refuse. */
 struct picked_headers {
-    ioxd_slice content_length, transfer_enc, connection;
+    ioxd_slice content_length;
+    unsigned   n_content_length, n_transfer_enc, n_host;
+    bool       te_last_chunked;             /* the last transfer coding named is chunked        */
+    bool       te_other;                    /* a coding other than that final chunked was named  */
+    bool       close, keep_alive;           /* over every Connection line                        */
+    bool       expect_continue;
+    int        refuse;                      /* 0, or the status to answer: 400, 417              */
 };
 
 /* Lower-case ASCII in place, eight bytes per step. The bytes must all be below 0x80 - true for
@@ -119,25 +149,72 @@ static inline void lower_inplace(char *s, size_t n)
         if ((unsigned)(s[i] - 'A') < 26U) s[i] += 'a' - 'A';
 }
 
+/* One Transfer-Encoding line into the picked state: its codings join the list the earlier
+ * lines made, so a chunked that was last is last no more. */
+static void pick_transfer_encoding(struct picked_headers *picked, ioxd_slice value)
+{
+    picked->n_transfer_enc++;
+    if (picked->te_last_chunked)
+        picked->te_other = true;
+    picked->te_last_chunked = false;
+    size_t     at = 0;
+    ioxd_slice tok;
+    bool       any = false;
+    while (next_token(value.p, value.len, &at, &tok)) {
+        any = true;
+        size_t     peek = at;
+        ioxd_slice more;
+        bool last = !next_token(value.p, value.len, &peek, &more);
+        if (last && eq_ci(tok.p, tok.len, "chunked", 7))
+            picked->te_last_chunked = true;
+        else
+            picked->te_other = true;
+    }
+    if (!any)
+        picked->refuse = 400;                              /* an empty list */
+}
+
 /* One pass over the request headers: lower-case each name in place (the buffer is ours), so
  * handlers and this switch compare with plain memcmp. The switch on the name length rejects
- * nearly every header before a byte is compared. */
+ * nearly every header before a byte is compared. A folded continuation line (obs-fold) comes
+ * from the parser with no name: it must not be interpreted, so the request is refused. */
 static struct picked_headers pick_headers(ioxd_request *req)
 {
-    struct picked_headers picked = { { nullptr, 0 }, { nullptr, 0 }, { nullptr, 0 } };
+    struct picked_headers picked = {};
     for (size_t i = 0; i < req->n_headers; i++) {
         ioxd_kv *hdr  = &req->headers[i];
         char    *name = (char *)hdr->key.p;
+        if (!name) {
+            picked.refuse = 400;
+            continue;
+        }
         lower_inplace(name, hdr->key.len);
         switch (hdr->key.len) {
-        case 14:
-            if (memcmp(name, "content-length", 14) == 0) picked.content_length = hdr->value;
+        case 4:
+            if (memcmp(name, "host", 4) == 0) picked.n_host++;
             break;
-        case 17:
-            if (memcmp(name, "transfer-encoding", 17) == 0) picked.transfer_enc = hdr->value;
+        case 6:
+            if (memcmp(name, "expect", 6) == 0) {
+                if (eq_ci(hdr->value.p, hdr->value.len, "100-continue", 12)) picked.expect_continue = true;
+                else picked.refuse = 417;
+            }
             break;
         case 10:
-            if (memcmp(name, "connection", 10) == 0) picked.connection = hdr->value;
+            if (memcmp(name, "connection", 10) == 0) {
+                if (token_present_ci(hdr->value.p, hdr->value.len, "close"))      picked.close = true;
+                if (token_present_ci(hdr->value.p, hdr->value.len, "keep-alive")) picked.keep_alive = true;
+            }
+            break;
+        case 14:
+            if (memcmp(name, "content-length", 14) == 0) {
+                if (picked.n_content_length++ && !(hdr->value.len == picked.content_length.len
+                        && memcmp(hdr->value.p, picked.content_length.p, hdr->value.len) == 0))
+                    picked.refuse = 400;                   /* two that disagree */
+                picked.content_length = hdr->value;
+            }
+            break;
+        case 17:
+            if (memcmp(name, "transfer-encoding", 17) == 0) pick_transfer_encoding(&picked, hdr->value);
             break;
         default:
             break;
@@ -146,15 +223,12 @@ static struct picked_headers pick_headers(ioxd_request *req)
     return picked;
 }
 
-/* HTTP/1.1 keeps alive unless "close"; HTTP/1.0 only with "keep-alive". */
-static bool keep_alive_from(int minor_version, ioxd_slice connection)
+/* HTTP/1.1 keeps alive unless a Connection line says "close"; HTTP/1.0 only with "keep-alive". */
+static bool keep_alive_from(int minor_version, const struct picked_headers *picked)
 {
-    bool keep = minor_version >= 1;
-    if (connection.p) {
-        if      (token_present_ci(connection.p, connection.len, "close"))      keep = false;
-        else if (token_present_ci(connection.p, connection.len, "keep-alive")) keep = true;
-    }
-    return keep;
+    if (picked->close)
+        return false;
+    return minor_version >= 1 || picked->keep_alive;
 }
 
 /* ── the reply: head serialization and the write slab ──────────────────────────────────── */
@@ -213,6 +287,10 @@ static void send_status(ioxd_pipewriter *pw, int code)
     char head[128];
     int  len = snprintf(head, sizeof head, "HTTP/1.1 %d %s\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
                         code, ioxd_reason(code));
+    if (len < 0)
+        return;
+    if ((size_t)len >= sizeof head)
+        len = (int)sizeof head - 1;
     ioxd_pipewriter_reset(pw);                        /* whatever the handler had buffered is moot */
     ioxd_pipewriter_send(pw, head, (size_t)len);
 }
@@ -222,30 +300,39 @@ enum framing {
     FRAME_LENGTH,
     FRAME_CHUNKED,
     FRAME_UNTIL_CLOSE,
+    FRAME_NONE,                             /* a reply that cannot have one: 1xx, 204, a 304 with no length */
 };
+
+/* The status as it goes on the wire: three digits, or a 500 for a handler's mistake. */
+static int wire_status(int status)
+{
+    return status >= 100 && status <= 999 ? status : 500;
+}
 
 /* Serialize the head into dst by memcpy of precomposed pieces plus the integer writer - no
  * snprintf. Every field name goes out lower-cased: the engine's own are lowercase literals, a
- * handler's are folded as they are copied. Returns the length, or -1 if it does not fit. */
+ * handler's were folded as ioxd_header copied them, so they are one memcpy of the arena.
+ * Returns the length, or -1 if it does not fit. */
 static int build_head(const ioxd_ctx *ctx, char *dst, size_t cap, enum framing framing, size_t body_len)
 {
     const ioxd_response *res = &ctx->res;
     char *p   = dst;
     char *end = dst + cap;
+    int   status = wire_status(res->status);
 
 #define NEED(n)     do { if ((size_t)(end - p) < (size_t)(n)) return -1; } while (0)
 #define PUT(src, n) do { NEED(n); memcpy(p, (src), (size_t)(n)); p += (n); } while (0)
 #define PUTC(lit)   PUT((lit), sizeof(lit) - 1)
 
-    struct cslice line = status_line(res->status);
+    struct cslice line = status_line(status);
     if (line.p) {
         PUT(line.p, line.len);
     } else {
         PUTC("HTTP/1.1 ");
         NEED(3);
-        p += put_uint(p, (size_t)res->status);
+        p += put_uint(p, (size_t)status);
         PUTC(" ");
-        const char *reason = ioxd_reason(res->status);
+        const char *reason = ioxd_reason(status);
         PUT(reason, strlen(reason));
         PUTC("\r\n");
     }
@@ -272,14 +359,7 @@ static int build_head(const ioxd_ctx *ctx, char *dst, size_t cap, enum framing f
     else if (ctx->req.minor_version == 0)
         PUTC("connection: keep-alive\r\n");
 
-    for (size_t i = 0; i < res->n_headers; i++) {                 /* names go out lower-cased */
-        NEED(res->headers[i].key.len);
-        for (size_t j = 0; j < res->headers[i].key.len; j++)
-            *p++ = (char)lower_ascii((unsigned char)res->headers[i].key.p[j]);
-        PUTC(": ");
-        PUT(res->headers[i].value.p, res->headers[i].value.len);
-        PUTC("\r\n");
-    }
+    PUT(res->head, res->head_len);                               /* the handler's lines, serialized as added */
 
     PUTC("\r\n");
 #undef PUTC
@@ -308,19 +388,31 @@ static int fail(ioxd_response *res)
 /* Send the slab, with the head in front of it the first time. That first time decides the
  * framing: a final flush with the head unsent means the whole body is here (Content-Length, one
  * send); an early flush means the body outgrew the slab, so it streams - with the declared length
- * if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. */
+ * if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. It also
+ * settles what the request and the status dictate: no body at all after HEAD, a 1xx, 204 or
+ * 304 (RFC 9112 6.3), no framing header on a 1xx or 204, and "connection: close" when the
+ * body still on the wire is more than will be drained. A declared length is held to: a whole
+ * buffered reply gets the real one, a stream never exceeds it, and one that falls short closes. */
 static int flush(ioxd_ctx *ctx, bool final)
 {
-    ioxd_response   *res = &ctx->res;
-    ioxd_pipewriter *pw  = WRITER(ctx);
+    ioxd_response      *res   = &ctx->res;
+    ioxd_pipewriter    *pw    = WRITER(ctx);
+    struct serve_state *state = STATE(ctx);
     if (res->failed)
         return -1;
     char head[IOXD_HEAD_CAP];
     int  head_len = 0;
     if (!res->head_sent) {                                /* the first send: decide the framing */
+        int          status   = wire_status(res->status);
+        bool         bodyless = status < 200 || status == 204 || status == 304;
         enum framing framing  = FRAME_LENGTH;
-        size_t       body_len = res->has_length ? res->content_length : pw->len;
-        if (!res->has_length && !final) {
+        size_t       body_len = res->has_length && !final ? res->content_length : pw->len;
+        state->no_body = state->head_only || bodyless;
+        if (res->has_length && final)
+            res->content_length = pw->len;                /* buffered whole: the length is what was written */
+        if (bodyless) {
+            framing = status == 304 && res->has_length ? FRAME_LENGTH : FRAME_NONE;
+        } else if (!res->has_length && !final) {
             if (ctx->req.minor_version >= 1) {
                 framing = FRAME_CHUNKED;
                 res->chunked = true;
@@ -329,11 +421,33 @@ static int flush(ioxd_ctx *ctx, bool final)
                 res->close = true;
             }
         }
+        if (!state->body_done && !state->body_err) {      /* a body left unread: more than the drain takes means close */
+            size_t left = ctx->req.chunked ? SIZE_MAX : ctx->req.content_length - state->body_read;
+            if (left > IOXD_DRAIN_MAX || (ctx->req.expect_continue && !state->continue_sent))
+                res->close = true;                        /* an expecting client may never send it at all */
+        }
         head_len = build_head(ctx, head, sizeof head, framing, body_len);
-        if (head_len < 0)
+        if (head_len < 0) {
+            send_status(pw, 500);
             return fail(res);
+        }
         res->head_sent = true;
     }
+    if (state->no_body) {                                 /* the head alone; what was written as a body stays here */
+        ioxd_pipewriter_reset(pw);
+        if (head_len && ioxd_pipewriter_through(pw, head, (size_t)head_len) < 0)
+            return fail(res);
+        return 0;
+    }
+    bool over = false;
+    if (res->has_length) {                                /* never a byte past the declared length */
+        size_t left = res->content_length - res->body_sent;
+        if (pw->len > left) {
+            pw->len = left;
+            over    = true;
+        }
+    }
+    res->body_sent += pw->len;
     if (res->chunked && pw->len) {                        /* the slab's bytes as one chunk: size in front, CRLF behind */
         char  size_line[16];
         int   digits = put_hex(size_line, pw->len);
@@ -362,20 +476,24 @@ static int flush(ioxd_ctx *ctx, bool final)
     }
     if (ioxd_pipewriter_flush(pw) < 0)
         return fail(res);
+    if (over)
+        return fail(res);                                 /* the handler wrote past its own length: nothing more goes */
     return 0;
 }
 
 /* After the chain: send what is left - the whole reply if nothing went out yet - and close a
- * chunked stream. */
+ * chunked stream. A streamed reply that fell short of its declared length closes the
+ * connection, so the client sees it was cut. */
 static int finish(ioxd_ctx *ctx)
 {
     ioxd_response   *res = &ctx->res;
     ioxd_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
-    if (!res->head_sent || pw->len)                       /* nothing sent yet, or bytes still in the slab */
-        return flush(ctx, true);
-    if (res->chunked) {                                   /* streamed and drained: just the terminator */
+    if (!res->head_sent || pw->len) {                     /* nothing sent yet, or bytes still in the slab */
+        if (flush(ctx, true) < 0)
+            return -1;
+    } else if (res->chunked) {                            /* streamed and drained: just the terminator */
         char *back = ioxd_pipewriter_back(pw, 5);
         if (!back)
             return fail(res);
@@ -383,6 +501,8 @@ static int finish(ioxd_ctx *ctx)
         if (ioxd_pipewriter_flush(pw) < 0)
             return fail(res);
     }
+    if (res->has_length && !STATE(ctx)->no_body && res->body_sent != res->content_length)
+        res->close = true;
     return 0;
 }
 
@@ -415,7 +535,7 @@ static int write_formatted_heap(ioxd_ctx *ctx, const char *fmt, va_list ap, size
 {
     char *tmp = malloc(len + 1);
     if (!tmp)
-        return -1;
+        return fail(&ctx->res);                           /* the reply cannot be completed as promised */
     vsnprintf(tmp, len + 1, fmt, ap);
     int rc = ioxd_write(ctx, tmp, len);
     free(tmp);
@@ -487,6 +607,22 @@ static void body_fail(ioxd_ctx *ctx, int status)
     ctx->res.status      = status;
 }
 
+/* Before the first read of the body: a client that sent "Expect: 100-continue" is waiting for
+ * the interim reply before it sends a byte (RFC 9110 10.1.1), so it goes out now, ahead of
+ * anything the handler has buffered. False when the peer is gone. */
+static bool body_begin(ioxd_ctx *ctx)
+{
+    struct serve_state *state = STATE(ctx);
+    if (!ctx->req.expect_continue || state->continue_sent || ctx->res.head_sent)
+        return true;
+    state->continue_sent = true;
+    if (ioxd_pipewriter_through(WRITER(ctx), "HTTP/1.1 100 Continue\r\n\r\n", 25) < 0) {
+        state->body_err = -1;
+        return false;
+    }
+    return true;
+}
+
 /* The live bytes with something unexamined, or more of them; a failure recorded: no room is a
  * 413, the peer gone or the input ending inside the body is -1. */
 static bool body_bytes(ioxd_ctx *ctx, ioxd_slice *live)
@@ -516,14 +652,21 @@ static long body_line(ioxd_ctx *ctx, ioxd_slice *live)
     }
 }
 
-/* After the last chunk: trailer lines up to an empty one, then the body is done. */
+/* After the last chunk: trailer lines up to an empty one, then the body is done. They are
+ * dropped unread, and bounded, so a peer cannot hold the connection with an endless trailer. */
 static bool chunk_trailers(ioxd_ctx *ctx)
 {
-    ioxd_slice live = { nullptr, 0 };
+    ioxd_slice live  = { nullptr, 0 };
+    size_t     taken = 0;
     for (;;) {
         long len = body_line(ctx, &live);
         if (len < 0)
             return false;
+        taken += (size_t)len + 2;
+        if (taken > IOXD_TRAILER_MAX) {
+            body_fail(ctx, 400);
+            return false;
+        }
         ioxd_pipereader_drop(READER(ctx), (size_t)len + 2);
         if (len == 0)
             break;
@@ -533,13 +676,18 @@ static bool chunk_trailers(ioxd_ctx *ctx)
 }
 
 /* The next chunk's size line - hex digits, an optional extension, CRLF - into chunk_left. The
- * last chunk (size 0) also takes its trailers and ends the body. */
+ * last chunk (size 0) also takes its trailers and ends the body. The line is held to the
+ * grammar (RFC 9112 7.1): digits, then either the CRLF or blanks and a ';' with something after
+ * it; a size line the reader cannot hold is malformed, not too large. */
 static bool chunk_header(ioxd_ctx *ctx)
 {
     ioxd_slice live = { nullptr, 0 };
     long len = body_line(ctx, &live);
-    if (len < 0)
+    if (len < 0) {
+        if (STATE(ctx)->body_err == 413)
+            body_fail(ctx, 400);
         return false;
+    }
     size_t size = 0, i = 0;
     for (; i < (size_t)len; i++) {
         int digit = ioxd__hexval((unsigned char)live.p[i]);
@@ -551,7 +699,9 @@ static bool chunk_header(ioxd_ctx *ctx)
         }
         size = (size << 4) | (size_t)digit;
     }
-    bool ended = i == (size_t)len || live.p[i] == ';' || live.p[i] == ' ' || live.p[i] == '\t';
+    size_t j = i;
+    while (j < (size_t)len && (live.p[j] == ' ' || live.p[j] == '\t')) j++;
+    bool ended = (j == (size_t)len && j == i) || (j + 1 < (size_t)len && live.p[j] == ';');
     if (i == 0 || !ended) {
         body_fail(ctx, 400);
         return false;
@@ -597,6 +747,8 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx)
     if (state->body_whole)
         return req->body;
     if (state->body_read || state->body_err)                    /* already streaming, or failed */
+        return none;
+    if (!state->body_done && !body_begin(ctx))
         return none;
 
     if (req->chunked) {
@@ -675,7 +827,7 @@ static int chunk_data(ioxd_ctx *ctx, struct serve_state *state, char *dst, size_
     state->chunk_left -= (size_t)got;
     state->body_read  += (size_t)got;
     if (state->chunk_left == 0 && !chunk_end(ctx))
-        return -1;
+        return got;                                      /* what was copied still counts; the next call fails */
     return got;
 }
 
@@ -683,8 +835,14 @@ static int chunk_data(ioxd_ctx *ctx, struct serve_state *state, char *dst, size_
 int ioxd_body_read_until(ioxd_ctx *ctx, void *dst, size_t n)
 {
     struct serve_state *state = STATE(ctx);
-    if (state->body_err || n == 0)
+    if (state->body_err)
         return -1;
+    if (n == 0 || state->body_done)
+        return 0;
+    if (!body_begin(ctx))
+        return -1;
+    if (n > INT_MAX)
+        n = INT_MAX;                                     /* the count comes back as an int */
     char  *out = dst;
     size_t got = 0;
     while (got < n && !state->body_done) {
@@ -711,13 +869,15 @@ int ioxd_body_read_next_chunk(ioxd_ctx *ctx, void *dst, size_t cap)
         return -1;
     if (state->body_done)
         return 0;
+    if (!body_begin(ctx))
+        return -1;
     if (state->chunk_left == 0) {
         if (!chunk_header(ctx))
             return -1;
         if (state->body_done)
             return 0;
     }
-    if (state->chunk_left > cap) {                              /* the chunk does not fit dst */
+    if (state->chunk_left > cap || cap > INT_MAX) {              /* the chunk does not fit dst */
         body_fail(ctx, 413);
         return -1;
     }
@@ -781,7 +941,10 @@ static long read_head(ioxd_ctx *ctx)
                                        (struct phr_header *)req->headers, &req->n_headers,
                                        already);
         if (parsed >= 0) {
-            ioxd_pipereader_keep(pr, (size_t)parsed);      /* the head stays put, where it was parsed */
+            if (!ioxd_pipereader_keep(pr, (size_t)parsed)) {   /* the head stays put, where it was parsed */
+                send_status(WRITER(ctx), 431);
+                return -1;
+            }
             ioxd_pipereader_run_begin(pr);                 /* the body's kept bytes are a run of their own */
             return parsed;
         }
@@ -794,29 +957,64 @@ static long read_head(ioxd_ctx *ctx)
     }
 }
 
-/* The rest of the request from its head: path and query, the query split into params, the
- * headers lower-cased and the three the engine needs picked out. The body stays on the wire;
- * body_start is where it begins. */
-static void fill_request(ioxd_request *req, char *params_arena, size_t arena_cap)
+/* Does the slice begin with this literal, ignoring ASCII case? */
+static bool starts_ci(ioxd_slice s, const char *lit)
 {
-    const char *qmark = memchr(req->target.p, '?', req->target.len);
-    if (qmark) {
-        req->path  = (ioxd_slice){ req->target.p, (size_t)(qmark - req->target.p) };
-        req->query = (ioxd_slice){ qmark + 1, req->target.len - req->path.len - 1 };
-    } else {
-        req->path  = req->target;
-        req->query = (ioxd_slice){ req->target.p + req->target.len, 0 };
+    size_t n = strlen(lit);
+    return s.len >= n && eq_ci(s.p, n, lit, n);
+}
+
+/* The rest of the request from its head: path and query (an absolute-form target loses its
+ * scheme and authority first), the query split into params, the headers lower-cased and the
+ * ones the engine needs picked out, and the framing settled. The body stays on the wire.
+ * Returns 0, or the status the request must be refused with. */
+static int fill_request(ioxd_request *req, char *params_arena, size_t arena_cap)
+{
+    ioxd_slice target = req->target;
+    if (starts_ci(target, "http://") || starts_ci(target, "https://")) {   /* absolute-form: RFC 9112 3.2.2 */
+        size_t      skip  = target.p[4] == ':' ? 7 : 8;
+        const char *slash = memchr(target.p + skip, '/', target.len - skip);
+        target = slash ? (ioxd_slice){ slash, (size_t)(target.p + target.len - slash) } : (ioxd_slice){ "/", 1 };
     }
+    const char *qmark = memchr(target.p, '?', target.len);
+    if (qmark) {
+        req->path  = (ioxd_slice){ target.p, (size_t)(qmark - target.p) };
+        req->query = (ioxd_slice){ qmark + 1, target.len - req->path.len - 1 };
+    } else {
+        req->path  = target;
+        req->query = (ioxd_slice){ target.p + target.len, 0 };
+    }
+    bool truncated = false;
     req->n_params = req->query.len
-        ? ioxd_kv_parse(req->query.p, req->query.len, req->params, IOXD_MAX_PARAMS, params_arena, arena_cap)
+        ? ioxd_kv_parse(req->query.p, req->query.len, req->params, IOXD_MAX_PARAMS, params_arena, arena_cap, &truncated)
         : 0;
     req->n_route_params = 0;                          /* the router fills these */
+    req->body           = (ioxd_slice){ nullptr, 0 };  /* on demand: ioxd_body_all fills it */
 
     struct picked_headers picked = pick_headers(req);
-    req->chunked        = picked.transfer_enc.p && token_present_ci(picked.transfer_enc.p, picked.transfer_enc.len, "chunked");
-    req->content_length = picked.content_length.p ? parse_size(picked.content_length.p, picked.content_length.len) : 0;
-    req->keep_alive     = keep_alive_from(req->minor_version, picked.connection);
-    req->body           = (ioxd_slice){ nullptr, 0 };      /* on demand: ioxd_body_all fills it */
+    req->chunked         = false;
+    req->content_length  = 0;
+    req->keep_alive      = keep_alive_from(req->minor_version, &picked);
+    req->expect_continue = picked.expect_continue;
+    if (picked.refuse)
+        return picked.refuse;
+    if (truncated)                                    /* part of the query would be missing: never act on part */
+        return req->n_params == IOXD_MAX_PARAMS ? 400 : 414;
+    if (req->minor_version >= 1 ? picked.n_host != 1 : picked.n_host > 1)
+        return 400;                                   /* RFC 9112 3.2: exactly one Host on HTTP/1.1 */
+    if (picked.n_transfer_enc) {
+        if (picked.n_content_length)
+            return 400;                               /* both framings: RFC 9112 6.1 */
+        if (picked.te_other)
+            return 501;                               /* a transfer coding we do not implement */
+        if (!picked.te_last_chunked)
+            return 400;                               /* chunked, but not as the last coding */
+        req->chunked = true;
+    } else if (picked.n_content_length) {
+        if (!parse_length(picked.content_length.p, picked.content_length.len, &req->content_length))
+            return 400;
+    }
+    return 0;
 }
 
 /* The engine's bookkeeping for reading the body on demand: where it starts, what already
@@ -840,6 +1038,8 @@ static void init_response(ioxd_response *res, ioxd_pipewriter *pw)
     res->has_length     = false;
     res->chunked        = false;
     res->failed         = false;
+    res->body_sent      = 0;
+    res->head_len       = 0;
     ioxd_pipewriter_reset(pw);
 }
 
@@ -859,10 +1059,15 @@ void ioxd__serve(struct ioxd_pipe *pipe)
         long head_len = read_head(&ctx);
         if (head_len < 0)
             return;
-        fill_request(&ctx.req, params, sizeof params);
+        int refused = fill_request(&ctx.req, params, sizeof params);
         init_body_state(&state, pipe, &ctx.req);
         init_response(&ctx.res, &pipe->out);
         ctx.user = nullptr;
+        if (refused) {                                /* the framing cannot be trusted: answer, close */
+            send_status(&pipe->out, refused);
+            return;
+        }
+        state.head_only = ctx.req.method.len == 4 && memcmp(ctx.req.method.p, "HEAD", 4) == 0;
 
         ioxd__dispatch(&ctx);                         /* middleware chain + endpoint */
 
@@ -871,7 +1076,10 @@ void ioxd__serve(struct ioxd_pipe *pipe)
                 send_status(&pipe->out, state.body_err);
             return;
         }
-        drain_body(&ctx);                             /* what the handler left unread */
+        if (ctx.req.expect_continue && !state.continue_sent && !state.body_done)
+            ctx.res.close = true;                     /* never asked for: the client may not send it, so no drain */
+        else
+            drain_body(&ctx);                         /* what the handler left unread */
         if (state.body_err)
             return;
         if (finish(&ctx) < 0)                         /* sends; suspends meanwhile */

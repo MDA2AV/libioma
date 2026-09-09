@@ -167,7 +167,7 @@ static void test_kv_parse(void)
 {
     ioxd_kv kv[8];
     char    arena[64];
-    size_t  n = ioxd_kv_parse("a=1&b=hello+world&c=%41%zz&&d&e=", 32, kv, 8, arena, sizeof arena);
+    size_t  n = ioxd_kv_parse("a=1&b=hello+world&c=%41%zz&&d&e=", 32, kv, 8, arena, sizeof arena, NULL);
     CHECK(n == 5);
     CHECK(ioxd_slice_eq(kv[0].key, "a") && ioxd_slice_eq(kv[0].value, "1"));
     CHECK(ioxd_slice_eq(kv[1].key, "b") && ioxd_slice_eq(kv[1].value, "hello world"));
@@ -176,15 +176,15 @@ static void test_kv_parse(void)
     CHECK(ioxd_slice_eq(kv[4].key, "e") && kv[4].value.len == 0);
     CHECK(kv[0].value.p != arena && kv[1].value.p >= arena);   /* a view when undecoded, else in the arena */
 
-    n = ioxd_kv_parse("k%20ey=v&x=y", 12, kv, 8, arena, sizeof arena);
+    n = ioxd_kv_parse("k%20ey=v&x=y", 12, kv, 8, arena, sizeof arena, NULL);
     CHECK(n == 2 && ioxd_slice_eq(kv[0].key, "k ey"));
-    n = ioxd_kv_parse("a=1&b=x+y&c=3", 13, kv, 8, arena, 0);   /* no arena: the pair needing it is skipped */
+    n = ioxd_kv_parse("a=1&b=x+y&c=3", 13, kv, 8, arena, 0, NULL);   /* no arena: the pair needing it is skipped */
     CHECK(n == 2 && ioxd_slice_eq(kv[1].key, "c"));
-    n = ioxd_kv_parse("a=1&b=2&c=3", 11, kv, 1, arena, sizeof arena);
+    n = ioxd_kv_parse("a=1&b=2&c=3", 11, kv, 1, arena, sizeof arena, NULL);
     CHECK(n == 1);
 
     int v;
-    CHECK(ioxd_kv_parse("page=12", 7, kv, 8, arena, sizeof arena) == 1 && ioxd_to_int(kv[0].value, &v) && v == 12);
+    CHECK(ioxd_kv_parse("page=12", 7, kv, 8, arena, sizeof arena, NULL) == 1 && ioxd_to_int(kv[0].value, &v) && v == 12);
 }
 
 /* The JSON writer into memory: what a document looks like, byte for byte. */

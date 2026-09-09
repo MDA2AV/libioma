@@ -49,7 +49,10 @@ static void compact(ioxd_pipereader *pr)
     }
 }
 
-/* Move the current buffer's run and live bytes into buf, so what follows can join them. */
+/* Move the current buffer's run and live bytes into buf, so what follows can join them. A run
+ * that was kept in place has pointers out to it, so its buffer stays pinned rather than going
+ * back to the ring - unless another buffer is pinned already (the HTTP engine's head), in which
+ * case the run just moves and ioxd_pipereader_run is where to find it. */
 static bool gather(ioxd_pipereader *pr)
 {
     size_t live = pr->has_cur ? pr->cur.len - pr->cur_pos : 0;
@@ -60,6 +63,11 @@ static bool gather(ioxd_pipereader *pr)
         memcpy(pr->buf + pr->floor, (const char *)pr->cur.ptr + pr->run_start, run);
         pr->run_start = pr->floor;
         pr->floor    += run;
+        if (!pr->has_pinned) {
+            pr->pinned        = pr->cur;
+            pr->has_pinned    = true;
+            pr->cur_is_pinned = true;
+        }
     }
     pr->run_in_cur = false;
     if (live)
@@ -136,12 +144,15 @@ void ioxd_pipereader_examine(ioxd_pipereader *pr, size_t n)
     pr->examined = n;
 }
 
-/* Forget n live bytes of the current place. */
+/* Forget n live bytes of the current place; never more than there are. */
 static void consume(ioxd_pipereader *pr, size_t n)
 {
+    size_t have = live_span(pr).len;
+    if (n > have)
+        n = have;
     if (pr->live_in_buf) {
         pr->buf_pos += n;
-        if (pr->buf_pos == pr->buf_end) {
+        if (pr->buf_pos >= pr->buf_end) {
             pr->buf_pos = pr->buf_end = pr->floor;
             pr->live_in_buf = false;
         }
@@ -160,6 +171,11 @@ void ioxd_pipereader_drop(ioxd_pipereader *pr, size_t n)
 const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
 {
     const char *kept;
+    ioxd_slice  live = live_span(pr);
+    if (n > live.len)
+        return nullptr;                                 /* more than is live: the caller's mistake */
+    if (n == 0)
+        return live.p;
     if (pr->live_in_buf) {
         if (pr->run_len == 0) {                          /* a run starts where the live bytes are */
             pr->run_in_cur = false;
@@ -187,6 +203,7 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
         memcpy(pr->buf + pr->floor, (const char *)pr->cur.ptr + pr->cur_pos, n);
         kept = pr->buf + pr->floor;
         pr->floor += n;
+        pr->buf_pos = pr->buf_end = pr->floor;          /* buf's (empty) live region moves up with it */
     } else {
         return nullptr;                                 /* nothing live: the caller's mistake */
     }
@@ -293,7 +310,7 @@ bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
     if (pr->error)
         return false;
     if (!pr->live_in_buf) {
-        if (pr->has_cur && pr->cur_pos < pr->cur.len) {      /* live bytes in place: they move first */
+        if (pr->has_cur) {                                /* live bytes, or a run, in place: they move first */
             if (!gather(pr))
                 return false;
         } else {
@@ -355,7 +372,8 @@ void *ioxd_pipewriter_reserve(ioxd_pipewriter *pw, size_t n)
 
 void ioxd_pipewriter_advance(ioxd_pipewriter *pw, size_t n)
 {
-    pw->len += n;
+    size_t room = ioxd_pipewriter_room(pw);
+    pw->len += n < room ? n : room;                     /* never past the slab, whatever was claimed */
 }
 
 char *ioxd_pipewriter_front(ioxd_pipewriter *pw, size_t n)
@@ -415,6 +433,7 @@ void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gat
 
 void ioxd__pipe_close(struct ioxd_pipe *p)
 {
+    ioxd_pipewriter_flush(&p->out);                     /* what a handler left in the slab still goes */
     ioxd_pipereader_close(&p->in);
 }
 

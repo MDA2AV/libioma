@@ -12,6 +12,7 @@
 #include <locale.h>
 #include <math.h>
 #include <pthread.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -74,7 +75,8 @@ ioxd_slice ioxd_slice_trim(ioxd_slice s)
     return s;
 }
 
-/* A NUL-terminated copy of the slice in buf; false when it did not all fit. */
+/* A NUL-terminated copy of the slice in buf; false when it did not all fit, or when the slice
+ * holds a NUL itself - the copy would read as a shorter string to whatever takes it. */
 bool ioxd_cstr(ioxd_slice s, char *buf, size_t cap)
 {
     if (cap == 0)
@@ -83,7 +85,7 @@ bool ioxd_cstr(ioxd_slice s, char *buf, size_t cap)
     if (n)
         memcpy(buf, s.p, n);
     buf[n] = '\0';
-    return n == s.len;
+    return n == s.len && memchr(buf, '\0', n) == nullptr;
 }
 
 /* ── conversions ───────────────────────────────────────────────────────────────────────── */
@@ -162,9 +164,11 @@ bool ioxd_to_double(ioxd_slice s, double *out)
     memcpy(text, s.p, s.len);
     text[s.len] = '\0';
     pthread_once(&c_locale_once, make_c_locale);
+    if (!c_locale)
+        return false;                                    /* no "C" locale: never the process one, which may read "2.5" as 2 */
     char  *end;
     errno = 0;
-    double v = c_locale ? strtod_l(text, &end, c_locale) : strtod(text, &end);
+    double v = strtod_l(text, &end, c_locale);
     if (end != text + s.len || (errno == ERANGE && (v == HUGE_VAL || v == -HUGE_VAL)))
         return false;
     *out = v;
@@ -191,7 +195,8 @@ bool ioxd_to_bool(ioxd_slice s, bool *out)
 
 /* ── key/value parsing ─────────────────────────────────────────────────────────────────── */
 
-/* Percent-decode [s, s+n) into dst ('+' becomes a space, a malformed %XX is kept as is).
+/* Percent-decode [s, s+n) into dst ('+' becomes a space; a malformed %XX, and %00 - a NUL
+ * would end the value early for every C string function - are kept as they are).
  * Never longer than the input; returns the decoded length. */
 static size_t decode(const char *src, size_t len, char *dst)
 {
@@ -201,7 +206,7 @@ static size_t decode(const char *src, size_t len, char *dst)
             dst[out++] = ' ';
         } else if (src[i] == '%' && i + 2 < len) {
             int hi = ioxd__hexval((unsigned char)src[i + 1]), lo = ioxd__hexval((unsigned char)src[i + 2]);
-            if (hi >= 0 && lo >= 0) {
+            if (hi >= 0 && lo >= 0 && !(hi == 0 && lo == 0)) {
                 dst[out++] = (char)(hi * 16 + lo);
                 i += 2;
             } else {
@@ -226,12 +231,19 @@ static bool decode_into(ioxd_slice *slice, char *arena, size_t arena_cap, size_t
     return true;
 }
 
-/* "k=v&k2=v2" into pairs; see http.h. One pass per pair finds '=' and '&' and notes whether
- * either side needs decoding, so the common undecoded pair is a view and costs a short scan. */
-size_t ioxd_kv_parse(const char *text, size_t len, ioxd_kv *out, size_t cap, char *arena, size_t arena_cap)
+/* "k=v&k2=v2" into pairs; see slice.h. One pass per pair finds '=' and '&' and notes whether
+ * either side needs decoding, so the common undecoded pair is a view and costs a short scan.
+ * *truncated (may be NULL) says whether a pair was left out: past cap, or not fitting the arena. */
+size_t ioxd_kv_parse(const char *text, size_t len, ioxd_kv *out, size_t cap, char *arena, size_t arena_cap,
+                     bool *truncated)
 {
     size_t used = 0, count = 0, start = 0;
-    while (start < len && count < cap) {
+    bool   lost = false;
+    while (start < len) {
+        if (count == cap) {
+            lost = true;
+            break;
+        }
         size_t end = start, eq_at = len;
         bool   key_needs_decode = false, value_needs_decode = false;
         for (; end < len && text[end] != '&'; end++) {
@@ -249,45 +261,137 @@ size_t ioxd_kv_parse(const char *text, size_t len, ioxd_kv *out, size_t cap, cha
             size_t mark = used;
             bool   ok   = (!key_needs_decode   || decode_into(&key,   arena, arena_cap, &used)) &&
                           (!value_needs_decode || decode_into(&value, arena, arena_cap, &used));
-            if (ok)
+            if (ok) {
                 out[count++] = (ioxd_kv){ key, value };
-            else
+            } else {
                 used = mark;                               /* skip the pair, give its arena back */
+                lost = true;
+            }
         }
         start = end + 1;
     }
+    if (truncated)
+        *truncated = lost;
     return count;
 }
 
 /* ── shaping the reply ─────────────────────────────────────────────────────────────────── */
 
-/* Add a header to the reply. false once the head is on the wire, or when the table is full. */
-bool ioxd_header(ioxd_ctx *ctx, const char *name, const char *value)
+/* An HTTP token character (RFC 9110): what a field name is made of. */
+static bool is_tchar(unsigned char c)
 {
-    ioxd_response *res = &ctx->res;
-    if (res->head_sent || res->n_headers == IOXD_MAX_RESP_HEADERS)
-        return false;
-    res->headers[res->n_headers++] = (ioxd_kv){ { name, strlen(name) }, { value, strlen(value) } };
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+        || (c != 0 && strchr("!#$%&'*+-.^_`|~", c) != nullptr);
+}
+
+/* A field value may hold anything but a control byte: no CR or LF (they would end the line
+ * and start another: response splitting), no NUL, no other C0 byte except a tab, no DEL. */
+static bool valid_field_value(const char *v, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        unsigned char c = (unsigned char)v[i];
+        if ((c < 0x20 && c != '\t') || c == 0x7f)
+            return false;
+    }
     return true;
 }
 
-/* Set the content type from a C string (a slice can be assigned to res.content_type directly). */
-void ioxd_content_type(ioxd_ctx *ctx, const char *type)
+/* The bytes of the head arena a copied content type takes: it sits at the far end, so the
+ * serialized lines can grow from the front without it in their way. */
+static size_t content_type_reserved(const ioxd_response *res)
 {
-    ctx->res.content_type = (ioxd_slice){ type, strlen(type) };
+    uintptr_t p = (uintptr_t)res->content_type.p, lo = (uintptr_t)res->head, hi = lo + sizeof res->head;
+    return p >= lo && p < hi ? res->content_type.len : 0;
 }
 
-/* Declare the body length, so a body larger than the slab streams with Content-Length. */
-void ioxd_content_length(ioxd_ctx *ctx, size_t n)
+/* n bytes appended to the reply's head arena, or nullptr when they do not fit. */
+static char *head_room(ioxd_response *res, size_t n)
 {
+    if (n > sizeof res->head - content_type_reserved(res) - res->head_len)
+        return nullptr;
+    char *at = res->head + res->head_len;
+    res->head_len += n;
+    return at;
+}
+
+/* Bytes into the arena at *at, which moves past them: a line is assembled from its parts. */
+static void put_bytes(char **at, const void *src, size_t n)
+{
+    memcpy(*at, src, n);
+    *at += n;
+}
+
+/* Add a header to the reply: copied into the head arena as its serialized line, the name
+ * lower-cased, and remembered in headers[] as slices into that line. False once the head is on
+ * the wire, when the table or the arena is full, when the name is not a token or the value has
+ * a control byte, and for the headers the engine writes itself - "content-type" is taken as
+ * ioxd_content_type would. */
+bool ioxd_header(ioxd_ctx *ctx, const char *name, const char *value)
+{
+    ioxd_response *res = &ctx->res;
+    if (!name || !value)
+        return false;
+    size_t name_len = strlen(name), value_len = strlen(value);
+    if (res->head_sent || res->n_headers == IOXD_MAX_RESP_HEADERS || name_len == 0)
+        return false;
+    for (size_t i = 0; i < name_len; i++)
+        if (!is_tchar((unsigned char)name[i]))
+            return false;
+    if (!valid_field_value(value, value_len))
+        return false;
+    if (name_len == 12 && strncasecmp(name, "content-type", 12) == 0)
+        return ioxd_content_type(ctx, value);
+    if ((name_len == 14 && strncasecmp(name, "content-length", 14) == 0)
+     || (name_len == 17 && strncasecmp(name, "transfer-encoding", 17) == 0)
+     || (name_len == 10 && strncasecmp(name, "connection", 10) == 0))
+        return false;
+    char *line = head_room(res, name_len + 2 + value_len + 2);
+    if (!line)
+        return false;
+    char *at = line;
+    for (size_t i = 0; i < name_len; i++)
+        *at++ = (char)lower((unsigned char)name[i]);
+    put_bytes(&at, ": ", 2);
+    put_bytes(&at, value, value_len);
+    put_bytes(&at, "\r\n", 2);
+    res->headers[res->n_headers++] = (ioxd_kv){ { line, name_len }, { line + name_len + 2, value_len } };
+    return true;
+}
+
+/* Set the content type from a C string: a copy in the head arena (a slice that outlives the
+ * handler can be assigned to res.content_type directly). False once the head is sent, or for a
+ * value with a control byte, or when the arena is full. */
+bool ioxd_content_type(ioxd_ctx *ctx, const char *type)
+{
+    ioxd_response *res = &ctx->res;
+    if (!type || res->head_sent)
+        return false;
+    size_t n = strlen(type);
+    if (!valid_field_value(type, n))
+        return false;
+    if (n > sizeof res->head - res->head_len)
+        return false;
+    char *copy = res->head + sizeof res->head - n, *at = copy;   /* at the far end, past the lines */
+    put_bytes(&at, type, n);
+    res->content_type = (ioxd_slice){ copy, n };
+    return true;
+}
+
+/* Declare the body length, so a body larger than the slab streams with Content-Length. False
+ * once the head is sent. */
+bool ioxd_content_length(ioxd_ctx *ctx, size_t n)
+{
+    if (ctx->res.head_sent)
+        return false;
     ctx->res.content_length = n;
     ctx->res.has_length     = true;
+    return true;
 }
 
-/* Write a C string. */
+/* Write a C string (NULL writes nothing). */
 int ioxd_text(ioxd_ctx *ctx, const char *s)
 {
-    return ioxd_write(ctx, s, strlen(s));
+    return s ? ioxd_write(ctx, s, strlen(s)) : 0;
 }
 
 /* The reason phrase for a status code; "Unknown" if unlisted. */

@@ -13,10 +13,10 @@
  *
  *     static void user(ioxd_ctx *ctx) {
  *         ioxd_slice id = ctx->req.route_params[0].value;              // the :id of "/users/:id"
- *         ioxd_printf(c, "user %.*s\n", (int)id.len, id.p);
+ *         ioxd_printf(ctx, "user %.*s\n", (int)id.len, id.p);
  *     }
  *     int main(void) {
- *         ioxd_route("GET", "/users/:id", user);
+ *         IOXD_GET("/users/:id", user);                       // or ioxd_route(NULL, "GET", "/users/:id", user)
  *         return ioxd_run(0, 8080);                            // one worker per core
  *     }
  */

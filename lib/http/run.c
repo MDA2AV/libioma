@@ -144,8 +144,16 @@ static void serve_http(struct ioxd_pipe *pipe)
         ioxd__tls_close_notify(pipe);
 }
 
-int ioxd_run(int workers, int port)
+/* ioxd_run, through the header's inline: the caller's sizeof(ioxd_ctx) must be ours, or the
+ * limits that size it (IOXD_MAX_HEADERS and friends) were redefined on one side and every
+ * handler would read the context at the wrong offsets. */
+int ioxd__run(int workers, int port, size_t ctx_size)
 {
+    if (ctx_size != sizeof(ioxd_ctx)) {
+        fprintf(stderr, "ioxd_run: the application's ioxd_ctx is %zu bytes, the library's %zu: "
+                        "IOXD_MAX_* limits redefined on one side\n", ctx_size, sizeof(ioxd_ctx));
+        return 1;
+    }
     ioxd__router_build();                          /* the routes, resolved once, shared read-only */
     return run_workers(workers, port, serve_http);
 }

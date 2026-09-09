@@ -9,7 +9,7 @@ ioxd-hello
 ioxd.pc
 
 # old binaries
-ioxd
+/ioxd
 ioxd-tiny
 ioxd-trace
 stackful

@@ -40,11 +40,12 @@ static void make_ex_index(void)
     ex_index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 }
 
-/* The last OpenSSL error, as text. */
+/* The outermost OpenSSL error, as text; the queue is cleared, so nothing stale is read later. */
 static const char *ssl_error_text(void)
 {
     static thread_local char text[256];
-    ERR_error_string_n(ERR_get_error(), text, sizeof text);
+    ERR_error_string_n(ERR_peek_last_error(), text, sizeof text);
+    ERR_clear_error();
     return text;
 }
 
@@ -221,7 +222,7 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
             return -1;
         }
         records++;
-        int n;
+        int n = -1;
         while (*plain_len < PLAIN_MAX && (n = SSL_read(ssl, plain + *plain_len, (int)(PLAIN_MAX - *plain_len))) > 0)
             *plain_len += (size_t)n;
         if (*plain_len == PLAIN_MAX && SSL_pending(ssl) > 0) {
