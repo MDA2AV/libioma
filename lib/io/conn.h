@@ -80,3 +80,167 @@ void    ioxd__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a
 void    ioxd__recv_drain(conn_t *c);                     /* shutdown: end a recv parked on -ENOBUFS */
 void    ioxd__close_socket(proactor_t *p, int fd);       /* close a socket through the ring      */
 void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */
+
+/* ── conn.c: the notes ──────────────────────────────────────────────────────────────────── */
+
+/*
+ * conn.c - one connection's life on its worker: the pooled conn_t, its two owners' refcount,
+ * the multishot recv and the queue of buffers it delivers, parking on -ENOBUFS, closing, and
+ * the awaits the pipe is built on.
+ */
+
+/* at file scope:
+ *   - ── the object ──────────────────────────────────────────────────────────────────────────
+ *     [/ * Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two ]
+ *   - ── the recv side ───────────────────────────────────────────────────────────────────────
+ *     [void ioxd__arm_recv(proactor_t *p, conn_t *c)]
+ *   - ── close ───────────────────────────────────────────────────────────────────────────────
+ *     [/ * Close the socket with a CLOSE SQE, which rides the next enter with the rest o]
+ *   - ── awaits ──────────────────────────────────────────────────────────────────────────────
+ *     [/ * The next received buffer, whole: the caller owns it until ioxd__bufring_retur]
+ */
+
+/* await_op:
+ * Stage a one-shot op and park until its CQE. The loop fills op->res and resumes us.
+ */
+
+/* submit_cancel:
+ * Ask the kernel to cancel the op carrying that user_data. The acknowledgement CQE is ignored.
+ */
+
+/* cancel_recv:
+ * Cancel the multishot recv, at most one cancel in flight: the queue-full policy would
+ * otherwise stage another on every arrival while the queue stays full. Cleared on the terminal
+ * CQE.
+ */
+
+/* end_input:
+ * End the input once: the first reason wins, so a cancel we asked for afterwards does not
+ * overwrite the peer's FIN or the error that really ended it.
+ */
+
+/* ioxd__conn_new:
+ * Take a conn_t from the pool (or calloc one) and reset it for a fresh fd. Two owners hold it:
+ * the handler coroutine and the multishot recv, so refs starts at 2.
+ */
+
+/* conn_unref:
+ * Drop one owner's ref. At zero the conn holds nothing (fd closed, buffers returned) and goes
+ * back to the pool, or is freed past the cap.
+ */
+
+/* ioxd__conn_pool_drain:
+ * Free the pool at worker teardown.
+ */
+
+/* ioxd__arm_recv:
+ * Arm the multishot recv: one SQE, then a CQE per arrival, each in a buffer the kernel picks.
+ *   - a fresh arm: no cancel of ours is in flight  [c->cancelling = false;]
+ */
+
+/* wake_reader:
+ * Resume the coroutine parked waiting for bytes, if there is one. It pops the queue itself.
+ */
+
+/* note_starved:
+ * Count a recv that found the buffer ring empty, and say so on stderr at most once a second
+ * per worker: starvation otherwise shows only as latency, and the cure is a larger
+ * -DBUF_COUNT.
+ */
+
+/* starved_push:
+ * Park a connection whose recv ended on -ENOBUFS until a buffer comes back.
+ */
+
+/* starved_remove:
+ * Forget a parked connection (it closed before any buffer came back). The tail slides down
+ * rather than the last entry taking its place: the loop re-arms the list oldest first.
+ */
+
+/* ioxd__on_recv:
+ * A recv CQE: queue the data and wake the reader, or record the end of input and drop the
+ * recv's ref. -ENOBUFS is not an error: the buffer group ran dry, so park and re-arm later.
+ *   - the multishot ends here: no cancel is left in flight  [c->cancelling = false;]
+ *   - the pause we asked for; starvation stopped it first  [if (c->pausing) {]
+ *   - the input already ended: there is nothing to re-arm  [if (c->eof) {]
+ *   - peer FIN (0), an error, or our own cancel  [if (result <= 0) {]
+ *   - our pause, not the end of input  [if (c->pausing && !c->closed && result == -ECANCELED)
+ *     {]
+ *   - Kernel TLS reports a control record - the peer's alert, a KeyUpdate it cannot honour -
+ *     as -EIO. The TLS design treats that as the end of input, so a close_notify reads like a
+ *     FIN.  [end_input(c, result == -EIO && c->listener->certs ? 0 : result);]
+ *   - a parked reader sees 0 / -errno  [wake_reader(c);]
+ *   - the recv's ref; may recycle c  [conn_unref(c);]
+ *   - A positive result must name the buffer it landed in. Nothing can be done with bytes we
+ *     cannot find, so end the input the way the queue-full policy does.  [end_input(c,
+ *     -EPROTO);]
+ *   - the handler is gone; nobody will read it  [ioxd__bufring_return(&p->bufs, buf_id);]
+ *   - The handler is not draining. Rather than let one peer hoard the buffer group, end its
+ *     input: the next read sees -ENOBUFS.  [ioxd__bufring_return(&p->bufs, buf_id);]
+ *   - the kernel ended the multishot: re-arm  [if (!more) {]
+ *   - ended on its own while a pause was asked  [if (c->pausing && !c->closed) {]
+ *   - shutting down without a blanket cancel  [} else if (p->cancel_each && !c->closed) {]
+ */
+
+/* ioxd__recv_drain:
+ * Shutdown: a recv parked on -ENOBUFS holds no operation the kernel can cancel, so end its
+ * input by hand. Its handler wakes with an error, unwinds and closes the connection like any
+ * other.
+ */
+
+/* ioxd__close_socket:
+ * Close the socket with a CLOSE SQE, which rides the next enter with the rest of the batch: no
+ * syscall here, and the close stays in order behind the SQEs already staged for that same
+ * socket - a plain close(2) would race them. A file slot is named by index, a real fd by
+ * itself.
+ *   - only a negative result is news  [sqe->user_data = TAG_CLOSE;]
+ *   - slot + 1; 0 would mean "a real fd"  [sqe->file_index = (uint32_t)fd + 1;]
+ */
+
+/* conn_close:
+ * Runs once when the handler returns: cancel the recv, hand unread buffers back, close the fd,
+ * drop the handler's ref. The recv's own ref drops on its terminal CQE.
+ *   - the recv side's reference; ours, dropped last, keeps c alive  [c->refs--;]
+ */
+
+/* ioxd__conn_main:
+ * The connection's coroutine: run the worker's handler to completion, then close.
+ */
+
+/* ioxd__await_item:
+ * The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends
+ * until one arrives; 1 with the item, 0 at the end of input, <0 an error.
+ *   - ioxd__on_recv wakes us  [coro_yield();]
+ */
+
+/* ioxd__recv_pause:
+ * Stop the multishot recv so nothing more leaves the socket, and park until it has stopped. 0
+ * once it is paused, -1 when the input ended instead - the caller has nothing left to program.
+ *   - data may still land meanwhile: fine, it is queued  [while (c->recv == RECV_ARMED) {]
+ *   - it ended while we were stopping it  [if (c->eof)]
+ */
+
+/* ioxd__recv_resume:
+ * Arm the recv again after a pause. False when there is nothing to arm - the input ended, or
+ * the handler is already gone - so a prologue learns that its connection went away under it.
+ *   - The worker is stopping and its blanket cancel has already been and gone: a recv armed
+ *     now would never be cancelled and the handler would park behind it until the grace period
+ *     ran out. End the input instead, and let the handler unwind like everyone else's.
+ *     [end_input(c, -ECANCELED);]
+ *   - the recv's ref; the handler still holds its own  [conn_unref(c);]
+ */
+
+/* ioxd__setsockopt:
+ *   - The plain fallback needs a real descriptor, and under registered files (the default)
+ *     c->fd is a slot index, so it is dead code there: kernel TLS then wants a kernel with
+ *     SOCKET_URING_OP_SETSOCKOPT (6.7+), or a build with -DFIXED_FILES=0.  [if ((rc ==
+ *     -EOPNOTSUPP || rc == -EINVAL) && !c->p->ring.fixed_files)]
+ *   - a kernel without the command  [if ((rc == -EOPNOTSUPP || rc == -EINVAL) &&
+ *     !c->p->ring.fixed_files)]
+ */
+
+/* await_send:
+ * Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno.
+ *   - no SIGPIPE; the loop finishes short sends (kernel TLS refuses MSG_WAITALL)
+ *     [sqe->msg_flags = MSG_NOSIGNAL;]
+ */

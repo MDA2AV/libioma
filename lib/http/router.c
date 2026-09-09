@@ -1,9 +1,3 @@
-/*
- * router.c - groups, endpoints, middleware, and the segment tree they resolve into. Everything is
- * registered before the workers start and resolved once by ioxd_run; after that it is read-only
- * and every worker shares it without a lock. A request costs one walk down the tree and one call
- * through its endpoint's flat middleware chain.
- */
 #include "http/router.h"
 
 #include "http/internal.h"
@@ -12,53 +6,48 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define SEEN_MAX  8                                 /* end-of-path nodes one walk remembers */
-#define ALLOW_MAX 16                                /* methods a 405's allow header lists   */
+#define SEEN_MAX  8
+#define ALLOW_MAX 16
 
 struct ioxd_group {
-    ioxd_group *parent;                             /* nullptr only for the root */
-    const char *prefix;                             /* our copy of the caller's */
+    ioxd_group *parent;
+    const char *prefix;
     ioxd_mw     mws[IOXD_MAX_MW];
     int         n_mws;
 };
 
 struct ioxd_endpoint {
-    ioxd_endpoint *next;                            /* the registration list */
+    ioxd_endpoint *next;
     ioxd_group    *group;
-    const char    *method;                          /* our copy of the caller's */
+    const char    *method;
     size_t         method_len;
-    const char    *path;                            /* below the group's prefix; our copy too */
-    int            seq;                             /* registration order, for the allow header */
+    const char    *path;
+    int            seq;
     ioxd_handler   fn;
     ioxd_mw        own[IOXD_MAX_MW];
     int            n_own;
-    /* resolved by ioxd__router_build */
-    char          *full;                            /* the whole path, prefixes included */
-    ioxd_slice     names[IOXD_MAX_ROUTE_PARAMS];    /* the :name captures, in path order */
+
+    char          *full;
+    ioxd_slice     names[IOXD_MAX_ROUTE_PARAMS];
     size_t         n_names;
-    ioxd_mw       *chain;                           /* root, each group outer to inner, then own */
+    ioxd_mw       *chain;
     int            n_chain;
 };
 
-/* One segment of the tree; the root is the empty one. */
 struct node {
-    ioxd_slice      seg;                            /* the static segment this node is */
-    struct node   **kids;                           /* static children */
+    ioxd_slice      seg;
+    struct node   **kids;
     int             n_kids;
-    struct node    *param;                          /* the child that takes any segment */
-    ioxd_endpoint **eps;                            /* the endpoints here, one per method */
+    struct node    *param;
+    ioxd_endpoint **eps;
     int             n_eps;
 };
 
-/* Every end-of-path node a walk reached, for a 405's allow header: a path can end more than one
- * route ("/users/new" is also the "/users/:id" of a capture route), and all of their methods are
- * allowed. A path that ends more than SEEN_MAX of them loses the rest of the list. */
 struct seen {
     const struct node *nodes[SEEN_MAX];
     int                n;
 };
 
-/* The chain cursor handed to each middleware; ioxd_next_run advances it. */
 struct ioxd_next {
     const ioxd_mw *mws;
     int            n;
@@ -68,25 +57,22 @@ struct ioxd_next {
 
 static void not_found(ioxd_ctx *ctx);
 
-static ioxd_group     g_root = { .prefix = "" };    /* no prefix; ioxd_use's middleware */
-static ioxd_group    *g_current = &g_root;          /* the script form's open group */
-static ioxd_endpoint *g_first, *g_last;             /* endpoints in registration order */
-static int            g_n_eps;                      /* how many, so each gets its seq */
-static struct node    g_tree;                       /* the root node */
+static ioxd_group     g_root = { .prefix = "" };
+static ioxd_group    *g_current = &g_root;
+static ioxd_endpoint *g_first, *g_last;
+static int            g_n_eps;
+static struct node    g_tree;
 static ioxd_handler   g_fallback = not_found;
 static bool           g_built;
 
-/* Exact slice compare. */
 static bool same(ioxd_slice a, ioxd_slice b)
 {
     return a.len == b.len && memcmp(a.p, b.p, a.len) == 0;
 }
 
-/* Is this the endpoint's method? name must be a literal, for the sizeof. */
 #define method_is(ep, name) ((ep)->method_len == sizeof(name) - 1 && \
                              memcmp((ep)->method, (name), sizeof(name) - 1) == 0)
 
-/* Out of memory at startup: nothing sensible to continue with. */
 static void *must(void *p)
 {
     if (!p) {
@@ -96,10 +82,6 @@ static void *must(void *p)
     return p;
 }
 
-/* ── registration ──────────────────────────────────────────────────────────────────────── */
-
-/* Registration is over once ioxd_run has resolved the table: it is read-only from then on and
- * the workers are already reading it, so anything later is dropped with a word about it. */
 static bool too_late(const char *what, const char *which)
 {
     if (!g_built)
@@ -108,7 +90,6 @@ static bool too_late(const char *what, const char *which)
     return true;
 }
 
-/* A group below parent (nullptr: the root) at prefix. */
 ioxd_group *ioxd_group_new(ioxd_group *parent, const char *prefix)
 {
     ioxd_group *group = must(calloc(1, sizeof *group));
@@ -117,7 +98,6 @@ ioxd_group *ioxd_group_new(ioxd_group *parent, const char *prefix)
     return group;
 }
 
-/* Middleware around everything below the group. */
 void ioxd_group_use(ioxd_group *group, ioxd_mw mw)
 {
     if (!group)
@@ -131,7 +111,6 @@ void ioxd_group_use(ioxd_group *group, ioxd_mw mw)
     group->mws[group->n_mws++] = mw;
 }
 
-/* Root middleware: every request. */
 void ioxd_use(ioxd_mw mw)
 {
     if (too_late("middleware for", "the root"))
@@ -139,7 +118,6 @@ void ioxd_use(ioxd_mw mw)
     ioxd_group_use(&g_root, mw);
 }
 
-/* An endpoint in a group (nullptr: the root). */
 ioxd_endpoint *ioxd_route(ioxd_group *group, const char *method, const char *path, ioxd_handler fn)
 {
     if (too_late(method, path))
@@ -159,7 +137,6 @@ ioxd_endpoint *ioxd_route(ioxd_group *group, const char *method, const char *pat
     return ep;
 }
 
-/* Middleware around one endpoint. */
 void ioxd_endpoint_use(ioxd_endpoint *endpoint, ioxd_mw mw)
 {
     if (!endpoint)
@@ -173,9 +150,6 @@ void ioxd_endpoint_use(ioxd_endpoint *endpoint, ioxd_mw mw)
     endpoint->own[endpoint->n_own++] = mw;
 }
 
-/* --- the script form (the IOXD_ macros) --- */
-
-/* Open a group below the current one and make it current; its middleware list ends at a null. */
 ioxd_group *ioxd__group_begin(struct ioxd_group_args args)
 {
     ioxd_group *group = ioxd_group_new(g_current, args.prefix);
@@ -185,7 +159,6 @@ ioxd_group *ioxd__group_begin(struct ioxd_group_args args)
     return group;
 }
 
-/* Close the current group; null, so the block's loop ends. */
 ioxd_group *ioxd__group_end(void)
 {
     if (g_current->parent)
@@ -193,22 +166,17 @@ ioxd_group *ioxd__group_end(void)
     return nullptr;
 }
 
-/* The block's cleanup handler, where the compiler has one: a break, return or goto out of an
- * IOXD_GROUP skips the loop's increment, so the group is popped here instead. A block that ended
- * on its own already popped and nulled the variable, and this does nothing. */
 void ioxd__group_pop(ioxd_group **open)
 {
     if (*open)
         ioxd__group_end();
 }
 
-/* The group a script-form registration goes into. */
 ioxd_group *ioxd__group_current(void)
 {
     return g_current;
 }
 
-/* An endpoint in the current group, with its middleware list (ended by a null). */
 ioxd_endpoint *ioxd__endpoint(const char *method, struct ioxd_endpoint_args args)
 {
     ioxd_endpoint *ep = ioxd_route(g_current, method, args.path, args.fn);
@@ -217,7 +185,6 @@ ioxd_endpoint *ioxd__endpoint(const char *method, struct ioxd_endpoint_args args
     return ep;
 }
 
-/* Replace the built-in 404 fallback. */
 void ioxd_default(ioxd_handler fn)
 {
     if (too_late("a fallback", "handler"))
@@ -225,9 +192,6 @@ void ioxd_default(ioxd_handler fn)
     g_fallback = fn;
 }
 
-/* ── resolution, once, from ioxd_run ───────────────────────────────────────────────────── */
-
-/* The next segment of a path from *at, slashes skipped; false at the end. */
 static bool next_segment(const char **at, const char *end, ioxd_slice *seg)
 {
     const char *p = *at;
@@ -245,8 +209,6 @@ static bool next_segment(const char **at, const char *end, ioxd_slice *seg)
     return true;
 }
 
-/* Put one part of n bytes in front of what is already at buf + *at, with a '/' between them when
- * neither side brought one - so a group "/api" and a path "users" join as "/api/users". */
 static void prepend(char *buf, size_t *at, const char *part, size_t n)
 {
     if (n && buf[*at] && part[n - 1] != '/' && buf[*at] != '/')
@@ -255,9 +217,6 @@ static void prepend(char *buf, size_t *at, const char *part, size_t n)
     memcpy(buf + *at, part, n);
 }
 
-/* The endpoint's whole path: its groups' prefixes, outermost first, then its own path. Written
- * right to left, from the innermost group up, so no list of the groups is needed, then moved to
- * the front of the buffer over whatever the joining slashes did not need. */
 static char *full_path(const ioxd_endpoint *ep)
 {
     size_t len = strlen(ep->path), parts = 1;
@@ -265,7 +224,7 @@ static char *full_path(const ioxd_endpoint *ep)
         len += strlen(g->prefix);
         parts++;
     }
-    char  *full = must(malloc(len + parts + 1));            /* at most one joining '/' per part */
+    char  *full = must(malloc(len + parts + 1));
     size_t at   = len + parts;
     full[at] = '\0';
     prepend(full, &at, ep->path, strlen(ep->path));
@@ -275,8 +234,6 @@ static char *full_path(const ioxd_endpoint *ep)
     return full;
 }
 
-/* The endpoint's middleware, flat: the root's, each group's outer to inner, then its own. Filled
- * right to left, like the path. */
 static void flatten_chain(ioxd_endpoint *ep)
 {
     int n = ep->n_own;
@@ -294,7 +251,6 @@ static void flatten_chain(ioxd_endpoint *ep)
     }
 }
 
-/* The static child for a segment, made if missing. */
 static struct node *child(struct node *node, ioxd_slice seg)
 {
     for (int i = 0; i < node->n_kids; i++)
@@ -308,8 +264,6 @@ static struct node *child(struct node *node, ioxd_slice seg)
     return kid;
 }
 
-/* Put an endpoint into the tree along its full path; a ':name' segment goes through the capture
- * child and its name is kept with the endpoint. A duplicate keeps the first. */
 static void insert(ioxd_endpoint *ep)
 {
     struct node *node = &g_tree;
@@ -340,8 +294,6 @@ static void insert(ioxd_endpoint *ep)
     node->eps[node->n_eps++] = ep;
 }
 
-/* How deep the open group is; anything but zero at ioxd_run means an IOXD_GROUP block was left
- * without its end, and every registration after it silently nested inside. */
 static int group_depth(void)
 {
     int depth = 0;
@@ -350,7 +302,6 @@ static int group_depth(void)
     return depth;
 }
 
-/* Resolve everything registered: full paths into the tree, middleware into flat chains. */
 void ioxd__router_build(void)
 {
     if (g_built)
@@ -367,11 +318,6 @@ void ioxd__router_build(void)
     }
 }
 
-/* ── a request ─────────────────────────────────────────────────────────────────────────── */
-
-/* The endpoint at a node for the method, or nullptr. A node with a GET and no HEAD answers HEAD
- * with its GET endpoint (RFC 9110 9.3.2): the handler still sees "HEAD" as the method, and the
- * engine drops the body it writes. */
 static const ioxd_endpoint *endpoint_for(const struct node *node, ioxd_slice method)
 {
     const ioxd_endpoint *get = nullptr;
@@ -384,12 +330,6 @@ static const ioxd_endpoint *endpoint_for(const struct node *node, ioxd_slice met
     return method.len == 4 && memcmp(method.p, "HEAD", 4) == 0 ? get : nullptr;
 }
 
-/* Walk the tree along the path from at, the segments that capture nodes take going into
- * req->route_params (raw values; the names come with the endpoint, and dispatch decodes). The
- * static child is tried before the capture, so a static segment wins, and the capture is tried
- * when the static branch comes to nothing - including when it reaches the end without this
- * method. Returns the endpoint for the method, or nullptr; every node the path itself reached
- * with endpoints on it lands in *seen, for a 405. */
 static const ioxd_endpoint *walk(const struct node *node, const char *at, const char *end,
                                  ioxd_request *req, struct seen *seen)
 {
@@ -404,7 +344,7 @@ static const ioxd_endpoint *walk(const struct node *node, const char *at, const 
             const ioxd_endpoint *ep = walk(node->kids[i], at, end, req, seen);
             if (ep)
                 return ep;
-            break;                                  /* static children are unique: no other candidate */
+            break;
         }
     }
     if (node->param && req->n_route_params < IOXD_MAX_ROUTE_PARAMS) {
@@ -418,9 +358,6 @@ static const ioxd_endpoint *walk(const struct node *node, const char *at, const 
     return nullptr;
 }
 
-/* Percent-decode a captured segment into the request's arena and point it there ('+' is a plain
- * '+' in a path, and a malformed %XX is kept as is). Untouched when it has nothing to decode, or
- * when the arena has no room for it. */
 static ioxd_slice decoded(ioxd_slice raw, char *arena, size_t cap, size_t *used)
 {
     if (!memchr(raw.p, '%', raw.len) || *used + raw.len > cap)
@@ -443,7 +380,6 @@ static ioxd_slice decoded(ioxd_slice raw, char *arena, size_t cap, size_t *used)
     return (ioxd_slice){ dst, out };
 }
 
-/* Is this method already in the list? Two nodes of one walk can allow the same one. */
 static bool listed(const ioxd_endpoint *out[], int n, const ioxd_endpoint *ep)
 {
     for (int i = 0; i < n; i++)
@@ -453,8 +389,6 @@ static bool listed(const ioxd_endpoint *out[], int n, const ioxd_endpoint *ep)
     return false;
 }
 
-/* The endpoints of every node the walk reached, each method once, in registration order: an
- * insertion sort by seq, which is all the ordering a handful of methods needs. */
 static int allowed_endpoints(const struct seen *seen, const ioxd_endpoint *out[ALLOW_MAX])
 {
     int n = 0;
@@ -474,9 +408,6 @@ static int allowed_endpoints(const struct seen *seen, const ioxd_endpoint *out[A
     return n;
 }
 
-/* Those methods as "GET, HEAD, POST" in the request's arena, HEAD written after a GET that has
- * no HEAD of its own since that is what answers it. nullptr when there is nothing to say, or
- * when the list would not fit. */
 static const char *allow_value(ioxd_request *req, const struct seen *seen)
 {
     const ioxd_endpoint *eps[ALLOW_MAX];
@@ -508,13 +439,9 @@ static const char *allow_value(ioxd_request *req, const struct seen *seen)
     return req->route_arena;
 }
 
-/* Run the next middleware, or the endpoint once the chain is exhausted. A middleware that does
- * not call this short-circuits the request. The cursor moves in place, so a middleware that calls
- * this a second time does not replay what is behind it: once the chain has run out the call does
- * nothing at all. */
 void ioxd_next_run(ioxd_ctx *ctx, ioxd_next *next)
 {
-    if (next->i > next->n)                          /* the chain and the handler are both spent */
+    if (next->i > next->n)
         return;
     int at = next->i++;
     if (at < next->n)
@@ -523,7 +450,6 @@ void ioxd_next_run(ioxd_ctx *ctx, ioxd_next *next)
         next->handler(ctx);
 }
 
-/* A handler behind a chain; a direct call when the chain is empty. */
 static void run(ioxd_ctx *ctx, const ioxd_mw *mws, int n, ioxd_handler fn)
 {
     if (n == 0) {
@@ -534,18 +460,16 @@ static void run(ioxd_ctx *ctx, const ioxd_mw *mws, int n, ioxd_handler fn)
     ioxd_next_run(ctx, &next);
 }
 
-/* The built-in fallbacks. */
 static void not_found(ioxd_ctx *ctx)
 {
     ctx->res.status = 404;
     ioxd_text(ctx, "404 Not Found\n");
 }
-static void not_allowed(ioxd_ctx *ctx)               /* status and allow are set before its chain */
+static void not_allowed(ioxd_ctx *ctx)
 {
     ioxd_text(ctx, "405 Method Not Allowed\n");
 }
 
-/* Find the request's endpoint and run it behind its chain; the fallbacks run behind the root's. */
 void ioxd__dispatch(ioxd_ctx *ctx)
 {
     ioxd_request *req  = &ctx->req;
@@ -563,7 +487,7 @@ void ioxd__dispatch(ioxd_ctx *ctx)
         return;
     }
     req->n_route_params = 0;
-    if (seen.n) {                                   /* the path is known, the method is not */
+    if (seen.n) {
         const char *allow = allow_value(req, &seen);
         ctx->res.status = 405;
         if (allow)

@@ -1,6 +1,3 @@
-/*
- * run.c - ioxd_run: one proactor thread per core serving HTTP, until SIGINT/SIGTERM.
- */
 #include "http/engine.h"
 #include "http/router.h"
 #include "io/pipe.h"
@@ -18,22 +15,18 @@
 
 static volatile sig_atomic_t g_stop;
 
-/* SIGINT/SIGTERM: raise the flag every worker loop polls. */
 static void on_signal(int sig)
 {
     (void)sig;
     g_stop = 1;
 }
 
-/* pthread entry: the worker's whole life. */
 static void *worker_thread(void *arg)
 {
     proactor_run(arg);
     return nullptr;
 }
 
-/* CPUs this process may run on (its cpuset), so the default is one worker per available core -
- * never a fixed count that would oversubscribe a small cpuset. */
 static int cpu_count(void)
 {
     cpu_set_t set;
@@ -47,8 +40,6 @@ static int cpu_count(void)
     return n > 0 ? (int)n : 1;
 }
 
-/* Lift the soft fd limit to the hard one: open connections and the registered file table are
- * both checked against it, and the default soft limit is often 1024. */
 static void raise_nofile(void)
 {
     struct rlimit rl;
@@ -58,8 +49,6 @@ static void raise_nofile(void)
     }
 }
 
-/* The configuration for the runs that follow: what ioxd_configure was given, zeros where the
- * default is wanted. Validated on the way in, so the run never sees a bad value. */
 static ioxd_config g_config;
 
 static bool power_of_two(unsigned v)
@@ -86,7 +75,6 @@ int ioxd_configure(const ioxd_config *config)
     return 0;
 }
 
-/* The configuration a worker gets: what was set, the build's defaults for the rest. */
 static ioxd_config effective_config(void)
 {
     ioxd_config c = g_config;
@@ -99,7 +87,6 @@ static ioxd_config effective_config(void)
     return c;
 }
 
-/* The ports bound before the run, each with its store or none; every worker opens all of them. */
 static struct listener g_listeners[IOXD_MAX_LISTENERS];
 static int             g_n_listeners;
 
@@ -113,9 +100,6 @@ int ioxd_bind(int port, ioxd_certs *certs)
     return 0;
 }
 
-/* Worker threads (workers <= 0: one per available core), one proactor each, running `handler`
- * on every connection of every bound port until SIGINT/SIGTERM. What ioxd_run and ioxd_run_pipes
- * share. */
 static int run_workers(int workers, handler_fn handler)
 {
     if (workers <= 0)
@@ -125,7 +109,7 @@ static int run_workers(int workers, handler_fn handler)
         return 2;
     }
 
-    g_stop = 0;                           /* a previous run's signal must not stop this one at once */
+    g_stop = 0;
     raise_nofile();
     signal(SIGPIPE, SIG_IGN);
     struct sigaction sa;
@@ -156,7 +140,7 @@ static int run_workers(int workers, handler_fn handler)
         ws[i].stop    = &g_stop;
         if (pthread_create(&th[i], nullptr, worker_thread, &ws[i]) != 0) {
             perror("pthread_create");
-            g_stop = 1;                   /* the ones already running must retire, not serve on alone */
+            g_stop = 1;
             rc = 1;
             break;
         }
@@ -172,14 +156,13 @@ static int run_workers(int workers, handler_fn handler)
     for (int i = 0; i < started; i++)
         pthread_join(th[i], nullptr);
     for (int i = 0; i < started; i++)
-        if (ws[i].failed)                 /* a worker whose ring died: the run did not succeed */
+        if (ws[i].failed)
             rc = 1;
     free(th);
     free(ws);
     return rc;
 }
 
-/* A TLS listener's connection runs the handshake before its handler; a plain one goes straight in. */
 static int prologue(struct ioxd_pipe *pipe)
 {
     struct listener *l = pipe->in.conn->listener;
@@ -195,9 +178,6 @@ static void serve_http(struct ioxd_pipe *pipe)
         ioxd__tls_close_notify(pipe);
 }
 
-/* ioxd_run, through the header's inline: the caller's sizeof(ioxd_ctx) must be ours, or the
- * limits that size it (IOXD_MAX_HEADERS and friends) were redefined on one side and every
- * handler would read the context at the wrong offsets. */
 int ioxd__run(int workers, size_t ctx_size)
 {
     if (ctx_size != sizeof(ioxd_ctx)) {
@@ -205,7 +185,7 @@ int ioxd__run(int workers, size_t ctx_size)
                         "IOXD_MAX_* limits redefined on one side\n", ctx_size, sizeof(ioxd_ctx));
         return 1;
     }
-    ioxd__router_build();                          /* the routes, resolved once, shared read-only */
+    ioxd__router_build();
     return run_workers(workers, serve_http);
 }
 

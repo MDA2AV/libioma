@@ -1,9 +1,3 @@
-/*
- * tls/handshake.c - the prologue of a TLS connection: an OpenSSL handshake over the pipe, the
- * traffic secrets caught by the keylog callback, HKDF-Expand-Label into key and IV, and the keys
- * into the socket, so the kernel does every record from then on. The design is in the TLS
- * notes (notes/TLS.md, kept beside the repository rather than in it).
- */
 #include "tls/handshake.h"
 #include "tls/store.h"
 #include "io/internal.h"
@@ -24,14 +18,13 @@
 #include <openssl/ssl.h>
 #include <pthread.h>
 
-#define SECRET_LEN     32U                            /* SHA-256 suite: the traffic secrets       */
-#define RECORD_MAX     (5 + 16384 + 256)              /* header, plaintext, tag and padding       */
-#define PLAIN_MAX      IOXD_PIPE_GATHER               /* early plaintext: what the reader can take */
-#define KDF_FAILED     (-4096)                        /* install's own failure, apart from errnos  */
+#define SECRET_LEN     32U
+#define RECORD_MAX     (5 + 16384 + 256)
+#define PLAIN_MAX      IOXD_PIPE_GATHER
+#define KDF_FAILED     (-4096)
 
-/* The secrets of one handshake, found through the SSL's ex_data. */
 struct secrets {
-    unsigned char tx[SECRET_LEN], rx[SECRET_LEN];     /* server and client application traffic secrets */
+    unsigned char tx[SECRET_LEN], rx[SECRET_LEN];
     bool          have_tx, have_rx;
 };
 
@@ -42,7 +35,6 @@ static void make_ex_index(void)
     ex_index = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 }
 
-/* The outermost OpenSSL error, as text; the queue is cleared, so nothing stale is read later. */
 static const char *ssl_error_text(void)
 {
     static thread_local char text[256];
@@ -51,7 +43,6 @@ static const char *ssl_error_text(void)
     return text;
 }
 
-/* The value of a hex digit, or -1. */
 static int hexdigit(char c)
 {
     if (c >= '0' && c <= '9') return c - '0';
@@ -60,7 +51,6 @@ static int hexdigit(char c)
     return -1;
 }
 
-/* 64 hex characters into 32 bytes. */
 static bool unhex(const char *hex, unsigned char *out)
 {
     for (size_t i = 0; i < SECRET_LEN; i++) {
@@ -72,7 +62,6 @@ static bool unhex(const char *hex, unsigned char *out)
     return true;
 }
 
-/* "SERVER_TRAFFIC_SECRET_0 <client random> <secret>" and its CLIENT twin: the two we need. */
 void ioxd__tls_keylog(const SSL *ssl, const char *line)
 {
     struct secrets *s = SSL_get_ex_data(ssl, ex_index);
@@ -85,12 +74,11 @@ void ioxd__tls_keylog(const SSL *ssl, const char *line)
     if (strncmp(line, "CLIENT_TRAFFIC_SECRET_0 ", 24) == 0) { tag = line + 24; into = s->rx; have = &s->have_rx; }
     if (!tag)
         return;
-    const char *secret = strchr(tag, ' ');            /* past the client random */
+    const char *secret = strchr(tag, ' ');
     if (secret && strlen(secret + 1) >= (size_t)2 * SECRET_LEN && unhex(secret + 1, into))
         *have = true;
 }
 
-/* RFC 8446 HKDF-Expand-Label(secret, label, "", n). */
 static bool expand_label(const unsigned char *secret, const char *label, unsigned char *out, size_t n)
 {
     unsigned char info[64];
@@ -102,7 +90,7 @@ static bool expand_label(const unsigned char *secret, const char *label, unsigne
     at += 6;
     memcpy(info + at, label, strlen(label));
     at += strlen(label);
-    info[at++] = 0;                                   /* empty context */
+    info[at++] = 0;
     EVP_PKEY_CTX *k = EVP_PKEY_CTX_new_id(EVP_PKEY_HKDF, nullptr);
     if (!k)
         return false;
@@ -117,7 +105,6 @@ static bool expand_label(const unsigned char *secret, const char *label, unsigne
     return ok;
 }
 
-/* One direction's keys into the socket, from its traffic secret and the record sequence. */
 static int install(conn_t *c, int direction, const unsigned char *secret, uint64_t seq)
 {
     unsigned char key[16], iv[12];
@@ -127,7 +114,7 @@ static int install(conn_t *c, int direction, const unsigned char *secret, uint64
     ci.info.version     = TLS_1_3_VERSION;
     ci.info.cipher_type = TLS_CIPHER_AES_GCM_128;
     memcpy(ci.key, key, sizeof key);
-    memcpy(ci.salt, iv, 4);                           /* the 12-byte nonce, as the kernel splits it */
+    memcpy(ci.salt, iv, 4);
     memcpy(ci.iv, iv + 4, 8);
     for (unsigned i = 0; i < 8; i++)
         ci.rec_seq[i] = (unsigned char)(seq >> (56U - 8U * i));
@@ -138,7 +125,6 @@ static int install(conn_t *c, int direction, const unsigned char *secret, uint64
     return rc;
 }
 
-/* Everything the write BIO holds, out through the pipe. */
 static int flush_outbound(struct ioxd_pipe *pipe, BIO *wbio)
 {
     char buf[4096];
@@ -149,18 +135,11 @@ static int flush_outbound(struct ioxd_pipe *pipe, BIO *wbio)
     return ioxd_pipewriter_flush(&pipe->out);
 }
 
-/* The length of the TLS record whose 5-byte header is at rec, header included. */
 static size_t record_len(const unsigned char *rec)
 {
     return 5 + ((size_t)rec[3] << 8 | rec[4]);
 }
 
-/* One whole TLS record out of the reader into rec: 1 when taken, -1 on error. During the
- * handshake it waits for delivery. While draining it never waits: 0 when nothing delivered is
- * left, which means the socket is at a record boundary; the tail of a record cut by the pause is
- * fetched straight from the socket instead. OpenSSL gets exactly one record per feed, so what a
- * client sent after its Finished stays in the reader for the drain rather than vanishing into
- * the read BIO. */
 static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec, size_t *len)
 {
     ioxd_pipereader *pr = &pipe->in;
@@ -170,11 +149,11 @@ static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec
         int rc = draining ? ioxd_pipereader_avail(pr, &live) : ioxd_pipereader_read(pr, &live);
         if (rc < 0 || (rc == 0 && !draining))
             return -1;
-        if (rc == 0) {                                /* nothing more was delivered */
+        if (rc == 0) {
             if (have == 0)
                 return 0;
             if (ioxd__recv_exact(pr->conn, rec + have, need - have) < 0)
-                return -1;                            /* the rest of a split record, from the socket */
+                return -1;
             have = need;
         } else {
             size_t k = live.len < need - have ? live.len : need - have;
@@ -192,7 +171,6 @@ static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec
     return 1;
 }
 
-/* The next record the client sent, into the read BIO. */
 static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
 {
     size_t len;
@@ -201,15 +179,10 @@ static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
     return BIO_write(rbio, rec, (int)len) == (int)len ? 0 : -1;
 }
 
-/* After the handshake, before the kernel takes over receiving: the client may already have sent
- * application data, part of it delivered to us, part still in the socket. Kernel RX starts at a
- * record boundary in the socket, so with the multishot recv stopped this takes whole records
- * from what was delivered - fetching the tail of a split one straight from the socket - through
- * OpenSSL, keeping the plaintext aside. The count consumed is the RX record sequence. */
 static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio, unsigned char *plain,
                           size_t *plain_len, const char **why)
 {
-    unsigned char *rec     = plain + PLAIN_MAX;       /* scratch for one record, past the plaintext */
+    unsigned char *rec     = plain + PLAIN_MAX;
     long           records = 0;
     for (;;) {
         size_t len;
@@ -219,8 +192,8 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
             return -1;
         }
         if (rc == 0)
-            return records;                           /* the socket is at a boundary */
-        if (rec[0] != 23) {                           /* an alert, or a handshake message: nothing we can hand over */
+            return records;
+        if (rec[0] != 23) {
             *why = "a record other than application data after the handshake";
             return -1;
         }
@@ -243,13 +216,13 @@ static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio
         if (*plain_len == PLAIN_MAX)
             continue;
         int err = SSL_get_error(ssl, n);
-        if (err == SSL_ERROR_ZERO_RETURN)             /* close_notify: what came before it is still served */
+        if (err == SSL_ERROR_ZERO_RETURN)
             return records;
         if (err != SSL_ERROR_WANT_READ) {
             *why = "a record OpenSSL could not take after the handshake";
             return -1;
         }
-        if (BIO_pending(wbio) > 0) {                  /* OpenSSL answered something: a KeyUpdate we cannot follow */
+        if (BIO_pending(wbio) > 0) {
             *why = "a post-handshake message from the client (key update?)";
             return -1;
         }
@@ -263,25 +236,25 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
     struct table  *t = ioxd__tls_acquire(certs);
     struct secrets s = {};
     unsigned char *plain = nullptr;
-    const char    *why = nullptr;                     /* set on every failure: logged once */
+    const char    *why = nullptr;
     int            r;
 
     SSL *ssl  = SSL_new(ioxd__tls_fallback(t));
     BIO *rbio = BIO_new(BIO_s_mem());
     BIO *wbio = BIO_new(BIO_s_mem());
-    plain = malloc(PLAIN_MAX + RECORD_MAX);          /* early plaintext, then one record: off the coroutine's stack */
+    plain = malloc(PLAIN_MAX + RECORD_MAX);
     if (!ssl || !rbio || !wbio || !plain) {
-        BIO_free(rbio);                               /* not the SSL's yet */
+        BIO_free(rbio);
         BIO_free(wbio);
         why = "out of memory";
         goto out;
     }
-    SSL_set_bio(ssl, rbio, wbio);                     /* the SSL owns both from here */
+    SSL_set_bio(ssl, rbio, wbio);
     SSL_set_accept_state(ssl);
     SSL_set_ex_data(ssl, ex_index, &s);
-    ioxd__tls_bind(ssl, t);                           /* the table its ClientHello picks a host from */
+    ioxd__tls_bind(ssl, t);
 
-    for (;;) {                                        /* the handshake, as an ordinary await loop */
+    for (;;) {
         int ret = SSL_do_handshake(ssl);
         int err = ret == 1 ? SSL_ERROR_NONE : SSL_get_error(ssl, ret);
         if (flush_outbound(pipe, wbio) < 0) {
@@ -304,7 +277,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
         goto out;
     }
 
-    if (ioxd__recv_pause(c) < 0) {                    /* nothing more leaves the socket meanwhile */
+    if (ioxd__recv_pause(c) < 0) {
         why = "input ended after the handshake";
         goto out;
     }
@@ -330,7 +303,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
         goto out;
     }
     if (!ioxd__recv_resume(c))
-        why = "input ended after the handshake";        /* or the worker is draining: nothing to serve */
+        why = "input ended after the handshake";
 out:
     if (why)
         fprintf(stderr, "ioxd_certs: connection dropped: %s\n", why);
@@ -339,14 +312,14 @@ out:
         explicit_bzero(plain, PLAIN_MAX + RECORD_MAX);
         free(plain);
     }
-    SSL_free(ssl);                                    /* and its BIOs */
+    SSL_free(ssl);
     ioxd__tls_release(certs, t);
     return why ? -1 : 0;
 }
 
 void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
 {
-    unsigned char alert[2] = { 1, 0 };                /* warning, close_notify */
+    unsigned char alert[2] = { 1, 0 };
     struct iovec  iov      = { alert, sizeof alert };
     union {
         char           buf[CMSG_SPACE(sizeof(unsigned char))];
@@ -357,11 +330,11 @@ void ioxd__tls_close_notify(struct ioxd_pipe *pipe)
     cm->cmsg_level = SOL_TLS;
     cm->cmsg_type  = TLS_SET_RECORD_TYPE;
     cm->cmsg_len   = CMSG_LEN(sizeof(unsigned char));
-    *CMSG_DATA(cm) = 21;                              /* the alert record type */
+    *CMSG_DATA(cm) = 21;
     ioxd__sendmsg(pipe->in.conn, &msg);
 }
 
-#else /* built without TLS */
+#else
 
 int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_certs *certs)
 {

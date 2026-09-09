@@ -1,13 +1,3 @@
-/*
- * tls/store.c - the certificate store: one SSL_CTX per host directory, pinned to what kernel TLS
- * can carry (TLS 1.3, TLS_AES_128_GCM_SHA256, no tickets), chosen by SNI at the ClientHello.
- * The table of hosts is reference-counted so a reload swaps it under handshakes in flight.
- *
- * A published context is never written to again. A reload carries a host that failed to load
- * forward by sharing its old context, so a context can belong to more than one table and cannot
- * name one: the ClientHello callback is installed once, when the context is built, and finds the
- * table through the SSL its handshake holds a reference for.
- */
 #include "tls/store.h"
 #include "tls/handshake.h"
 #include "io/internal.h"
@@ -33,20 +23,19 @@ struct host {
 };
 
 struct table {
-    int          refs;                                /* the store's own, plus one per handshake in flight */
+    int          refs;
     struct host *hosts;
     int          n;
-    SSL_CTX     *fallback;                            /* `default`: what answers when SNI matches nothing */
+    SSL_CTX     *fallback;
 };
 
 struct ioxd_certs {
     char            *dir;
     struct table    *table;
-    pthread_mutex_t  lock;                            /* around the table pointer and its refs */
-    pthread_mutex_t  reload;                          /* one reload at a time, over the whole of it */
+    pthread_mutex_t  lock;
+    pthread_mutex_t  reload;
 };
 
-/* The table a handshake started on, hung on its SSL: where the ClientHello callback finds it. */
 static int            table_ex;
 static pthread_once_t table_ex_once = PTHREAD_ONCE_INIT;
 static void make_table_ex(void)
@@ -54,17 +43,12 @@ static void make_table_ex(void)
     table_ex = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 }
 
-/* The prologue's SSL, told which table it started on. It holds a reference to that table for as
- * long as the SSL lives, so the ClientHello callback can read it back whenever the peer gets
- * round to sending one. */
 void ioxd__tls_bind(SSL *ssl, struct table *t)
 {
     pthread_once(&table_ex_once, make_table_ex);
     SSL_set_ex_data(ssl, table_ex, t);
 }
 
-/* The outermost OpenSSL error, as text; the rest of the queue goes with it, since one left behind
- * is reported against the next call that fails. */
 static const char *ssl_error(void)
 {
     static thread_local char text[256];
@@ -73,13 +57,11 @@ static const char *ssl_error(void)
     return text;
 }
 
-/* ASCII lowercase, and nothing else: folding every byte would match CR to `-` and DEL to `_`. */
 static unsigned char fold(unsigned char c)
 {
     return c >= 'A' && c <= 'Z' ? (unsigned char)(c | 0x20U) : c;
 }
 
-/* Exact hostname compare, ASCII case-insensitive. */
 static bool host_eq(const char *a, size_t alen, const char *b)
 {
     if (strlen(b) != alen)
@@ -90,16 +72,15 @@ static bool host_eq(const char *a, size_t alen, const char *b)
     return true;
 }
 
-/* The context for a server name: exact, then the wildcard of its parent domain. */
 static SSL_CTX *lookup(const struct table *t, const char *name, size_t len)
 {
-    if (len > 1 && name[len - 1] == '.')              /* the root dot: `sni.test.` is `sni.test` */
+    if (len > 1 && name[len - 1] == '.')
         len--;
     for (int i = 0; i < t->n; i++)
         if (host_eq(name, len, t->hosts[i].name))
             return t->hosts[i].ctx;
     const char *dot = memchr(name, '.', len);
-    if (dot) {                                        /* a.example.com -> _.example.com */
+    if (dot) {
         char wild[256];
         size_t rest = len - (size_t)(dot - name);
         if (rest + 1 < sizeof wild) {
@@ -113,8 +94,6 @@ static SSL_CTX *lookup(const struct table *t, const char *name, size_t len)
     return nullptr;
 }
 
-/* The ClientHello: pick the certificate by the server name, when there is one we know. The table
- * comes from the SSL rather than from `arg`, which is always NULL - see the note at the top. */
 static int on_client_hello(SSL *ssl, int *alert, void *arg)   /* NOLINT(readability-non-const-parameter): OpenSSL's signature */
 {
     (void)alert;
@@ -125,19 +104,17 @@ static int on_client_hello(SSL *ssl, int *alert, void *arg)   /* NOLINT(readabil
     if (!t)
         return SSL_CLIENT_HELLO_SUCCESS;
     if (!SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &ext, &ext_len) || ext_len < 5)
-        return SSL_CLIENT_HELLO_SUCCESS;              /* no SNI: the default */
-    size_t list_len = (size_t)ext[0] << 8 | ext[1];   /* ServerNameList: one host_name entry */
+        return SSL_CLIENT_HELLO_SUCCESS;
+    size_t list_len = (size_t)ext[0] << 8 | ext[1];
     size_t name_len = (size_t)ext[3] << 8 | ext[4];
     if (ext[2] != 0 || name_len + 3 != list_len || list_len + 2 != ext_len)
-        return SSL_CLIENT_HELLO_SUCCESS;              /* not the single entry we read: the default */
+        return SSL_CLIENT_HELLO_SUCCESS;
     SSL_CTX *ctx = lookup(t, (const char *)ext + 5, name_len);
     if (ctx)
         SSL_set_SSL_CTX(ssl, ctx);
     return SSL_CLIENT_HELLO_SUCCESS;
 }
 
-/* One host's context: pinned to what the kernel can carry, with the files it was given. The
- * callbacks go on here, once: nothing writes to a context after it is published. */
 static SSL_CTX *context_for(const char *cert, const char *key)
 {
     SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
@@ -160,8 +137,6 @@ static SSL_CTX *context_for(const char *cert, const char *key)
     return ctx;
 }
 
-/* Why the context's certificate cannot serve now, or NULL when it can: a certificate that is not
- * valid yet or has run out is a load failure like any other, so the old one stays. */
 static const char *not_current(const SSL_CTX *ctx)
 {
     const X509 *x = SSL_CTX_get0_certificate(ctx);
@@ -188,7 +163,6 @@ static void table_free(struct table *t)
     free(t);
 }
 
-/* The host whose context answers when SNI matches nothing. */
 static const char *fallback_name(const struct table *t)
 {
     for (int i = 0; i < t->n; i++)
@@ -197,9 +171,6 @@ static const char *fallback_name(const struct table *t)
     return nullptr;
 }
 
-/* Every host directory under dir into a new table; a host that fails keeps its context from
- * `old` when it had one there. NULL when no host loads, or when nothing can answer for SNI that
- * matches nothing: `default` is required, and only a reload may carry the previous one over. */
 static struct table *load(const char *dir, const struct table *old)
 {
     DIR *d = opendir(dir);
@@ -227,23 +198,23 @@ static struct table *load(const char *dir, const struct table *old)
         }
         struct stat cs, ks;
         if (stat(cert, &cs) != 0 || !S_ISREG(cs.st_mode) || stat(key, &ks) != 0 || !S_ISREG(ks.st_mode))
-            continue;                                 /* not a host directory */
-        if (ks.st_mode & ((unsigned)S_IRGRP | (unsigned)S_IROTH))   /* once per host, on every load */
+            continue;
+        if (ks.st_mode & ((unsigned)S_IRGRP | (unsigned)S_IROTH))
             fprintf(stderr, "ioxd_certs: %s: mode %03o, readable past its owner\n", key,
                     (unsigned)(ks.st_mode & 0777));
         SSL_CTX    *ctx = context_for(cert, key);
         const char *why = ctx ? not_current(ctx) : ssl_error();
-        if (ctx && why) {                             /* it parsed, but it cannot serve now */
+        if (ctx && why) {
             SSL_CTX_free(ctx);
             ctx = nullptr;
         }
         if (!ctx) {
             fprintf(stderr, "ioxd_certs: %s: %s (%s)\n", e->d_name, why, cert);
-            if (old) {                                /* keep what was serving */
+            if (old) {
                 for (int i = 0; i < old->n; i++)
                     if (strcmp(old->hosts[i].name, e->d_name) == 0) {
                         ctx = old->hosts[i].ctx;
-                        SSL_CTX_up_ref(ctx);          /* shared with the old table, written to by neither */
+                        SSL_CTX_up_ref(ctx);
                     }
             }
             if (!ctx)
@@ -266,8 +237,7 @@ static struct table *load(const char *dir, const struct table *old)
         table_free(t);
         return nullptr;
     }
-    if (!t->fallback) {                               /* no `default`: on a reload the host that was
-                                                       * answering keeps doing so, if it is still here */
+    if (!t->fallback) {
         const char *prev = old ? fallback_name(old) : nullptr;
         for (int i = 0; prev && !t->fallback && i < t->n; i++)
             if (strcmp(t->hosts[i].name, prev) == 0)
@@ -309,14 +279,13 @@ void ioxd_certs_free(ioxd_certs *certs)
 {
     if (!certs)
         return;
-    ioxd__tls_release(certs, certs->table);               /* the store's own reference; the last one frees */
+    ioxd__tls_release(certs, certs->table);
     pthread_mutex_destroy(&certs->reload);
     pthread_mutex_destroy(&certs->lock);
     free(certs->dir);
     free(certs);
 }
 
-/* A reference to the table serving now; released after the handshake. */
 struct table *ioxd__tls_acquire(ioxd_certs *certs)
 {
     pthread_mutex_lock(&certs->lock);
@@ -342,22 +311,22 @@ SSL_CTX *ioxd__tls_fallback(const struct table *t)
 
 int ioxd_certs_reload(ioxd_certs *certs)
 {
-    pthread_mutex_lock(&certs->reload);                 /* one at a time, so the table it reads stays put */
-    struct table *old   = ioxd__tls_acquire(certs);     /* and cannot be freed while load() reads it */
+    pthread_mutex_lock(&certs->reload);
+    struct table *old   = ioxd__tls_acquire(certs);
     struct table *fresh = load(certs->dir, old);
     if (fresh) {
         pthread_mutex_lock(&certs->lock);
         certs->table = fresh;
         pthread_mutex_unlock(&certs->lock);
         fprintf(stderr, "ioxd_certs: reloaded %d host%s from %s\n", fresh->n, fresh->n == 1 ? "" : "s", certs->dir);
-        ioxd__tls_release(certs, old);                  /* the store's own reference to the old table */
+        ioxd__tls_release(certs, old);
     }
-    ioxd__tls_release(certs, old);                      /* the one this reload took */
+    ioxd__tls_release(certs, old);
     pthread_mutex_unlock(&certs->reload);
     return fresh ? 0 : -1;
 }
 
-#else /* built without TLS */
+#else
 
 ioxd_certs *ioxd_certs_load(const char *dir)
 {

@@ -60,3 +60,68 @@ CORO_API void coro_pool_drain(void);
 
 /* How many idle stacks this thread keeps warm (CORO_POOL_MAX until told). Before the first create. */
 CORO_API void coro_pool_limit(unsigned max_idle);
+
+/* ── coro.c: the notes ──────────────────────────────────────────────────────────────────── */
+
+/* at file scope:
+ *   - switch_x86_64.S  [extern void swap_ctx(void **save_sp, void *load_sp);]
+ *   - the running coroutine; nullptr on the loop stack  [static thread_local coro_t *cur;]
+ *   - the loop's stack pointer while a coroutine runs  [static thread_local void   *loop_sp;]
+ *   - PROT_NONE below every stack. Big enough that a frame cannot step over it into the
+ *     neighbour below: ioxd__conn_main's is 25 KB and ioxd__serve's 10 KB, so one page would
+ *     not do. Address space only - PROT_NONE pages have no RSS.
+ *   - Pooled stacks keep their pages: no madvise(MADV_DONTNEED) on the way in. The trade is
+ *     deliberate, a warm stack for the next connection against the RSS of an idle one, and the
+ *     pool is capped.
+ *   - free list of whole stack blocks, linked via ->next  [static thread_local coro_t
+ *     *pool_head;]
+ */
+
+/* coro_current:
+ * The running coroutine, or nullptr on the loop stack.
+ */
+
+/* coro_entry:
+ * First code a new coroutine runs, entered by the forged frame's ret. Never returns.
+ *   - a finished coroutine must never be resumed  [abort();]
+ */
+
+/* coro_create:
+ * Get a stack - pooled, or freshly mapped with its guard - and forge its first frame so the
+ * first switch into it 'returns' into coro_entry.
+ *   - Every caller passes the worker's configured size, so the pool holds one size. A mismatch
+ *     would mean a second size is in play and this reuse would hand back the wrong stack.  [if
+ *     (pool_head->size != total) {]
+ *   - a warm stack: guard still armed, no mmap, no mprotect  [c = pool_head;]
+ *   - overflow faults here, not a neighbour  [if (mprotect(mem, guard, PROT_NONE) < 0) {]
+ *   - the descriptor sits at the top of its own stack block, 16-aligned  [uintptr_t top =
+ *     (uintptr_t)mem + total;]
+ *   - Forge the frame swap_ctx expects: six callee-saved slots below a 16-aligned return slot
+ *     that holds coro_entry. The first swap_ctx pops the six zeros and rets into coro_entry
+ *     with rsp = slot + 8, which is 8 mod 16 - exactly the alignment a call would have left.
+ *     The zero above the return slot is coro_entry's own (never used) return address, so
+ *     backtraces end.  [uint64_t *sp = (uint64_t *)c;]
+ *   - rbp rbx r12 r13 r14 r15  [*--sp = 0;]
+ */
+
+/* coro_destroy:
+ * Pool a finished coroutine's stack for the next one (guard page still armed), or unmap it
+ * past the cap. Not unmapping avoids a cross-core TLB shootdown per closed connection. The cap
+ * bounds idle stacks kept, not how many coroutines may run.
+ *   - the frame it named is gone; a stale sp must not be switched to  [c->sp = nullptr;]
+ */
+
+/* coro_pool_drain:
+ * Unmap every pooled stack. Call on the worker thread at teardown.
+ */
+
+/* coro_resume:
+ * Loop only: switch into c until it yields; if it finished, recycle its stack. Both rules are
+ * checked in every build: an assert would go away under -DNDEBUG, and breaking either corrupts
+ * the loop's saved stack pointer or switches to a stack that has been recycled - neither of
+ * which shows up as anything but a crash somewhere else.
+ */
+
+/* coro_yield:
+ * Coroutine only: switch back to the loop; returns when the loop resumes this coroutine.
+ */

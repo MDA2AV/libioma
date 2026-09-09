@@ -112,3 +112,93 @@ static inline struct io_uring_cqe *uring_cqe_at(struct uring *ring, unsigned i)
     return &ring->cqes[(*ring->cq_head + i) & ring->cq_mask];
 }
 void uring_cq_advance(struct uring *ring, unsigned n);
+
+/* ── uring.c: the notes ──────────────────────────────────────────────────────────────────── */
+
+/* sys_setup:
+ * io_uring_setup; -errno on failure.
+ */
+
+/* sys_enter:
+ * io_uring_enter; -errno on failure.
+ */
+
+/* uring_register:
+ * io_uring_register (buffer rings, files, ...); the result, or -errno.
+ */
+
+/* ring_clear:
+ * The struct owning nothing: no descriptor, no mapping. uring_exit over this unmaps nothing
+ * and closes nothing, which is what a failed init has to leave behind.
+ */
+
+/* ring_failed:
+ * Give up on a half-built ring: empty the struct and hand back the error.
+ */
+
+/* uring_init:
+ * Create the ring and mmap both rings plus the SQE array. 0, or -errno. On any failure the
+ * struct is left empty, so a caller that calls uring_exit anyway unmaps nothing and closes
+ * nothing.
+ *   - SINGLE_ISSUER: only this thread submits, the kernel skips SQ locking. DEFER_TASKRUN:
+ *     completion work runs batched inside enter(GETEVENTS), never as an interrupt. NO_SQARRAY
+ *     (6.6+): slot i of the SQ ring is SQE i, one store fewer per submission.  [struct
+ *     io_uring_params params;]
+ *   - maybe NO_SQARRAY, maybe not: try without it  [if (fd == -EINVAL) {]
+ *   - the first error was the real one  [return ring_failed(ring, -EINVAL);]
+ *   - every kernel since 5.4  [if (!(params.features & IORING_FEAT_SINGLE_MMAP)) {]
+ *   - One mapping holds both rings; size it for whichever ends later. Without the SQ index
+ *     array sq_off.array is 0, so the SQ side ends after the last of its header words.
+ *     [size_t sq_bytes = sq_array ? params.sq_off.array + (size_t)params.sq_entries * s]
+ *   - Everything is up: only now does the struct own an fd and two mappings.  [ring->fd
+ *     = fd;]
+ */
+
+/* uring_register_ring_fd:
+ * Register the ring fd in the task's ring table; enter then uses the index and skips the
+ * lookup.
+ *   - any free index  [up.offset = (uint32_t)-1;]
+ *   - the count registered: up.offset is only ours then  [if (rc != 1)]
+ */
+
+/* uring_register_files_sparse:
+ * A sparse file table: n empty slots the kernel fills on direct accept.
+ */
+
+/* uring_exit:
+ * Unmap and close the ring; the kernel cancels anything still in flight and drops the tables.
+ *   - fd 0 is a legal descriptor  [if (ring->fd >= 0)  close(ring->fd);]
+ */
+
+/* uring_get_sqe:
+ * Claim the next SQE against the local tail, zeroed. nullptr when the SQ is full.
+ *   - full: the caller flushes and retries  [return nullptr;]
+ */
+
+/* flush_and_enter:
+ * Publish the local tail and enter.
+ *   - Count against the kernel-consumed head, so SQEs an -EBUSY enter left unconsumed are
+ *     re-counted by the next call instead of stranding (liburing's accounting, ioxide's too).
+ *     [unsigned khead = load_acquire(ring->sq_head);]
+ *   - The CQ filled and the kernel is holding the rest in its overflow list, where nothing we
+ *     do to the ring will find them. Only an enter flushes that backlog, so make one even when
+ *     there is nothing to submit and nothing to wait for.  [if (load_acquire(ring->sq_flags) &
+ *     IORING_SQ_CQ_OVERFLOW) {]
+ */
+
+/* uring_submit:
+ * Submit everything claimed; never waits.
+ */
+
+/* uring_submit_wait:
+ * Submit, then wait for wait_nr completions or until ts expires (nullptr: no timeout).
+ */
+
+/* uring_cq_ready:
+ * How many CQEs are waiting; reads the kernel's tail once.
+ */
+
+/* uring_cq_advance:
+ * Release n consumed CQEs; publishes the head once.
+ *   - nothing consumed: no store, no barrier  [if (n == 0)]
+ */

@@ -49,3 +49,45 @@ static inline uint8_t *ioxd__bufring_at(const struct bufring *b, uint16_t buf_id
         ioxd__bufring_bad_id(b, buf_id);
     return b->slab + (size_t)buf_id * b->size;
 }
+
+/* ── bufring.c: the notes ──────────────────────────────────────────────────────────────────── */
+
+/*
+ * bufring.c - the provided buffer ring of io/bufring.h.
+ */
+
+/* map_pages:
+ * Map anonymous read/write pages, or abort.
+ */
+
+/* ioxd__bufring_bad_id:
+ * The kernel named a buffer we never offered: the slab pointer it implies is outside the
+ * mapping, so there is nothing safe to do with it.
+ */
+
+/* ioxd__bufring_init:
+ * Map the slab and the ring, register the ring as buffer group BGID, and offer every buffer.
+ * count is a power of two no larger than 32768: ioxd_configure checked it.
+ *   - Fill every slot, then publish the tail once. bufs[0] overlaps the ring header and the
+ *     tail sits in bufs[0].resv, so writing only addr/len/bid leaves it untouched.  [for
+ *     (unsigned i = 0; i < count; i++) {]
+ */
+
+/* ioxd__bufring_return:
+ * Stage a buffer's return to the ring. The loop publishes the tail once per batch: one atomic
+ * release for many returns, and the kernel is not re-reading a hot tail per request.
+ *   - how many recvs the loop may re-arm  [b->returned++;]
+ *   - tail needs publishing before the enter  [b->dirty = true;]
+ */
+
+/* ioxd__bufring_publish:
+ * Publish staged returns to the kernel.
+ */
+
+/* ioxd__bufring_unregister:
+ * Unregister the group. Call before uring_exit.
+ */
+
+/* ioxd__bufring_unmap:
+ * Unmap the ring and the slab. Call after uring_exit, once no in-flight op can reference them.
+ */

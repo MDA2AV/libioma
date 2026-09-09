@@ -1,12 +1,7 @@
-/*
- * io/pipe.c - the reader and the writer of io/pipe.h, and the public pipe on top of them.
- */
 #include "io/pipe.h"
 #include "io/proactor.h"
 
 #include <string.h>
-
-/* ── the reader ────────────────────────────────────────────────────────────────────────── */
 
 void ioxd_pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap)
 {
@@ -16,7 +11,6 @@ void ioxd_pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t c
     pr->cap  = cap;
 }
 
-/* The live bytes: in buf, or in the current kernel buffer. */
 static ioxd_slice live_span(const ioxd_pipereader *pr)
 {
     if (pr->live_in_buf)
@@ -26,8 +20,6 @@ static ioxd_slice live_span(const ioxd_pipereader *pr)
     return (ioxd_slice){ nullptr, 0 };
 }
 
-/* Let the current kernel buffer go once nothing is left in it, neither live bytes nor the run.
- * One that also holds frozen kept bytes lives on as `pinned`. */
 static void cur_done(ioxd_pipereader *pr)
 {
     if (!pr->has_cur || pr->cur_pos < pr->cur.len || (pr->run_in_cur && pr->run_len))
@@ -39,7 +31,6 @@ static void cur_done(ioxd_pipereader *pr)
     pr->cur_pos       = 0;
 }
 
-/* Reclaim the bytes dropped from the front of buf's live region. */
 static void compact(ioxd_pipereader *pr)
 {
     if (pr->buf_pos > pr->floor) {
@@ -49,10 +40,6 @@ static void compact(ioxd_pipereader *pr)
     }
 }
 
-/* Move the current buffer's run and live bytes into buf, so what follows can join them. A run
- * that was kept in place has pointers out to it, so its buffer stays pinned rather than going
- * back to the ring - unless another buffer is pinned already (the HTTP engine's head), in which
- * case the run just moves and ioxd_pipereader_run is where to find it. */
 static bool gather(ioxd_pipereader *pr)
 {
     size_t live = pr->has_cur ? pr->cur.len - pr->cur_pos : 0;
@@ -82,7 +69,6 @@ static bool gather(ioxd_pipereader *pr)
     return true;
 }
 
-/* A buffer that cannot be used: back to the ring, and the reader is done. */
 static int refuse(ioxd_pipereader *pr, const struct rx_item *item)
 {
     ioxd__bufring_return(&pr->conn->p->bufs, item->buf_id);
@@ -90,7 +76,6 @@ static int refuse(ioxd_pipereader *pr, const struct rx_item *item)
     return IOXD_PIPE_FULL;
 }
 
-/* More bytes: the next kernel buffer, in place when nothing is live, else appended in buf. */
 static int more(ioxd_pipereader *pr)
 {
     if (pr->eof)
@@ -103,14 +88,14 @@ static int more(ioxd_pipereader *pr)
             pr->error = IOXD_PIPE_GONE;
         return rc < 0 ? IOXD_PIPE_GONE : 0;
     }
-    if (!pr->live_in_buf && !pr->has_cur) {              /* nothing live: this buffer is the live span */
+    if (!pr->live_in_buf && !pr->has_cur) {
         pr->cur           = item;
         pr->has_cur       = true;
         pr->cur_pos       = 0;
         pr->cur_is_pinned = false;
         return 1;
     }
-    if (!pr->live_in_buf && !gather(pr))                 /* the live bytes leave the current buffer first */
+    if (!pr->live_in_buf && !gather(pr))
         return refuse(pr, &item);
     if (pr->buf_end + item.len > pr->cap) {
         compact(pr);
@@ -144,7 +129,6 @@ void ioxd_pipereader_examine(ioxd_pipereader *pr, size_t n)
     pr->examined = n;
 }
 
-/* Forget n live bytes of the current place; never more than there are. */
 static void consume(ioxd_pipereader *pr, size_t n)
 {
     size_t have = live_span(pr).len;
@@ -173,20 +157,20 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
     const char *kept;
     ioxd_slice  live = live_span(pr);
     if (n > live.len)
-        return nullptr;                                 /* more than is live: the caller's mistake */
+        return nullptr;
     if (n == 0)
         return live.p;
     if (pr->live_in_buf) {
-        if (pr->run_len == 0) {                          /* a run starts where the live bytes are */
+        if (pr->run_len == 0) {
             pr->run_in_cur = false;
             pr->run_start  = pr->buf_pos;
             pr->floor      = pr->buf_pos;
-        } else if (pr->buf_pos != pr->floor) {            /* dropped bytes in between: slide these down */
+        } else if (pr->buf_pos != pr->floor) {
             memmove(pr->buf + pr->floor, pr->buf + pr->buf_pos, n);
         }
         kept = pr->buf + pr->floor;
         pr->floor += n;
-    } else if (pr->has_cur && (pr->run_len == 0 || pr->run_in_cur)) {   /* in place */
+    } else if (pr->has_cur && (pr->run_len == 0 || pr->run_in_cur)) {
         if (pr->run_len == 0) {
             pr->run_in_cur = true;
             pr->run_start  = pr->cur_pos;
@@ -195,7 +179,7 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
         if (run_end != pr->cur_pos)
             memmove((char *)pr->cur.ptr + run_end, (const char *)pr->cur.ptr + pr->cur_pos, n);
         kept = (const char *)pr->cur.ptr + run_end;
-    } else if (pr->has_cur) {                            /* the run is in buf, the live bytes are not: copy across */
+    } else if (pr->has_cur) {
         if (pr->floor + n > pr->cap) {
             pr->error = IOXD_PIPE_FULL;
             return nullptr;
@@ -203,9 +187,9 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
         memcpy(pr->buf + pr->floor, (const char *)pr->cur.ptr + pr->cur_pos, n);
         kept = pr->buf + pr->floor;
         pr->floor += n;
-        pr->buf_pos = pr->buf_end = pr->floor;          /* buf's (empty) live region moves up with it */
+        pr->buf_pos = pr->buf_end = pr->floor;
     } else {
-        return nullptr;                                 /* nothing live: the caller's mistake */
+        return nullptr;
     }
     pr->run_len += n;
     consume(pr, n);
@@ -215,7 +199,7 @@ const char *ioxd_pipereader_keep(ioxd_pipereader *pr, size_t n)
 void ioxd_pipereader_run_begin(ioxd_pipereader *pr)
 {
     if (pr->run_in_cur && pr->run_len) {
-        if (pr->has_pinned && !pr->cur_is_pinned) {      /* another buffer is pinned already: this run moves to buf */
+        if (pr->has_pinned && !pr->cur_is_pinned) {
             if (pr->floor + pr->run_len > pr->cap) {
                 pr->error = IOXD_PIPE_FULL;
             } else {
@@ -253,7 +237,7 @@ void ioxd_pipereader_release(ioxd_pipereader *pr)
     pr->floor = 0;
     if (pr->has_pinned) {
         if (pr->cur_is_pinned)
-            pr->cur_is_pinned = false;                   /* it lives on as the current buffer */
+            pr->cur_is_pinned = false;
         else
             ioxd__bufring_return(&pr->conn->p->bufs, pr->pinned.buf_id);
         pr->has_pinned = false;
@@ -293,7 +277,7 @@ int ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
     if (pr->error)
         return pr->error;
     ioxd_slice l = live_span(pr);
-    while (l.len <= pr->examined) {                       /* all seen: take a delivered buffer, if one is queued */
+    while (l.len <= pr->examined) {
         if (pr->conn->rx_head == pr->conn->rx_tail)
             return 0;
         int rc = more(pr);
@@ -310,7 +294,7 @@ bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
     if (pr->error)
         return false;
     if (!pr->live_in_buf) {
-        if (pr->has_cur) {                                /* live bytes, or a run, in place: they move first */
+        if (pr->has_cur) {
             if (!gather(pr))
                 return false;
         } else {
@@ -327,8 +311,6 @@ bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
     pr->buf_end += n;
     return true;
 }
-
-/* ── the writer ────────────────────────────────────────────────────────────────────────── */
 
 void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)
 {
@@ -373,7 +355,7 @@ void *ioxd_pipewriter_reserve(ioxd_pipewriter *pw, size_t n)
 void ioxd_pipewriter_advance(ioxd_pipewriter *pw, size_t n)
 {
     size_t room = ioxd_pipewriter_room(pw);
-    pw->len += n < room ? n : room;                     /* never past the slab, whatever was claimed */
+    pw->len += n < room ? n : room;
 }
 
 char *ioxd_pipewriter_front(ioxd_pipewriter *pw, size_t n)
@@ -408,7 +390,7 @@ int ioxd_pipewriter_write(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
-    if (n > pw->cap)                                    /* larger than the slab: straight from the caller's memory */
+    if (n > pw->cap)
         return ioxd_pipewriter_flush(pw) < 0 ? -1 : ioxd_pipewriter_through(pw, data, n);
     void *at = ioxd_pipewriter_reserve(pw, n);
     if (!at)
@@ -423,8 +405,6 @@ int ioxd_pipewriter_send(ioxd_pipewriter *pw, const void *data, size_t n)
     return ioxd_pipewriter_write(pw, data, n) < 0 ? -1 : ioxd_pipewriter_flush(pw);
 }
 
-/* ── the pipe ──────────────────────────────────────────────────────────────────────────── */
-
 void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
 {
     ioxd_pipereader_init(&p->in, conn, gather, gather_cap);
@@ -433,7 +413,7 @@ void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gat
 
 void ioxd__pipe_close(struct ioxd_pipe *p)
 {
-    ioxd_pipewriter_flush(&p->out);                     /* what a handler left in the slab still goes */
+    ioxd_pipewriter_flush(&p->out);
     ioxd_pipereader_close(&p->in);
 }
 

@@ -105,3 +105,91 @@ struct ioxd_pipe {
 };
 void ioxd__pipe_init (struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
 void ioxd__pipe_close(struct ioxd_pipe *p);
+
+/* ── pipe.c: the notes ──────────────────────────────────────────────────────────────────── */
+
+/*
+ * io/pipe.c - the reader and the writer of io/pipe.h, and the public pipe on top of them.
+ */
+
+/* at file scope:
+ *   - ── the reader ──────────────────────────────────────────────────────────────────────────
+ *     [void ioxd_pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t c]
+ *   - ── the writer ──────────────────────────────────────────────────────────────────────────
+ *     [void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t l]
+ *   - ── the pipe ────────────────────────────────────────────────────────────────────────────
+ *     [void ioxd__pipe_init(struct ioxd_pipe *p, conn_t *conn, char *gather, size_t gat]
+ */
+
+/* live_span:
+ * The live bytes: in buf, or in the current kernel buffer.
+ */
+
+/* cur_done:
+ * Let the current kernel buffer go once nothing is left in it, neither live bytes nor the run.
+ * One that also holds frozen kept bytes lives on as `pinned`.
+ */
+
+/* compact:
+ * Reclaim the bytes dropped from the front of buf's live region.
+ */
+
+/* gather:
+ * Move the current buffer's run and live bytes into buf, so what follows can join them. A run
+ * that was kept in place has pointers out to it, so its buffer stays pinned rather than going
+ * back to the ring - unless another buffer is pinned already (the HTTP engine's head), in
+ * which case the run just moves and ioxd_pipereader_run is where to find it.
+ */
+
+/* refuse:
+ * A buffer that cannot be used: back to the ring, and the reader is done.
+ */
+
+/* more:
+ * More bytes: the next kernel buffer, in place when nothing is live, else appended in buf.
+ *   - nothing live: this buffer is the live span  [if (!pr->live_in_buf && !pr->has_cur) {]
+ *   - the live bytes leave the current buffer first  [if (!pr->live_in_buf && !gather(pr))]
+ */
+
+/* consume:
+ * Forget n live bytes of the current place; never more than there are.
+ */
+
+/* ioxd_pipereader_keep:
+ *   - more than is live: the caller's mistake  [return nullptr;]
+ *   - a run starts where the live bytes are  [if (pr->run_len == 0) {]
+ *   - dropped bytes in between: slide these down  [} else if (pr->buf_pos != pr->floor) {]
+ *   - in place  [} else if (pr->has_cur && (pr->run_len == 0 || pr->run_in_cur)) {]
+ *   - the run is in buf, the live bytes are not: copy across  [} else if (pr->has_cur) {]
+ *   - buf's (empty) live region moves up with it  [pr->buf_pos = pr->buf_end = pr->floor;]
+ *   - nothing live: the caller's mistake  [return nullptr;]
+ */
+
+/* ioxd_pipereader_run_begin:
+ *   - another buffer is pinned already: this run moves to buf  [if (pr->has_pinned &&
+ *     !pr->cur_is_pinned) {]
+ */
+
+/* ioxd_pipereader_release:
+ *   - it lives on as the current buffer  [pr->cur_is_pinned = false;]
+ */
+
+/* ioxd_pipereader_avail:
+ *   - all seen: take a delivered buffer, if one is queued  [while (l.len <= pr->examined) {]
+ */
+
+/* ioxd_pipereader_inject:
+ *   - live bytes, or a run, in place: they move first  [if (pr->has_cur) {]
+ */
+
+/* ioxd_pipewriter_advance:
+ *   - never past the slab, whatever was claimed  [pw->len += n < room ? n : room;]
+ */
+
+/* ioxd_pipewriter_write:
+ *   - larger than the slab: straight from the caller's memory  [if (n > pw->cap)]
+ */
+
+/* ioxd__pipe_close:
+ *   - what a handler left in the slab still goes  [ioxd_pipewriter_flush(&p->out);]
+ */
