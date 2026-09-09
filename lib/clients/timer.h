@@ -1,5 +1,5 @@
 /*
- * io/timer.h - a wait that runs on the ring: the coroutine parks on an IORING_OP_TIMEOUT and
+ * clients/timer.h - a wait that runs on the ring: the coroutine parks on an IORING_OP_TIMEOUT and
  * the worker's loop resumes it when the kernel says the time has passed, the way a send parks
  * on its completion. Nothing is armed on the side and no syscall is made for it: the SQE goes
  * out with whatever batch the loop was already submitting. The public face is ioxd/timer.h.

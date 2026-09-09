@@ -60,7 +60,8 @@ add_library(ioxd
         lib/io/conn.c
         lib/io/proactor.c
         lib/io/pipe.c
-        lib/io/timer.c
+        lib/clients/timer.c
+        lib/clients/socket.c
         lib/http/engine.c
         lib/http/api.c
         lib/http/router.c

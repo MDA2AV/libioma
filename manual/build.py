@@ -29,6 +29,7 @@ PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/pipe.h",   "ioxd_pipe",   "a connection as a pipe, for other protocols"),
     ("ioxd/run.h",    "ioxd_run",    "bind the ports, run the workers"),
     ("ioxd/timer.h",  "ioxd_timer",  "a delay that parks the connection, not the worker"),
+    ("ioxd/socket.h", "ioxd_socket", "outbound connections, as pipes"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
 ]
 
@@ -510,6 +511,7 @@ when the registered file table is on, which is the default.</p>
 <dt><a href="ioxd_pipe.html">&lt;ioxd/pipe.h&gt;</a></dt><dd>a connection as a pipe, for protocols other than HTTP</dd>
 <dt><a href="ioxd_run.html">&lt;ioxd/run.h&gt;</a></dt><dd>bind the ports, plain or TLS, run the workers</dd>
 <dt><a href="ioxd_timer.html">&lt;ioxd/timer.h&gt;</a></dt><dd>a delay that parks the connection, not the worker</dd>
+<dt><a href="ioxd_socket.html">&lt;ioxd/socket.h&gt;</a></dt><dd>outbound connections, as pipes</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
 </dl>
 
@@ -680,6 +682,28 @@ int main(void)
         if (ioxd_delay(250) != 0)
             return;                                   /* the server is stopping */
     }
+}"""),
+    ],
+    "ioxd_socket": [
+        ("A handler that fetches from another server over a connection of its own, and relays the reply:",
+         """static void fetch(ioxd_ctx *ctx)
+{
+    ioxd_pipe *up = ioxd_connect("127.0.0.1", 9000);
+    if (!up) {
+        ctx->res.status = 502;
+        ioxd_printf(ctx, "connect: %s\\n", strerror(errno));
+        return;
+    }
+    ioxd_pipe_send(up, "GET /health HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n", 51);
+    for (;;) {
+        ioxd_slice live;
+        int rc = ioxd_pipe_read(up, &live);           /* parks this coroutine; the worker serves others */
+        if (rc <= 0)
+            break;                                    /* 0: the peer closed; <0: gone or FULL */
+        ioxd_write(ctx, live.p, live.len);
+        ioxd_pipe_drop(up, live.len);
+    }
+    ioxd_disconnect(up);
 }"""),
     ],
     "ioxd_tls": [

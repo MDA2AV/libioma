@@ -4,6 +4,8 @@
  */
 #include <ioxd.h>
 
+#include <errno.h>
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -464,6 +466,42 @@ static void delay_route(ioxd_ctx *ctx)
     ioxd_printf(ctx, "waited %lld ms: %d\n", (long long)ms, rc);
 }
 
+/* GET /client?port=N - connects to 127.0.0.1:N from this handler, asks it for /health, and
+ * answers with what came back after the blank line: the client end of the pipe, end to end. */
+static void client_route(ioxd_ctx *ctx)
+{
+    int64_t port = 0;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "port"))
+            ioxd_to_i64(ctx->req.params[i].value, &port);
+    ioxd_pipe *up = ioxd_connect("127.0.0.1", (int)port);
+    if (!up) {
+        ctx->res.status = 502;
+        ioxd_printf(ctx, "connect failed: %s\n", strerror(errno));   /* NOLINT(concurrency-mt-unsafe): glibc's is per-thread */
+        return;
+    }
+    static const char req[] = "GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n";
+    if (ioxd_pipe_send(up, req, sizeof req - 1) < 0) {
+        ioxd_disconnect(up);
+        ctx->res.status = 502;
+        return;
+    }
+    char   reply[1024];
+    size_t got = 0;
+    for (;;) {
+        int n = ioxd_pipe_copy(up, reply + got, sizeof reply - got);
+        if (n <= 0 || got + (size_t)n == sizeof reply)
+            break;
+        got += (size_t)n;
+    }
+    ioxd_disconnect(up);
+    const char *body = memmem(reply, got, "\r\n\r\n", 4);
+    if (body)
+        ioxd_write(ctx, body + 4, got - (size_t)(body + 4 - reply));
+    else
+        ctx->res.status = 502;
+}
+
 /* The fallback for anything unrouted, replacing the built-in text 404. */
 static void not_found(ioxd_ctx *ctx)
 {
@@ -510,6 +548,7 @@ int main(void)
     IOXD_GET ("/bighead",               bighead);
     IOXD_GET ("/status/:code",          status_route);
     IOXD_GET ("/delay",                 delay_route);
+    IOXD_GET ("/client",                client_route);
     IOXD_GET ("/reflect",               reflect);
     IOXD_GET ("/promise",               promise);
     IOXD_GET ("/params",                params);

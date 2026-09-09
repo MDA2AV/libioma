@@ -199,7 +199,7 @@ void ioxd__conn_on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
             return;
         }
 
-        end_input(c, result == -EIO && c->listener->certs ? 0 : result);
+        end_input(c, result == -EIO && c->listener && c->listener->certs ? 0 : result);
         c->recv = RECV_DONE;
         wake_reader(c);
         conn_unref(c);
@@ -264,7 +264,7 @@ void ioxd__conn_close_socket(proactor_t *p, int fd)
         sqe->fd = fd;
 }
 
-static void conn_close(conn_t *c)
+void ioxd__conn_close(conn_t *c)
 {
     proactor_t *p = c->p;
     c->closed = true;
@@ -295,7 +295,7 @@ void ioxd__conn_main(void *arg)
     ioxd__pipe_init(&pipe, c, gather, sizeof gather, slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
     c->p->handler(&pipe);
     ioxd__pipe_close(&pipe);
-    conn_close(c);
+    ioxd__conn_close(c);
 }
 
 int ioxd__conn_recv_item(conn_t *c, struct rx_item *out)

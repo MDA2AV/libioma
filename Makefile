@@ -52,7 +52,7 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe io/timer http/engine http/api http/router http/run json/json tls/certs tls/handshake
+UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe clients/timer clients/socket http/engine http/api http/router http/run json/json tls/certs tls/handshake
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 

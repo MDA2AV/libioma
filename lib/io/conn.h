@@ -80,6 +80,7 @@ void    ioxd__conn_arm_recv(proactor_t *p, conn_t *c);        /* one multishot r
 void    ioxd__conn_on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
 void    ioxd__conn_recv_drain(conn_t *c);                     /* shutdown: end a recv parked on -ENOBUFS */
 void    ioxd__conn_close_socket(proactor_t *p, int fd);       /* close a socket through the ring      */
+void    ioxd__conn_close(conn_t *c);                     /* the coroutine is done with it: cancel, close, drop its ref */
 void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */
 
 /* ── conn.c: the notes ──────────────────────────────────────────────────────────────────── */
@@ -198,7 +199,7 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *   - slot + 1; 0 would mean "a real fd"  [sqe->file_index = (uint32_t)fd + 1;]
  */
 
-/* conn_close:
+/* ioxd__conn_close:
  * Runs once when the handler returns: cancel the recv, hand unread buffers back, close the fd,
  * drop the handler's ref. The recv's own ref drops on its terminal CQE.
  *   - the recv side's reference; ours, dropped last, keeps c alive  [c->refs--;]

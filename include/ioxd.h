@@ -31,4 +31,5 @@
 #include "ioxd/pipe.h"     /* a connection as a pipe, for other protocols         */
 #include "ioxd/run.h"      /* bind the ports, run the workers                     */
 #include "ioxd/timer.h"    /* a delay that parks the connection, not the worker    */
+#include "ioxd/socket.h"   /* outbound connections, as pipes                       */
 #include "ioxd/tls.h"      /* certificates, for a TLS listener                    */

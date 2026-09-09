@@ -432,6 +432,12 @@ results.append(check("  /health answered in the meantime, not behind the delays"
 for w in waiters:
     read_response(w); w.close()
 
+# an outbound connection from a handler: the fixture fetches /health from its own second port
+st, hd, body = get(f"/client?port={PORT + 1}")
+results.append(check("GET /client -> the handler connected out, sent a request, relayed the reply", st == 200 and body == b"ok"))
+st, hd, body = get("/client?port=1")
+results.append(check("  a port nobody listens on -> 502, the connect refused", st == 502 and b"connect failed" in body))
+
 # more request headers than the table holds is a parse failure: 400
 rs = raw_exchange([b"GET /health HTTP/1.1\r\nHost: x\r\n" + b"".join(b"x-h%d: v\r\n" % i for i in range(70)) + b"\r\n"])
 results.append(check("70 request headers -> 400 (the table holds 64)", len(rs) == 1 and rs[0][0] == 400))
