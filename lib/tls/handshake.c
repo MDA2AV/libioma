@@ -267,6 +267,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
     SSL_set_bio(ssl, rbio, wbio);                     /* the SSL owns both from here */
     SSL_set_accept_state(ssl);
     SSL_set_ex_data(ssl, ex_index, &s);
+    ioxd__tls_bind(ssl, t);                           /* the table its ClientHello picks a host from */
 
     for (;;) {                                        /* the handshake, as an ordinary await loop */
         int ret = SSL_do_handshake(ssl);

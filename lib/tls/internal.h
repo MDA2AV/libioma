@@ -1,6 +1,6 @@
 /*
  * tls/internal.h - what the store and the handshake share: the table a handshake holds a
- * reference to, and the keylog callback the store installs on every context.
+ * reference to and hangs on its SSL, and the keylog callback the store installs on every context.
  */
 #pragma once
 
@@ -22,5 +22,6 @@ struct table;
 struct table *ioxd__tls_acquire (ioxd_tls *tls);                 /* store.c: the table serving now, referenced */
 void          ioxd__tls_release (ioxd_tls *tls, struct table *t);
 SSL_CTX      *ioxd__tls_fallback(const struct table *t);         /* the context a handshake starts on */
+void          ioxd__tls_bind    (SSL *ssl, struct table *t);     /* the table its ClientHello picks a host from */
 void          ioxd__tls_keylog  (const SSL *ssl, const char *line);   /* handshake.c: catches the traffic secrets */
 #endif
