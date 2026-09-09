@@ -1,10 +1,15 @@
 /*
- * playground/hello - a small libioxd server: three routes, one worker per core.
+ * playground/hello - a small libioxd server: three routes, one worker per core, and the same
+ * routes over TLS when it is given a directory of certificates.
  *
  *     make && ./ioxd-hello
  *     curl http://127.0.0.1:8080/hello/diogo
  *     curl http://127.0.0.1:8080/users/42
  *     curl -d 'knock' http://127.0.0.1:8080/repeat/25
+ *
+ *     sh tests/mkcerts.sh certs && ./ioxd-hello certs          # self-signed, so curl needs -k
+ *     curl -k https://127.0.0.1:8443/hello/diogo
+ *     curl -k --resolve sni.test:8443:127.0.0.1 https://sni.test:8443/users/42
  *
  * Against an installed libioxd:  cc main.c $(pkg-config --cflags --libs ioxd) -o hello
  */
@@ -89,10 +94,23 @@ static void user_endpoint(ioxd_ctx *ctx)
     user_to_json(&j, &u);
 }
 
-int main(void)
+/* The routes, then the ports. ioxd_run serves plain HTTP on 8080; with a certificate directory
+ * on the command line a second listener serves the same routes on 8443 over TLS 1.3. The store
+ * holds one host per subdirectory - <dir>/<host>/cert.pem and key.pem - and the client's SNI
+ * picks the host, `default` answering for no name or an unknown one (TLS.md). The handshake is
+ * OpenSSL's; from then on the kernel encrypts and decrypts, and a handler cannot tell the two
+ * listeners apart. */
+int main(int argc, char **argv)
 {
     IOXD_GET ("/hello/:name",   hello);
     IOXD_GET ("/users/:id",     user_endpoint);
     IOXD_POST("/repeat/:times", repeat);
+
+    if (argc > 1) {
+        ioxd_tls *tls = ioxd_tls_new(argv[1]);
+        if (!tls)
+            return 1;                                /* the reason is on stderr: no `default`, a bad key, a TLS=0 build */
+        ioxd_listen(8443, tls);
+    }
     return ioxd_run(0, 8080);
 }

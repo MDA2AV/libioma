@@ -18,7 +18,7 @@ with it the OpenSSL dependency, and `ioxd_tls_new` then returns NULL with a line
 ## Run
 
 `./ioxd-hello` is the smallest server: three routes, `GET /hello/:name`, a `GET /users/:id` that writes JSON, and a `POST /repeat/:times`
-that reads the body and streams it back, one worker per core on port 8080. Ctrl-C stops it. A server exercising every feature of the request and response model
+that reads the body and streams it back, one worker per core on port 8080; given a directory of certificates (`sh tests/mkcerts.sh certs && ./ioxd-hello certs`) it serves the same routes over TLS on 8443 too. Ctrl-C stops it. A server exercising every feature of the request and response model
 is `tests/server.c`, the fixture the test suites run against.
 
 ## Use it in your project
