@@ -69,7 +69,7 @@ MAP      := cmake/ioxd.map
 # the recipe rewrites it only when it differs, so an unchanged build stays untouched.
 FLAGS := $(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $(LIBS)
 
-.PHONY: all lib examples check check-tiny check-all tidy clean install uninstall force
+.PHONY: all lib examples check check-tiny check-all tidy manual clean install uninstall force
 all: lib examples
 
 lib: libioxd.a libioxd.so
@@ -173,6 +173,10 @@ TIDY_ARGS ?= --extra-arg=-isystem$(shell $(CC) -print-file-name=include)
 TIDY_SRC  := $(wildcard lib/*/*.c) tests/server.c tests/pipe-server.c tests/unit.c
 tidy:
 	$(TIDY) $(TIDY_ARGS) $(TIDY_SRC) -- $(STD) $(CPP) $(PTHREAD)
+
+# --- the manual: man-page style HTML for every public header, generated from the headers ---
+manual:
+	python3 manual/build.py
 
 # --- pkg-config ---
 ioxd.pc: ioxd.pc.in obj/flags

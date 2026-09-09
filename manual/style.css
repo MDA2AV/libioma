@@ -1,0 +1,46 @@
+/* The manual's look: a man page, as man7.org renders one - monospace, sections in capitals at the
+ * margin, the text indented under them - with links, anchors and a light nav bar on top. */
+:root {
+  --paper: #ffffff; --ink: #111111; --dim: #555555; --rule: #d8d8d8; --link: #1a3fbf; --code: #f4f4f4;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --paper: #111213; --ink: #e6e6e6; --dim: #a0a0a0; --rule: #333; --link: #7da2ff; --code: #1c1e21; }
+}
+html { background: var(--paper); }
+body {
+  margin: 0; color: var(--ink); background: var(--paper);
+  font: 14px/1.5 "DejaVu Sans Mono", "Liberation Mono", Menlo, Consolas, ui-monospace, monospace;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.crumbs { padding: .5em 1.5em; border-bottom: 1px solid var(--rule); color: var(--dim); }
+main { max-width: 100ch; margin: 0 auto; padding: 1em 1.5em 4em; }
+.hdr, .ftr { display: flex; justify-content: space-between; font-weight: bold; }
+.ftr { margin-top: 3em; font-weight: normal; color: var(--dim); }
+h1 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .5em; }
+h2 { font-size: 1em; font-weight: bold; margin: 1.8em 0 .5em; letter-spacing: .02em; }
+h3 { font-size: 1em; font-weight: bold; margin: 1.4em 0 .4em 3ch; }
+h3::before { content: ""; }
+main > p, .entry, dl, pre, .text { margin-left: 7ch; }
+main > pre.ex, main > pre.syn { margin-left: 7ch; }
+p { margin: .5em 0; }
+pre { margin: .5em 0; white-space: pre-wrap; word-break: break-word; }
+pre.syn { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
+pre.decl { font-weight: bold; margin: 1.2em 0 .3em; }
+pre.ex { padding: .6em 1em; background: var(--code); border-left: 3px solid var(--rule); }
+.entry { margin-top: .4em; }
+.entry .text { margin-left: 4ch; }
+.entry .text pre.ex, .text pre.ex { margin-left: 0; }
+dl.trail { margin: .3em 0 0 4ch; }
+dl.trail dt { font-weight: bold; margin-top: .4em; }
+dl.trail dd { margin: 0 0 0 4ch; color: var(--ink); }
+dl.files dt { font-weight: bold; margin-top: .6em; }
+dl.files dd { margin: 0 0 0 4ch; }
+table { border-collapse: collapse; margin-left: 7ch; }
+td, th { text-align: left; padding: .25em 1.5em .25em 0; vertical-align: top; }
+th { font-weight: bold; }
+.dim { color: var(--dim); }
+@media (max-width: 700px) {
+  main > p, .entry, dl, pre, .text, table, h3 { margin-left: 1ch; }
+  .hdr span:nth-child(2), .ftr span:nth-child(2) { display: none; }
+}

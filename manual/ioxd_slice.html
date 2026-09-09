@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ioxd_slice(3) - libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>IOXD_SLICE(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_SLICE(3)</span></div>
+<h2>NAME</h2>
+<p>ioxd/slice.h - a slice, bytes with a length, and a key/value pair of them: what every request carries. Compare and convert them without copying; parse a query string or a form body.</p>
+<h2>SYNOPSIS</h2>
+<pre class="syn">#include &lt;ioxd.h&gt;
+
+typedef struct { const char *p; size_t len; } <a href="#ioxd_slice">ioxd_slice</a>;
+typedef struct { <a href="#ioxd_slice">ioxd_slice</a> key, value; } <a href="#ioxd_kv">ioxd_kv</a>;
+bool       <a href="#ioxd_slice_eq">ioxd_slice_eq</a>         (<a href="#ioxd_slice">ioxd_slice</a> s, const char *cstr);
+bool       <a href="#ioxd_slice_eq_ci">ioxd_slice_eq_ci</a>      (<a href="#ioxd_slice">ioxd_slice</a> s, const char *cstr);
+bool       <a href="#ioxd_slice_starts_with">ioxd_slice_starts_with</a>(<a href="#ioxd_slice">ioxd_slice</a> s, const char *prefix);
+bool       <a href="#ioxd_slice_ends_with">ioxd_slice_ends_with</a>  (<a href="#ioxd_slice">ioxd_slice</a> s, const char *suffix);
+<a href="#ioxd_slice">ioxd_slice</a> <a href="#ioxd_slice_trim">ioxd_slice_trim</a>       (<a href="#ioxd_slice">ioxd_slice</a> s);
+bool <a href="#ioxd_cstr">ioxd_cstr</a>(<a href="#ioxd_slice">ioxd_slice</a> s, char *buf, size_t cap);
+bool <a href="#ioxd_to_int">ioxd_to_int</a>   (<a href="#ioxd_slice">ioxd_slice</a> s, int      *out);
+bool <a href="#ioxd_to_i64">ioxd_to_i64</a>   (<a href="#ioxd_slice">ioxd_slice</a> s, int64_t  *out);
+bool <a href="#ioxd_to_u64">ioxd_to_u64</a>   (<a href="#ioxd_slice">ioxd_slice</a> s, uint64_t *out);
+bool <a href="#ioxd_to_double">ioxd_to_double</a>(<a href="#ioxd_slice">ioxd_slice</a> s, double   *out);
+bool <a href="#ioxd_to_bool">ioxd_to_bool</a>  (<a href="#ioxd_slice">ioxd_slice</a> s, bool     *out);
+size_t <a href="#ioxd_kv_parse">ioxd_kv_parse</a>(const char *text, size_t len, <a href="#ioxd_kv">ioxd_kv</a> *out, size_t cap, char *arena, size_t arena_cap, bool *truncated);</pre>
+<h2>DESCRIPTION</h2>
+<div class="entry">
+<pre class="decl" id="ioxd_slice">
+typedef struct { const char *p; size_t len; } ioxd_slice;
+</pre>
+<div class="text"><p>A slice: pointer + length, the C span. Not NUL-terminated.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_kv">
+typedef struct { ioxd_slice key, value; } ioxd_kv;
+</pre>
+<div class="text"><p>One key/value pair of slices: a header, a query parameter, a route parameter.</p></div>
+</div>
+<h3>slices</h3>
+<div class="entry">
+<pre class="decl" id="ioxd_slice_eq">
+bool       ioxd_slice_eq         (ioxd_slice s, const char *cstr);
+bool       ioxd_slice_eq_ci      (ioxd_slice s, const char *cstr);
+bool       ioxd_slice_starts_with(ioxd_slice s, const char *prefix);
+bool       ioxd_slice_ends_with  (ioxd_slice s, const char *suffix);
+ioxd_slice ioxd_slice_trim       (ioxd_slice s);
+</pre>
+<div class="text"><p>Everything a request carries is a slice: bytes with a length, not NUL-terminated, valid until the handler returns. These compare and convert one without copying it.</p></div>
+<dl class="trail">
+<dt>ioxd_slice_eq</dt><dd>exact</dd>
+<dt>ioxd_slice_eq_ci</dt><dd>ASCII case-insensitive</dd>
+<dt>ioxd_slice_trim</dt><dd>no leading/trailing space, tab, CR, LF</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_cstr">
+bool ioxd_cstr(ioxd_slice s, char *buf, size_t cap);
+</pre>
+<div class="text"><p>A NUL-terminated copy in buf, for whatever wants a C string. False when it did not fit: buf then holds what fit, still terminated (cap 0 writes nothing) - and false when the slice holds a NUL of its own, which would end the C string early ("secret.txt%00.png" is not a PNG).</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_to_int">
+bool ioxd_to_int   (ioxd_slice s, int      *out);
+bool ioxd_to_i64   (ioxd_slice s, int64_t  *out);
+bool ioxd_to_u64   (ioxd_slice s, uint64_t *out);
+bool ioxd_to_double(ioxd_slice s, double   *out);
+bool ioxd_to_bool  (ioxd_slice s, bool     *out);
+</pre>
+<div class="text"><p>Conversions. The whole slice must be the value - nothing around it, nothing after it - and a number that does not fit the type fails. On failure *out is left alone and false comes back, so "0" and "not a number" cannot be confused. Integers: an optional '-' and decimal digits. Doubles: also a fraction and an exponent ("2.5", ".5", "1e-3"); never inf, nan or hex; too large fails, too small rounds towards zero. Booleans: true/false, 1/0, yes/no, on/off, any case.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_kv_parse">
+size_t ioxd_kv_parse(const char *text, size_t len, ioxd_kv *out, size_t cap, char *arena, size_t arena_cap,
+                     bool *truncated);
+</pre>
+<div class="text"><p>Parse "k=v&amp;k2=v2" - a query string, a form body - into out, up to cap pairs. Keys and values that need it ('+', %XX) are decoded into arena and point there; the rest are views of s. A malformed %XX and %00 stay as written. Returns the pair count; *truncated (may be NULL) is set when a pair was left out - past cap, or not fitting the arena - so the caller can refuse the request rather than act on part of it. Every pair is returned, duplicates included, in order: pick a policy (first or last) and keep to it.</p></div>
+</div>
+<h2>EXAMPLES</h2>
+<p>Strict conversions: the whole slice is the value, or the call fails and *out is untouched:</p>
+<pre class="ex">int64_t id;
+double  price;
+bool    on;
+if (!<a href="#ioxd_to_i64">ioxd_to_i64</a>(ctx-&gt;req.route_params[0].value, &amp;id))     /* "42", "-7"; not "42x", not " 42" */
+    ...
+if (<a href="#ioxd_to_double">ioxd_to_double</a>(v, &amp;price) &amp;&amp; <a href="#ioxd_to_bool">ioxd_to_bool</a>(w, &amp;on))      /* "2.5", "1e-3"; "yes", "off" */
+    ...</pre>
+<p>A form body parsed like a query string:</p>
+<pre class="ex"><a href="#ioxd_slice">ioxd_slice</a> body = <a href="ioxd_http.html#ioxd_body_all">ioxd_body_all</a>(ctx);
+<a href="#ioxd_kv">ioxd_kv</a>    form[8];
+char       arena[512];
+bool       truncated;
+size_t n = <a href="#ioxd_kv_parse">ioxd_kv_parse</a>(body.p, body.len, form, 8, arena, sizeof arena, &amp;truncated);
+if (truncated) { ctx-&gt;res.status = 400; return; }        /* never act on part of it */
+for (size_t i = 0; i &lt; n; i++)
+    if (<a href="#ioxd_slice_eq">ioxd_slice_eq</a>(form[i].key, "name"))
+        <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "hello %.*s\n", (int)form[i].value.len, form[i].value.p);</pre>
+<h2>SEE ALSO</h2>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_SLICE(3)</span></div>
+</main>
+</body>
+</html>

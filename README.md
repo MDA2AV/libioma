@@ -6,6 +6,12 @@ stackful coroutine per connection, so an endpoint is a plain function that takes
 returns a response. Modelled on [ioxide](https://github.com/MDA2AV/ioxide)'s TCP core. How the
 runtime works is in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
+## Manual
+
+The API is documented as man pages under [`manual/`](manual/index.html): one page per public header
+(`ioxd_http(3)`, `ioxd_router(3)`, ...), generated from the headers themselves by `make manual`, an
+overview in `ioxd(7)`, and every public name in one list. Open `manual/index.html` in a browser.
+
 ## Build
 
 Run `make` in the repo root. It produces `libioxd.a`, `libioxd.so` and the demo server
