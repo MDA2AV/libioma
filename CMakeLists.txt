@@ -96,6 +96,18 @@ if(IOXD_HAVE_FAT_LTO)
     target_compile_options(ioxd PRIVATE -flto -ffat-lto-objects)
     target_link_options(ioxd PRIVATE -flto)
 endif()
+# A coroutine's stack ends at a guard page, which only stops a frame that touches every page as it
+# grows: stack clash protection makes the compiler emit those probes.
+check_c_compiler_flag(-fstack-clash-protection IOXD_HAVE_STACK_CLASH)
+if(IOXD_HAVE_STACK_CLASH)
+    target_compile_options(ioxd PRIVATE -fstack-clash-protection)
+endif()
+# A shared build exports ioxd_* and nothing else, through the version script the make build uses.
+set(IOXD_VERSION_SCRIPT ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ioxd.map)
+if(BUILD_SHARED_LIBS)
+    target_link_options(ioxd PRIVATE -Wl,--version-script,${IOXD_VERSION_SCRIPT})
+    set_target_properties(ioxd PROPERTIES LINK_DEPENDS ${IOXD_VERSION_SCRIPT})
+endif()
 target_link_libraries(ioxd PUBLIC Threads::Threads)
 set_target_properties(ioxd PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
 
@@ -114,8 +126,32 @@ if(IOXD_EXAMPLES)
     target_link_libraries(ioxd-pipe-server PRIVATE ioxd::ioxd)
     add_executable(ioxd-unit tests/unit.c)
     target_link_libraries(ioxd-unit PRIVATE ioxd::ioxd)
+    # The suites, through the one script `make check` runs, so the sequence lives in one place.
+    # The three that talk to the HTTP fixture share one entry, and so one fixture on one port, as
+    # they do under make: a fixture bound to a port the suite before it filled with TIME_WAIT
+    # connections has some of its new ones reset. Both entries bind fixed ports, so neither may
+    # run beside anything else.
     enable_testing()
+    set(IOXD_CHECK_PORT 8099    CACHE STRING "first port the fixture listens on; it takes the two after it")
+    set(IOXD_PIPE_PORT  8102    CACHE STRING "port the pipe fixture listens on")
+    set(IOXD_TLS_PYTHON python3 CACHE STRING "a python with tlslite-ng, for tests/tls_early.py")
     add_test(NAME unit COMMAND ioxd-unit)
+    add_test(NAME suites COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
+             --suite smoke --suite stress --suite tls
+             --port ${IOXD_CHECK_PORT}
+             --server $<TARGET_FILE:ioxd-test-server>
+             --tls-python ${IOXD_TLS_PYTHON}
+             --work ${CMAKE_CURRENT_BINARY_DIR}/check/suites)
+    add_test(NAME pipes COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
+             --suite pipes
+             --pipe-port ${IOXD_PIPE_PORT}
+             --pipe-server $<TARGET_FILE:ioxd-pipe-server>
+             --work ${CMAKE_CURRENT_BINARY_DIR}/check/pipes)
+    set_tests_properties(suites pipes PROPERTIES RUN_SERIAL TRUE)
+    add_custom_target(check
+            COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
+            DEPENDS ioxd-unit ioxd-test-server ioxd-pipe-server
+            USES_TERMINAL)
     if(IOXD_HAVE_FAT_LTO)
         target_compile_options(ioxd-hello PRIVATE -flto)
         target_link_options(ioxd-hello PRIVATE -flto)
@@ -135,7 +171,8 @@ install(EXPORT ioxdTargets
         DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/ioxd
         FILE ioxdTargets.cmake)
 
-# A config file that re-finds the public Threads dependency, then loads the exported targets.
+# A config file that re-finds the public dependencies - Threads, and OpenSSL when this build has
+# TLS, which it is told through IOXD_TLS - then loads the exported targets.
 include(CMakePackageConfigHelpers)
 configure_package_config_file(
         ${CMAKE_CURRENT_SOURCE_DIR}/cmake/ioxdConfig.cmake.in

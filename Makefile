@@ -2,6 +2,10 @@
 #
 #   make            build libioxd.a, libioxd.so and the examples
 #   make lib        just the libraries
+#   make check      the unit test and the suites, against the fixture servers
+#   make check-tiny the stress suite against a build with the buffers starved on purpose
+#   make check-all  both
+#   make tidy       clang-tidy over the library
 #   make install    install libs, ioxd.h and ioxd/*.h (under <prefix>/include) and ioxd.pc
 #   sudo make install PREFIX=/usr/local
 #
@@ -24,6 +28,9 @@ AR      ?= ar
 LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /dev/null 2>/dev/null && echo -flto -ffat-lto-objects)
 CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra $(STD)
+# A coroutine's stack ends at a guard page, which only stops a frame that touches every page as it
+# grows: stack clash protection makes the compiler emit those probes.
+HARDEN  := $(shell $(CC) -Werror -fstack-clash-protection -x c -c /dev/null -o /dev/null 2>/dev/null && echo -fstack-clash-protection)
 CPP     := -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
 # TLS: OpenSSL for the handshake only; the kernel does the records (TLS.md). make TLS=0 leaves it out.
 TLS     ?= 1
@@ -53,73 +60,117 @@ EXAMPLES := ioxd-hello
 TESTSRV  := tests/ioxd-test-server
 PIPESRV  := tests/ioxd-pipe-server
 UNIT     := tests/ioxd-unit
+# The linker version script: the .so exports ioxd_* and nothing else.
+MAP      := cmake/ioxd.map
 
-.PHONY: all lib examples check clean install uninstall
+# Every flag an object is built with, in a file. TLS=0/1 - or a different CC or CFLAGS - changes
+# what the objects must be, and a stamp they all depend on is what makes that a build dependency:
+# the recipe rewrites it only when it differs, so an unchanged build stays untouched.
+FLAGS := $(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $(LIBS)
+
+.PHONY: all lib examples check check-tiny check-all tidy clean install uninstall force
 all: lib examples
 
 lib: libioxd.a libioxd.so
 
+force:
+obj/flags: force
+	@mkdir -p $(@D)
+	@printf '%s\n' '$(FLAGS)' | cmp -s - $@ || printf '%s\n' '$(FLAGS)' > $@
+
 libioxd.a: $(OBJ)
 	$(AR) rcs $@ $^
 
-libioxd.so: $(PICOBJ)
-	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD) $(LIBS)
+# The version script keeps the library's own names out of the dynamic symbol table: what a
+# consumer may bind to is ioxd_*, and nothing else (nm -D libioxd.so says so).
+libioxd.so: $(PICOBJ) $(MAP)
+	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -Wl,--version-script,$(MAP) -o $@ $(PICOBJ) $(PTHREAD) $(LIBS)
 
 # --- static objects (used by libioxd.a and the examples) ---
-obj/%.o: lib/%.c $(HDRS)
+obj/%.o: lib/%.c $(HDRS) obj/flags
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -c $< -o $@
-obj/io/switch_x86_64.o: lib/io/switch_x86_64.S
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) -c $< -o $@
+obj/io/switch_x86_64.o: lib/io/switch_x86_64.S obj/flags
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(CPP) -c $< -o $@
-obj/picohttpparser.o: third_party/picohttpparser/picohttpparser.c
+obj/picohttpparser.o: third_party/picohttpparser/picohttpparser.c obj/flags
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -w -Ithird_party/picohttpparser -c $< -o $@
+	$(CC) $(CFLAGS) -w $(HARDEN) -Ithird_party/picohttpparser -c $< -o $@
 
 # --- position-independent objects (used by libioxd.so) ---
-obj/pic/%.o: lib/%.c $(HDRS)
+obj/pic/%.o: lib/%.c $(HDRS) obj/flags
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) -fPIC -c $< -o $@
-obj/pic/io/switch_x86_64.o: lib/io/switch_x86_64.S
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) -fPIC -c $< -o $@
+obj/pic/io/switch_x86_64.o: lib/io/switch_x86_64.S obj/flags
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) $(CPP) -fPIC -c $< -o $@
-obj/pic/picohttpparser.o: third_party/picohttpparser/picohttpparser.c
+obj/pic/picohttpparser.o: third_party/picohttpparser/picohttpparser.c obj/flags
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -w -fPIC -Ithird_party/picohttpparser -c $< -o $@
+	$(CC) $(CFLAGS) -w $(HARDEN) -fPIC -Ithird_party/picohttpparser -c $< -o $@
 
 # --- examples link the static library ---
 examples: $(EXAMPLES)
 # Link the static archive directly so the example runs in-tree without installing the .so.
 ioxd-hello: playground/hello/main.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 # --- tests: the unit test, then the fixture server with both suites against it ---
 $(TESTSRV): tests/server.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 $(UNIT): tests/unit.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 $(PIPESRV): tests/pipe-server.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 CHECK_PORT ?= 8099
 PIPE_PORT  ?= 8102                       # the fixture takes CHECK_PORT and the two after (plain, TLS)
 TLS_PYTHON ?= python3                    # a python with tlslite-ng, for tests/tls_early.py (skips itself otherwise)
 TLSFUZZER  ?=                            # a tlsfuzzer checkout, for `make check-tlsfuzzer` (TLS_PYTHON must have its requirements)
+# The sequence itself is tests/run-suites.sh, so CMake's `check` target runs exactly this one.
 check: $(TESTSRV) $(UNIT) $(PIPESRV)
-	@./$(UNIT) || exit 1; \
-	 [ -f tests/certs/default/cert.pem ] || sh tests/mkcerts.sh tests/certs >/dev/null; \
-	 IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) IOXD_CERTS=tests/certs ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
-	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(CHECK_PORT) " && break; sleep 0.1; done; \
-	 python3 tests/smoke.py $(CHECK_PORT); s=$$?; python3 tests/stress.py $(CHECK_PORT); t=$$?; \
-	 $(TLS_PYTHON) tests/tls_early.py $$(($(CHECK_PORT) + 2)); e=$$?; \
-	 kill -INT $$pid; wait $$pid 2>/dev/null; \
-	 ./$(PIPESRV) $(PIPE_PORT) >/dev/null 2>&1 & pid=$$!; \
-	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(PIPE_PORT) " && break; sleep 0.1; done; \
-	 python3 tests/pipes.py $(PIPE_PORT); u=$$?; \
-	 kill -INT $$pid; wait $$pid 2>/dev/null; exit $$((s | t | e | u))
+	@sh tests/run-suites.sh --port $(CHECK_PORT) --pipe-port $(PIPE_PORT) \
+	    --unit ./$(UNIT) --server ./$(TESTSRV) --pipe-server ./$(PIPESRV) --tls-python $(TLS_PYTHON)
+
+# --- the same stress suite, against a build starved on purpose ---
+# 8 x 64 B receive buffers and a 4-deep per-connection queue: every request empties the buffer
+# group, so recvs park on -ENOBUFS and are re-armed as handlers give buffers back, and the queue
+# overflows at the first stall. The defines change every object, so it has its own directory.
+TINY      := -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4
+TINYOBJ   := $(addprefix obj-tiny/,$(addsuffix .o,$(UNITS))) obj-tiny/io/switch_x86_64.o obj-tiny/picohttpparser.o
+TINYSRV   := tests/ioxd-test-server-tiny
+TINY_PORT ?= 8410
+
+obj-tiny/%.o: lib/%.c $(HDRS) obj/flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(TINY) $(PTHREAD) -c $< -o $@
+obj-tiny/io/switch_x86_64.o: lib/io/switch_x86_64.S obj/flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(CPP) $(TINY) -c $< -o $@
+obj-tiny/picohttpparser.o: third_party/picohttpparser/picohttpparser.c obj/flags
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -w $(HARDEN) -Ithird_party/picohttpparser -c $< -o $@
+libioxd-tiny.a: $(TINYOBJ)
+	$(AR) rcs $@ $^
+$(TINYSRV): tests/server.c libioxd-tiny.a
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(TINY) $(PTHREAD) $< libioxd-tiny.a -o $@ $(PTHREAD) $(LIBS)
+
+check-tiny: $(TINYSRV)
+	@sh tests/run-suites.sh --suite stress --port $(TINY_PORT) --server ./$(TINYSRV) --work obj-tiny/check
+
+# Everything: the default build's suites, then the starved build's.
+check-all: check check-tiny
+
+# --- clang-tidy over the library with the flags its objects are built with (.clang-tidy holds the
+# checks). CLion's bundled binary ships without clang's builtin headers, so gcc's own are handed
+# to it: make tidy TIDY=<clion>/bin/clang/linux/x64/bin/clang-tidy ---
+TIDY      ?= clang-tidy
+TIDY_ARGS ?= --extra-arg=-isystem$(shell $(CC) -print-file-name=include)
+TIDY_SRC  := $(wildcard lib/*/*.c) tests/server.c tests/pipe-server.c tests/unit.c
+tidy:
+	$(TIDY) $(TIDY_ARGS) $(TIDY_SRC) -- $(STD) $(CPP) $(PTHREAD)
 
 # --- pkg-config ---
-ioxd.pc: ioxd.pc.in
+ioxd.pc: ioxd.pc.in obj/flags
 	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' -e 's|@LIBS@|$(LIBS)|g' $< > $@
 
 # --- install / uninstall ---
@@ -140,7 +191,7 @@ uninstall:
 	rm -f $(DESTDIR)$(PCDIR)/ioxd.pc
 
 clean:
-	rm -rf obj libioxd.a libioxd.so $(EXAMPLES) $(TESTSRV) $(PIPESRV) $(UNIT) ioxd.pc
+	rm -rf obj obj-tiny libioxd.a libioxd.so libioxd-tiny.a $(EXAMPLES) $(TESTSRV) $(PIPESRV) $(TINYSRV) $(UNIT) ioxd.pc
 
 # tlsfuzzer's TLS 1.3 conformance scripts that apply to a TLS 1.3-only, one-suite server; the
 # fixture must be up on CHECK_PORT with IOXD_CERTS (as `make check` runs it). Expected to pass:

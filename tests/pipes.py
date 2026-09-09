@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The pipe API through tests/pipe-server.c, a line echo: whole lines, a line split across
-sends, two lines in one packet, a quit, and a line too long for the pipe's buffer."""
+sends, two lines in one packet, bytes copied into a buffer of the handler's own, bytes kept where
+the kernel left them, a quit, and a line too long for the pipe's buffer."""
 import socket, sys, time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8100
@@ -28,16 +29,20 @@ def read_until(s, want):
 
 
 def read_to_close(s):
+    """Everything until the server closes: (data, closed). closed is False when the read timed out
+    instead - the connection is still open, which is a hang, not a close, and an assertion about a
+    close must not pass on one."""
     data = b""
     while True:
         try:
             chunk = s.recv(65536)
         except socket.timeout:
-            break
+            return data, False
+        except ConnectionResetError:
+            return data, True
         if not chunk:
-            break
+            return data, True
         data += chunk
-    return data
 
 
 results = []
@@ -50,7 +55,6 @@ def check(name, cond):
 
 s = connect()
 s.sendall(b"hello\n")
-results and None
 check("a line comes back echoed", read_until(s, 12) == b"echo: hello\n")
 s.sendall(b"ab")
 time.sleep(0.05)
@@ -58,13 +62,31 @@ s.sendall(b"c\n")
 check("a line split across sends is echoed whole", read_until(s, 10) == b"echo: abc\n")
 s.sendall(b"x\ny\n")
 check("two lines in one packet -> two echoes", read_until(s, 16) == b"echo: x\necho: y\n")
+
+# copy: the bytes after the command line, read into the handler's own buffer and sent back
+s.sendall(b"copy 5\nhello")
+check("copy N -> the next N bytes, copied out and sent back", read_until(s, 12) == b"copy: hello\n")
+
+# keep: the bytes are waited for where the kernel left them, however many receives that takes,
+# then kept - which consumes them, so the line after is read fresh rather than seen twice
+s.sendall(b"hold 9\n")
+for part in (b"abc", b"def", b"ghi"):
+    s.sendall(part)
+    time.sleep(0.05)
+check("hold N -> N bytes gathered over three receives, kept and written back",
+      read_until(s, 16) == b"hold: abcdefghi\n")
+s.sendall(b"after\n")
+check("the held bytes were consumed: the next line is echoed on its own", read_until(s, 12) == b"echo: after\n")
+
 s.sendall(b"quit\n")
-check("quit closes the connection", read_to_close(s) == b"")
+data, closed = read_to_close(s)
+check("quit closes the connection", closed and data == b"")
 s.close()
 
 s = connect()
 s.sendall(b"z" * 20000)
-check("a line longer than the pipe's buffer closes the connection", read_to_close(s) == b"")
+data, closed = read_to_close(s)
+check("a line longer than the pipe's buffer closes the connection", closed and data == b"")
 s.close()
 
 s = connect()

@@ -135,6 +135,60 @@ static void stream(ioxd_ctx *ctx)
         ioxd_printf(ctx, "line %lld of %lld\n", (long long)i, (long long)n);
 }
 
+/* GET /declared?n=N - a body of a length known up front: ioxd_content_length declares it, so the
+ * reply streams framed by Content-Length instead of chunked, and the handler sends it in four
+ * ioxd_flush calls rather than waiting for the slab to fill. The bytes are 'a'..'z' cycling, so
+ * the client can check them exactly. */
+static void declared(ioxd_ctx *ctx)
+{
+    int64_t n = 4096;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "n"))
+            ioxd_to_i64(ctx->req.params[i].value, &n);
+    if (n < 0 || n > (1 << 20))
+        n = 4096;
+    char tile[260];                                      /* 10 x 'a'..'z': tiles the body exactly */
+    for (size_t i = 0; i < sizeof tile; i++)
+        tile[i] = (char)('a' + i % 26);
+
+    ioxd_content_length(ctx, (size_t)n);
+    size_t written = 0, quarter = ((size_t)n + 3) / 4, next_flush = quarter;
+    while (written < (size_t)n) {
+        size_t take = (size_t)n - written;
+        if (take > sizeof tile)
+            take = sizeof tile;
+        if (ioxd_write(ctx, tile, take) < 0)
+            return;
+        written += take;
+        if (written < (size_t)n && written >= next_flush) {    /* another quarter is in: on its way */
+            if (ioxd_flush(ctx) < 0)
+                return;
+            next_flush += quarter;
+        }
+    }
+}
+
+/* GET /raw?n=N - the reply written into the slab directly: reserve the room, fill it, advance by
+ * what was written. More than the slab holds cannot be reserved, and says so. */
+static void raw(ioxd_ctx *ctx)
+{
+    int64_t n = 64;
+    for (size_t i = 0; i < ctx->req.n_params; i++)
+        if (ioxd_slice_eq(ctx->req.params[i].key, "n"))
+            ioxd_to_i64(ctx->req.params[i].value, &n);
+    if (n < 0 || n > (1 << 20))
+        n = 64;
+    char *at = ioxd_reserve(ctx, (size_t)n);
+    if (!at) {
+        ctx->res.status = 500;
+        ioxd_text(ctx, "no room\n");
+        return;
+    }
+    for (int64_t i = 0; i < n; i++)
+        at[i] = (char)('0' + i % 10);
+    ioxd_advance(ctx, (size_t)n);
+}
+
 /* POST /upload - a body of any size, streamed: each ioxd_body_read_until hands over the next bytes
  * straight from the wire (suspending the handler while they arrive), nothing is buffered. A
  * handler that never asks for the body does not pay for it either: the framework drains it. */
@@ -215,6 +269,18 @@ static void require_token(ioxd_ctx *ctx, ioxd_next *next)
     }
     ctx->res.status = 401;
     ioxd_text(ctx, "token required\n");
+}
+
+/* GET /rooted - in a group whose prefix is "": no path of its own, just middleware around what is
+ * registered inside it. */
+static void rooted(ioxd_ctx *ctx)
+{
+    ioxd_text(ctx, "rooted\n");
+}
+static void rooted_header(ioxd_ctx *ctx, ioxd_next *next)
+{
+    ioxd_header(ctx, "x-rooted", "yes");
+    ioxd_next_run(ctx, next);
 }
 
 /* Middleware on one endpoint only. */
@@ -317,6 +383,21 @@ static void add_server(ioxd_ctx *ctx, ioxd_next *next)
     ioxd_next_run(ctx, next);
 }
 
+/* POST /tls/reload - the certificate store read again, registered only when the fixture has one.
+ * smoke.py rewrites a host's cert.pem and key.pem and calls this, then checks the new certificate
+ * is what the handshake serves. */
+static ioxd_tls *g_tls;
+
+static void tls_reload(ioxd_ctx *ctx)
+{
+    if (!g_tls || ioxd_tls_reload(g_tls) != 0) {
+        ctx->res.status = 500;
+        ioxd_text(ctx, "reload failed\n");
+        return;
+    }
+    ioxd_text(ctx, "reloaded\n");
+}
+
 /* The fallback for anything unrouted, replacing the built-in text 404. */
 static void not_found(ioxd_ctx *ctx)
 {
@@ -325,10 +406,11 @@ static void not_found(ioxd_ctx *ctx)
     ioxd_text(ctx, "{\"error\":\"not found\"}");
 }
 
-/* An environment variable as a number, or the fallback when unset or not a whole number. */
+/* An environment variable as a number, or the fallback when unset or not a whole number. Read
+ * from main, before ioxd_run starts a worker, so the environment is nobody else's yet. */
 static long env_number(const char *name, long fallback)
 {
-    const char *text = getenv(name);
+    const char *text = getenv(name);                           /* NOLINT(concurrency-mt-unsafe): no threads yet */
     if (!text)
         return fallback;
     char *end;
@@ -352,6 +434,8 @@ int main(void)
     IOXD_POST("/echo",                  echo);
     IOXD_POST("/greet",                 greet);
     IOXD_GET ("/stream",                stream);
+    IOXD_GET ("/declared",              declared);          /* a declared length, streamed in flushes */
+    IOXD_GET ("/raw",                   raw);               /* written into the slab directly        */
     IOXD_POST("/upload",                upload);
     IOXD_POST("/chunks",                chunks);
     IOXD_GET ("/json/:id",              json_item);
@@ -372,15 +456,22 @@ int main(void)
         }
     }
 
+    /* a group with no prefix of its own: middleware around what is inside it, nothing else */
+    IOXD_GROUP("", rooted_header) {
+        IOXD_GET("/rooted", rooted);
+    }
+
     int workers = (int)env_number("IOXD_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOXD_PORT", 8080);
     int p = port > 0 && port < 65536 ? port : 8080;
     ioxd_listen(p + 1, NULL);                                  /* a second plain port: the same routes */
-    const char *certs = getenv("IOXD_CERTS");                  /* and a TLS port, given a certificate directory */
-    if (certs) {
-        ioxd_tls *tls = ioxd_tls_new(certs);
-        if (tls)
-            ioxd_listen(p + 2, tls);
+    const char *certs = getenv("IOXD_CERTS");                  /* NOLINT(concurrency-mt-unsafe): a TLS port, given a certificate directory */
+    if (certs && *certs) {
+        g_tls = ioxd_tls_new(certs);
+        if (g_tls) {
+            ioxd_listen(p + 2, g_tls);
+            IOXD_POST("/tls/reload", tls_reload);              /* only a build with certificates has it */
+        }
     }
     return ioxd_run(workers, p);
 }

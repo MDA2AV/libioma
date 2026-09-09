@@ -1,7 +1,13 @@
 @PACKAGE_INIT@
 
-# ioxd links pthreads publicly, so a consumer must re-find it before the targets load.
+# What ioxd links publicly has to be found again before its targets load: pthreads always, and
+# OpenSSL when the library was built with TLS - the option below is what that build decided.
+set(IOXD_WITH_TLS @IOXD_TLS@)
+
 include(CMakeFindDependencyMacro)
 find_dependency(Threads)
+if(IOXD_WITH_TLS)
+    find_dependency(OpenSSL 3)
+endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/ioxdTargets.cmake")
