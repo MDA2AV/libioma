@@ -14,6 +14,8 @@
 #ifndef RX_QUEUE
 #define RX_QUEUE      64                  /* undelivered slices one connection may hold, pow 2  */
 #endif
+static_assert(((unsigned)RX_QUEUE & ((unsigned)RX_QUEUE - 1U)) == 0 && RX_QUEUE >= 2,
+              "RX_QUEUE: a power of two (RX_MASK is a bit mask over it)");
 #define RX_MASK       (RX_QUEUE - 1U)
 #ifndef CONN_POOL_MAX
 #define CONN_POOL_MAX 1024                /* idle conn_t kept warm per worker                   */
@@ -47,6 +49,7 @@ struct conn {
     unsigned        rx_head, rx_tail;
     enum recv_state recv;
     bool            pausing;              /* a cancel is in flight to pause the recv           */
+    bool            cancelling;           /* a cancel is in flight: do not stage a second one  */
     int             refs;                 /* the handler coroutine + the armed/starved recv    */
     bool            closed;               /* the handler returned; fd closed                   */
     bool            eof;                  /* recv ended: peer FIN, error, or queue overflow    */
@@ -64,7 +67,7 @@ int ioxd__await_item(conn_t *c, struct rx_item *out);    /* the next received bu
  * what it already delivered, read exact byte counts straight from the socket, program the
  * socket, then resume. All suspend like any await. */
 int  ioxd__recv_pause (conn_t *c);                        /* 0 once stopped; -1 if the input already ended */
-void ioxd__recv_resume(conn_t *c);
+bool ioxd__recv_resume(conn_t *c);                        /* true once re-armed; false if it ended meanwhile */
 int  ioxd__recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into dst, or <0                     */
 int  ioxd__setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
 int  ioxd__sendmsg    (conn_t *c, const struct msghdr *msg);   /* one sendmsg, for a message with control data */
@@ -74,4 +77,6 @@ conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the
 void    ioxd__conn_main(void *arg);                      /* the connection's coroutine body      */
 void    ioxd__arm_recv(proactor_t *p, conn_t *c);        /* one multishot recv                   */
 void    ioxd__on_recv(proactor_t *p, conn_t *c, int res, unsigned flags);   /* a recv CQE       */
+void    ioxd__recv_drain(conn_t *c);                     /* shutdown: end a recv parked on -ENOBUFS */
+void    ioxd__close_socket(proactor_t *p, int fd);       /* close a socket through the ring      */
 void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at teardown            */

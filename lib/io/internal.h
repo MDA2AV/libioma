@@ -19,12 +19,16 @@
 
 /* ── completion routing ────────────────────────────────────────────────────────────────── */
 
-/* user_data is a pointer with a tag in its low three bits; everything pointed at is 8-aligned. */
+/* user_data is a pointer with a tag in its low three bits; everything pointed at is 8-aligned.
+ * TAG_IGNORE is the zero tag on purpose: an SQE whose user_data was never set then dispatches as
+ * "nobody waits for this" instead of as an op with a null pointer. */
 enum {
-    TAG_OP = 0,                                   /* an op_t: a one-shot await                */
-    TAG_RECV = 1,                                 /* a conn_t: its multishot recv             */
-    TAG_ACCEPT = 2,                               /* the listener's multishot accept          */
-    TAG_IGNORE = 3,                               /* a completion nobody waits for            */
+    TAG_IGNORE = 0,                               /* a completion nobody waits for            */
+    TAG_OP = 1,                                   /* an op_t: a one-shot await                */
+    TAG_RECV = 2,                                 /* a conn_t: its multishot recv             */
+    TAG_ACCEPT = 3,                               /* the listener's multishot accept          */
+    TAG_CLOSE = 4,                                /* a socket's close: only a failure is news */
+    TAG_DRAIN = 5,                                /* the shutdown's blanket cancel            */
 };
 
 #define UD(ptr, tag) ((uint64_t)(uintptr_t)(ptr) | (uint64_t)(tag))

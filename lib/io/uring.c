@@ -31,10 +31,26 @@ int uring_register(struct uring *ring, unsigned opcode, void *arg, unsigned nr_a
     return rc < 0 ? -errno : (int)rc;
 }
 
-/* Create the ring and mmap both rings plus the SQE array. 0, or -errno. */
-int uring_init(struct uring *ring, unsigned entries)
+/* The struct owning nothing: no descriptor, no mapping. uring_exit over this unmaps nothing and
+ * closes nothing, which is what a failed init has to leave behind. */
+static void ring_clear(struct uring *ring)
 {
     memset(ring, 0, sizeof *ring);
+    ring->fd = ring->enter_fd = -1;
+}
+
+/* Give up on a half-built ring: empty the struct and hand back the error. */
+static int ring_failed(struct uring *ring, int err)
+{
+    ring_clear(ring);
+    return err;
+}
+
+/* Create the ring and mmap both rings plus the SQE array. 0, or -errno. On any failure the struct
+ * is left empty, so a caller that calls uring_exit anyway unmaps nothing and closes nothing. */
+int uring_init(struct uring *ring, unsigned entries)
+{
+    ring_clear(ring);
 
     /* SINGLE_ISSUER: only this thread submits, the kernel skips SQ locking.
      * DEFER_TASKRUN: completion work runs batched inside enter(GETEVENTS), never as an interrupt.
@@ -42,51 +58,64 @@ int uring_init(struct uring *ring, unsigned entries)
     struct io_uring_params params;
     memset(&params, 0, sizeof params);
     params.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_NO_SQARRAY;
-    int fd = sys_setup(entries, &params);
-    if (fd == -EINVAL) {
+    int  fd       = sys_setup(entries, &params);
+    bool sq_array = false;
+    if (fd == -EINVAL) {                             /* maybe NO_SQARRAY, maybe not: try without it */
         memset(&params, 0, sizeof params);
         params.flags = IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN;
         fd = sys_setup(entries, &params);
-        ring->has_sq_array = true;
+        if (fd < 0)
+            return ring_failed(ring, -EINVAL);       /* the first error was the real one */
+        sq_array = true;
     }
     if (fd < 0)
-        return fd;
+        return ring_failed(ring, fd);
     if (!(params.features & IORING_FEAT_SINGLE_MMAP)) {   /* every kernel since 5.4 */
         close(fd);
-        return -ENOSYS;
+        return ring_failed(ring, -ENOSYS);
     }
-    ring->fd = fd;
-    ring->enter_fd = fd;
-    ring->sq_entries = params.sq_entries;
 
-    /* one mapping holds both rings; size it for whichever ends later */
-    size_t sq_bytes = params.sq_off.array + (size_t)params.sq_entries * sizeof(unsigned);
+    /* One mapping holds both rings; size it for whichever ends later. Without the SQ index array
+     * sq_off.array is 0, so the SQ side ends after the last of its header words. */
+    size_t sq_bytes = sq_array ? params.sq_off.array + (size_t)params.sq_entries * sizeof(unsigned)
+                               : params.sq_off.dropped + sizeof(unsigned);
     size_t cq_bytes = params.cq_off.cqes  + (size_t)params.cq_entries * sizeof(struct io_uring_cqe);
-    ring->ring_bytes = sq_bytes > cq_bytes ? sq_bytes : cq_bytes;
-    ring->ring_mem = mmap(nullptr, ring->ring_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
-                       fd, IORING_OFF_SQ_RING);
-    if (ring->ring_mem == MAP_FAILED) {
+    size_t ring_bytes = sq_bytes > cq_bytes ? sq_bytes : cq_bytes;
+    void  *ring_mem = mmap(nullptr, ring_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+                           fd, IORING_OFF_SQ_RING);
+    if (ring_mem == MAP_FAILED) {
         int e = -errno;
         close(fd);
-        return e;
+        return ring_failed(ring, e);
     }
 
-    ring->sqe_bytes = (size_t)params.sq_entries * sizeof(struct io_uring_sqe);
-    ring->sqe_mem = mmap(nullptr, ring->sqe_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
-                      fd, IORING_OFF_SQES);
-    if (ring->sqe_mem == MAP_FAILED) {
+    size_t sqe_bytes = (size_t)params.sq_entries * sizeof(struct io_uring_sqe);
+    void  *sqe_mem = mmap(nullptr, sqe_bytes, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_POPULATE,
+                          fd, IORING_OFF_SQES);
+    if (sqe_mem == MAP_FAILED) {
         int e = -errno;
-        munmap(ring->ring_mem, ring->ring_bytes);
+        munmap(ring_mem, ring_bytes);
         close(fd);
-        return e;
+        return ring_failed(ring, e);
     }
 
-    char *base = ring->ring_mem;
+    /* Everything is up: only now does the struct own an fd and two mappings. */
+    ring->fd         = fd;
+    ring->enter_fd   = fd;
+    ring->sq_entries = params.sq_entries;
+    ring->has_sq_array = sq_array;
+    ring->ring_mem   = ring_mem;
+    ring->ring_bytes = ring_bytes;
+    ring->sqe_mem    = sqe_mem;
+    ring->sqe_bytes  = sqe_bytes;
+
+    char *base = ring_mem;
     ring->sq_head  = (unsigned *)(base + params.sq_off.head);
     ring->sq_tail  = (unsigned *)(base + params.sq_off.tail);
-    ring->sq_array = (unsigned *)(base + params.sq_off.array);
+    ring->sq_array = sq_array ? (unsigned *)(base + params.sq_off.array) : nullptr;
+    ring->sq_flags = (unsigned *)(base + params.sq_off.flags);
     ring->sq_mask  = *(unsigned *)(base + params.sq_off.ring_mask);
-    ring->sqes     = ring->sqe_mem;
+    ring->sqes     = sqe_mem;
 
     ring->cq_head  = (unsigned *)(base + params.cq_off.head);
     ring->cq_tail  = (unsigned *)(base + params.cq_off.tail);
@@ -105,6 +134,8 @@ int uring_register_ring_fd(struct uring *ring)
     int rc = uring_register(ring, IORING_REGISTER_RING_FDS, &up, 1);
     if (rc < 0)
         return rc;
+    if (rc != 1)                                       /* the count registered: up.offset is only ours then */
+        return -ENOSPC;
     ring->enter_fd    = (int)up.offset;
     ring->enter_flags = IORING_ENTER_REGISTERED_RING;
     return 0;
@@ -135,8 +166,8 @@ void uring_exit(struct uring *ring)
     }
     if (ring->sqe_mem)  munmap(ring->sqe_mem, ring->sqe_bytes);
     if (ring->ring_mem) munmap(ring->ring_mem, ring->ring_bytes);
-    if (ring->fd > 0)   close(ring->fd);
-    memset(ring, 0, sizeof *ring);
+    if (ring->fd >= 0)  close(ring->fd);              /* fd 0 is a legal descriptor */
+    ring_clear(ring);
 }
 
 /* Claim the next SQE against the local tail, zeroed. nullptr when the SQ is full. */
@@ -167,6 +198,14 @@ static int flush_and_enter(struct uring *ring, unsigned wait_nr, unsigned flags,
 
     if (*ring->sq_tail != ring->sqe_tail)
         store_release(ring->sq_tail, ring->sqe_tail);
+
+    /* The CQ filled and the kernel is holding the rest in its overflow list, where nothing we do
+     * to the ring will find them. Only an enter flushes that backlog, so make one even when there
+     * is nothing to submit and nothing to wait for. */
+    if (load_acquire(ring->sq_flags) & IORING_SQ_CQ_OVERFLOW) {
+        ring->cq_overflows++;
+        flags |= IORING_ENTER_GETEVENTS;
+    }
 
     if (to_submit == 0 && wait_nr == 0 && !(flags & IORING_ENTER_GETEVENTS))
         return 0;
@@ -201,5 +240,7 @@ unsigned uring_cq_ready(struct uring *ring)
 /* Release n consumed CQEs; publishes the head once. */
 void uring_cq_advance(struct uring *ring, unsigned n)
 {
+    if (n == 0)                                       /* nothing consumed: no store, no barrier */
+        return;
     store_release(ring->cq_head, *ring->cq_head + n);
 }

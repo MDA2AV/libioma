@@ -4,9 +4,13 @@
  * here is touched by any other thread except the stop flag.
  *
  * The loop: run freshly spawned coroutines, re-arm recvs parked on -ENOBUFS, publish and enter
- * once (submit everything staged, wait for >= 1 completion), dispatch the whole CQ batch, advance
- * the head once. Dispatching resumes handler coroutines inline, so the sends they stage ride the
- * next enter together with the batch.
+ * once (submit everything staged, wait for >= 1 completion), then dispatch the CQ batch one entry
+ * at a time, publishing the head per entry so the ring keeps room mid-batch. Dispatching resumes
+ * handler coroutines inline, so the sends they stage ride the next enter together with the batch.
+ *
+ * On stop the loop does not simply leave: it cancels the accepts and everything in flight, then
+ * keeps running until the last connection has closed itself or a two-second grace period is up,
+ * so parked coroutines wake with errors and their handlers unwind before anything is torn down.
  */
 #pragma once
 
@@ -24,7 +28,7 @@
 #define RING_ENTRIES 4096                 /* SQ depth; the CQ is twice that                     */
 #endif
 #ifndef STACK_SIZE
-#define STACK_SIZE   (64UL * 1024)        /* per coroutine, plus a guard page                   */
+#define STACK_SIZE   (128UL * 1024)       /* per coroutine, plus a 64 KB guard; only touched pages cost RSS */
 #endif
 #ifndef FIXED_FILES
 #define FIXED_FILES  16384                /* registered file slots per worker; 0 disables       */
@@ -45,6 +49,14 @@ struct listener {
     int         fd;                       /* the socket, or its file slot under fixed files    */
     uint16_t    port;
     void       *tls;                      /* the port's certificate store, or nullptr: plain   */
+
+    /* accept back-pressure: out of descriptors, file slots or memory, re-arming at once would
+     * spin, so the accept is left unarmed until there is room again (see rearm_stalled). */
+    bool        stalled;
+    unsigned    stalled_live;             /* p->live when it stalled: re-arm once that drops   */
+    time_t      retry_at;                 /* ... or at this second, whichever comes first      */
+    time_t      err_log_at;               /* the next second an accept error may be logged     */
+    uint64_t    err_since_log;            /* accept errors swallowed since the last line       */
 };
 
 struct proactor {
@@ -66,9 +78,13 @@ struct proactor {
     time_t                    starved_log_at;     /* the next second a log line may go out       */
     coro_t                   *ready_head, *ready_tail;   /* spawned, not yet started           */
     unsigned                  live;       /* open connections                                  */
+    unsigned                  file_slots; /* registered file table size, 0 when there is none  */
     uint64_t                  accepted;
     conn_t                   *conn_free;         /* recycled conn_t objects, reused on accept   */
     unsigned                  conn_free_count;
+    bool                      draining;   /* stop was seen: take nothing new, let the rest end */
+    bool                      cancel_each;        /* ... and CANCEL_ANY was refused: one at a time */
+    int                       failed;     /* 0, or the -errno that retired this worker         */
 };
 
 /* The worker thread's whole life: ring, buffers, listener, loop until *stop, teardown. */
