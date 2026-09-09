@@ -27,6 +27,12 @@ class Held:
             return len(data)
         return self.sock.send(data)
 
+    def sendall(self, data):                     # tlslite sends its Finished this way
+        if self.hold:
+            self.buf += data
+            return None
+        return self.sock.sendall(data)
+
     def release(self, n=None):
         n = len(self.buf) if n is None else n
         self.sock.sendall(bytes(self.buf[:n]))

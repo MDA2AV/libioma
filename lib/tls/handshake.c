@@ -24,7 +24,8 @@
 
 #define SECRET_LEN     32U                            /* SHA-256 suite: the traffic secrets       */
 #define RECORD_MAX     (5 + 16384 + 256)              /* header, plaintext, tag and padding       */
-#define PLAIN_MAX      65536                          /* what a client may send before we listen  */
+#define PLAIN_MAX      IOXD_PIPE_GATHER               /* early plaintext: what the reader can take */
+#define KDF_FAILED     (-4096)                        /* install's own failure, apart from errnos  */
 
 /* The secrets of one handshake, found through the SSL's ex_data. */
 struct secrets {
@@ -109,7 +110,7 @@ static int install(conn_t *c, int direction, const unsigned char *secret, uint64
 {
     unsigned char key[16], iv[12];
     if (!expand_label(secret, "key", key, sizeof key) || !expand_label(secret, "iv", iv, sizeof iv))
-        return -1;
+        return KDF_FAILED;
     struct tls12_crypto_info_aes_gcm_128 ci = {};
     ci.info.version     = TLS_1_3_VERSION;
     ci.info.cipher_type = TLS_CIPHER_AES_GCM_128;
@@ -136,22 +137,56 @@ static int flush_outbound(struct ioxd_pipe *pipe, BIO *wbio)
     return ioxd_pipewriter_flush(&pipe->out);
 }
 
-/* Whatever the pipe has, or the next thing it gets, into the read BIO. */
-static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio)
+/* The length of the TLS record whose 5-byte header is at rec, header included. */
+static size_t record_len(const unsigned char *rec)
 {
-    ioxd_slice live = { nullptr, 0 };
-    int rc = ioxd_pipereader_read(&pipe->in, &live);
-    if (rc <= 0)
-        return -1;
-    BIO_write(rbio, live.p, (int)live.len);
-    ioxd_pipereader_drop(&pipe->in, live.len);
-    return 0;
+    return 5 + ((size_t)rec[3] << 8 | rec[4]);
 }
 
-/* The length of the TLS record at the front of live, header included. */
-static size_t record_len(ioxd_slice live)
+/* One whole TLS record out of the reader into rec: 1 when taken, -1 on error. During the
+ * handshake it waits for delivery. While draining it never waits: 0 when nothing delivered is
+ * left, which means the socket is at a record boundary; the tail of a record cut by the pause is
+ * fetched straight from the socket instead. OpenSSL gets exactly one record per feed, so what a
+ * client sent after its Finished stays in the reader for the drain rather than vanishing into
+ * the read BIO. */
+static int take_record(struct ioxd_pipe *pipe, bool draining, unsigned char *rec, size_t *len)
 {
-    return 5 + ((size_t)(unsigned char)live.p[3] << 8 | (unsigned char)live.p[4]);
+    ioxd_pipereader *pr = &pipe->in;
+    size_t have = 0, need = 5;
+    while (have < need) {
+        ioxd_slice live = { nullptr, 0 };
+        int rc = draining ? ioxd_pipereader_avail(pr, &live) : ioxd_pipereader_read(pr, &live);
+        if (rc < 0 || (rc == 0 && !draining))
+            return -1;
+        if (rc == 0) {                                /* nothing more was delivered */
+            if (have == 0)
+                return 0;
+            if (ioxd__recv_exact(pr->conn, rec + have, need - have) < 0)
+                return -1;                            /* the rest of a split record, from the socket */
+            have = need;
+        } else {
+            size_t k = live.len < need - have ? live.len : need - have;
+            memcpy(rec + have, live.p, k);
+            ioxd_pipereader_drop(pr, k);
+            have += k;
+        }
+        if (have == 5 && need == 5) {
+            need = record_len(rec);
+            if (need > RECORD_MAX)
+                return -1;
+        }
+    }
+    *len = have;
+    return 1;
+}
+
+/* The next record the client sent, into the read BIO. */
+static int feed_inbound(struct ioxd_pipe *pipe, BIO *rbio, unsigned char *rec)
+{
+    size_t len;
+    if (take_record(pipe, false, rec, &len) <= 0)
+        return -1;
+    return BIO_write(rbio, rec, (int)len) == (int)len ? 0 : -1;
 }
 
 /* After the handshake, before the kernel takes over receiving: the client may already have sent
@@ -159,41 +194,54 @@ static size_t record_len(ioxd_slice live)
  * record boundary in the socket, so with the multishot recv stopped this takes whole records
  * from what was delivered - fetching the tail of a split one straight from the socket - through
  * OpenSSL, keeping the plaintext aside. The count consumed is the RX record sequence. */
-static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, unsigned char *plain, size_t *plain_len)
+static long drain_records(struct ioxd_pipe *pipe, SSL *ssl, BIO *rbio, BIO *wbio, unsigned char *plain,
+                          size_t *plain_len, const char **why)
 {
-    ioxd_pipereader *pr   = &pipe->in;
-    conn_t          *c    = pr->conn;
-    unsigned char   *tail = plain + PLAIN_MAX;        /* scratch for a split record, past the plaintext */
-    long             records = 0;
+    unsigned char *rec     = plain + PLAIN_MAX;       /* scratch for one record, past the plaintext */
+    long           records = 0;
     for (;;) {
-        ioxd_slice live = { nullptr, 0 };
-        if (!ioxd_pipereader_avail(pr, &live))
-            break;                                    /* nothing delivered is left: the socket is at a boundary */
-        while (live.len < 5 || live.len < record_len(live)) {
-            size_t need = live.len < 5 ? 5 - live.len : record_len(live) - live.len;
-            if (live.len >= 5 && record_len(live) > RECORD_MAX)
-                return -1;
-            ioxd_pipereader_examine(pr, live.len);
-            if (ioxd_pipereader_avail(pr, &live))
-                continue;                             /* the next delivered buffer joined it */
-            if (ioxd__recv_exact(c, tail, need) < 0 || !ioxd_pipereader_inject(pr, tail, need))
-                return -1;                            /* the rest was still in the socket */
-            if (!ioxd_pipereader_avail(pr, &live))
-                return -1;
-        }
-        size_t len = record_len(live);
-        if ((unsigned char)live.p[0] != 23)           /* not application data: an alert; give up */
+        size_t len;
+        int    rc = take_record(pipe, true, rec, &len);
+        if (rc < 0) {
+            *why = "early application data could not be taken";
             return -1;
-        BIO_write(rbio, live.p, (int)len);
-        ioxd_pipereader_drop(pr, len);
+        }
+        if (rc == 0)
+            return records;                           /* the socket is at a boundary */
+        if (rec[0] != 23) {                           /* an alert, or a handshake message: nothing we can hand over */
+            *why = "a record other than application data after the handshake";
+            return -1;
+        }
+        if (*plain_len == PLAIN_MAX) {
+            *why = "more early application data than the reader can hold";
+            return -1;
+        }
+        if (BIO_write(rbio, rec, (int)len) != (int)len) {
+            *why = "out of memory";
+            return -1;
+        }
         records++;
         int n;
-        while ((n = SSL_read(ssl, plain + *plain_len, (int)(PLAIN_MAX - *plain_len))) > 0)
+        while (*plain_len < PLAIN_MAX && (n = SSL_read(ssl, plain + *plain_len, (int)(PLAIN_MAX - *plain_len))) > 0)
             *plain_len += (size_t)n;
-        if (SSL_get_error(ssl, n) != SSL_ERROR_WANT_READ)
-            return -1;                                /* close_notify, or a record we cannot take */
+        if (*plain_len == PLAIN_MAX && SSL_pending(ssl) > 0) {
+            *why = "more early application data than the reader can hold";
+            return -1;
+        }
+        if (*plain_len == PLAIN_MAX)
+            continue;
+        int err = SSL_get_error(ssl, n);
+        if (err == SSL_ERROR_ZERO_RETURN)             /* close_notify: what came before it is still served */
+            return records;
+        if (err != SSL_ERROR_WANT_READ) {
+            *why = "a record OpenSSL could not take after the handshake";
+            return -1;
+        }
+        if (BIO_pending(wbio) > 0) {                  /* OpenSSL answered something: a KeyUpdate we cannot follow */
+            *why = "a post-handshake message from the client (key update?)";
+            return -1;
+        }
     }
-    return records;
 }
 
 int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
@@ -209,7 +257,10 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
     SSL *ssl  = SSL_new(ioxd__tls_fallback(t));
     BIO *rbio = BIO_new(BIO_s_mem());
     BIO *wbio = BIO_new(BIO_s_mem());
-    if (!ssl || !rbio || !wbio) {
+    plain = malloc(PLAIN_MAX + RECORD_MAX);          /* early plaintext, then one record: off the coroutine's stack */
+    if (!ssl || !rbio || !wbio || !plain) {
+        BIO_free(rbio);                               /* not the SSL's yet */
+        BIO_free(wbio);
         why = "out of memory";
         goto out;
     }
@@ -230,7 +281,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
             why = ssl_error_text();
             goto out;
         }
-        if (feed_inbound(pipe, rbio) < 0) {
+        if (feed_inbound(pipe, rbio, plain + PLAIN_MAX) < 0) {
             why = "peer gone during the handshake";
             goto out;
         }
@@ -244,13 +295,10 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
         why = "input ended after the handshake";
         goto out;
     }
-    plain = malloc(PLAIN_MAX + RECORD_MAX);          /* plaintext, then room for a split record: off the coroutine's stack */
     size_t plain_len = 0;
-    long records = plain ? drain_records(pipe, ssl, rbio, plain, &plain_len) : -1;
-    if (records < 0) {
-        why = "early application data could not be taken";
+    long records = drain_records(pipe, ssl, rbio, wbio, plain, &plain_len, &why);
+    if (records < 0)
         goto out;
-    }
 
     r = ioxd__setsockopt(c, SOL_TCP, TCP_ULP, "tls", sizeof "tls");
     if (r < 0) {
@@ -261,7 +309,7 @@ int ioxd__tls_prologue(struct ioxd_pipe *pipe, ioxd_tls *tls)
     if (r == 0)
         r = install(c, TLS_RX, s.rx, (uint64_t)records);
     if (r < 0) {
-        why = r == -1 ? "key derivation failed" : strerror(-r);
+        why = r == KDF_FAILED ? "key derivation failed" : strerror(-r);
         goto out;
     }
     if (plain_len && !ioxd_pipereader_inject(&pipe->in, plain, plain_len)) {
@@ -277,12 +325,7 @@ out:
         explicit_bzero(plain, PLAIN_MAX + RECORD_MAX);
         free(plain);
     }
-    if (ssl) {
-        SSL_free(ssl);
-    } else {
-        BIO_free(rbio);
-        BIO_free(wbio);
-    }
+    SSL_free(ssl);                                    /* and its BIOs */
     ioxd__tls_release(tls, t);
     return why ? -1 : 0;
 }

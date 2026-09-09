@@ -271,22 +271,27 @@ int ioxd_pipereader_copy(ioxd_pipereader *pr, void *dst, size_t n)
     }
 }
 
-bool ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
+int ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
 {
     if (pr->error)
-        return false;
+        return pr->error;
     ioxd_slice l = live_span(pr);
-    if (l.len <= pr->examined) {                          /* all seen: take a delivered buffer, if one is queued */
-        if (pr->conn->rx_head == pr->conn->rx_tail || more(pr) <= 0)
-            return false;
+    while (l.len <= pr->examined) {                       /* all seen: take a delivered buffer, if one is queued */
+        if (pr->conn->rx_head == pr->conn->rx_tail)
+            return 0;
+        int rc = more(pr);
+        if (rc <= 0)
+            return rc;
         l = live_span(pr);
     }
     *live = l;
-    return true;
+    return 1;
 }
 
 bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
 {
+    if (pr->error)
+        return false;
     if (!pr->live_in_buf) {
         if (pr->has_cur && pr->cur_pos < pr->cur.len) {      /* live bytes in place: they move first */
             if (!gather(pr))
