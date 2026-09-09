@@ -8,4 +8,5 @@ Description: HTTP/1.1 server framework on a thread-per-core io_uring runtime
 Version: @VERSION@
 URL: https://github.com/MDA2AV/libioxd
 Libs: -L${libdir} -lioxd -pthread
+Libs.private: @LIBS@
 Cflags: -I${includedir} -pthread

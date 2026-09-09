@@ -50,6 +50,18 @@ def read_response(s):
     return status, headers, body
 
 
+def dechunk(raw):
+    """A chunked body, decoded."""
+    out = b""
+    while True:
+        line, _, raw = raw.partition(b"\r\n")
+        n = int(line.split(b";")[0], 16)
+        if n == 0:
+            return out
+        out += raw[:n]
+        raw = raw[n + 2:]
+
+
 def get(path, extra=b"", keep=False):
     s = connect()
     conn = "keep-alive" if keep else "close"
@@ -303,6 +315,66 @@ except Exception:
     st, hd, body = None, {}, b""
 s.close()
 results.append(check("ignored 2 MB body -> reply served with Connection: close", st == 404 and hd.get("connection") == "close"))
+# --- TLS: the third port, kernel TLS after an OpenSSL handshake (tests/certs from mkcerts.sh) ---
+import os, ssl
+CERTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "certs")
+if os.path.exists(os.path.join(CERTS, "default", "cert.pem")):
+    def cert_der(host):
+        return ssl.PEM_cert_to_DER_cert(open(os.path.join(CERTS, host, "cert.pem")).read())
+
+    def tls_connect(server_hostname="localhost", max_version=None):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        if max_version:
+            ctx.maximum_version = max_version
+        raw = socket.create_connection(("127.0.0.1", PORT + 2), timeout=5)
+        return ctx.wrap_socket(raw, server_hostname=server_hostname)
+
+    s = tls_connect()
+    s.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    st, hd, body = read_response(s)
+    results.append(check("TLS: GET /health -> 200 ok over TLS 1.3 with the default certificate",
+                         st == 200 and body == b"ok" and s.version() == "TLSv1.3" and s.getpeercert(True) == cert_der("default")))
+    s.close()
+    s = tls_connect(server_hostname="sni.test")
+    results.append(check("TLS: SNI sni.test -> that host's certificate", s.getpeercert(True) == cert_der("sni.test")))
+    s.close()
+    s = tls_connect(server_hostname="nobody.example")
+    results.append(check("TLS: unknown SNI -> the default certificate", s.getpeercert(True) == cert_der("default")))
+    s.close()
+    s = tls_connect()
+    s.send(b"POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 9\r\n\r\nhello tls")
+    st, hd, body = read_response(s)
+    results.append(check("TLS: POST /echo with a body -> echoed (kernel RX)", st == 200 and body == b"hello tls"))
+    s.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    st, hd, body = read_response(s)
+    results.append(check("TLS: a second request on the same connection -> 200", st == 200 and body == b"ok"))
+    s.close()
+    s = tls_connect()
+    s.send(b"GET /json/big?n=3000 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    raw = b""
+    while True:
+        try:
+            piece = s.recv(65536)
+        except (socket.timeout, ssl.SSLError):
+            break
+        if not piece:
+            break
+        raw += piece
+    s.close()
+    head, _, rest = raw.partition(b"\r\n\r\n")
+    doc = __import__("json").loads(dechunk(rest))
+    results.append(check("TLS: 3000 objects streamed chunked over kernel TX, valid JSON", len(doc) == 3000))
+    try:
+        s = tls_connect(max_version=ssl.TLSVersion.TLSv1_2)
+        s.close()
+        results.append(check("TLS: a TLS 1.2 client is refused", False))
+    except ssl.SSLError:
+        results.append(check("TLS: a TLS 1.2 client is refused", True))
+else:
+    print("skip TLS: no tests/certs (run tests/mkcerts.sh)")
+
 # --- a second listener: the port after ours serves the same routes ---
 s = socket.create_connection(("127.0.0.1", PORT + 1), timeout=5)
 s.send(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
@@ -317,17 +389,6 @@ results.append(check("GET /json/:id -> escaped document, application/json",
                      and body == b'{"id":42,"name":"Zo\xc3\xab \\"Z\\" O\'Neil\\n","ratio":0.1,"ok":true,"none":null,"tags":["a","b"]}'))
 st, hd, body = get("/json/x")
 results.append(check("GET /json/x -> 400 from the handler", st == 400))
-
-
-def dechunk(raw):
-    out = b""
-    while True:
-        line, _, raw = raw.partition(b"\r\n")
-        n = int(line.split(b";")[0], 16)
-        if n == 0:
-            return out
-        out += raw[:n]
-        raw = raw[n + 2:]
 
 
 s = connect()

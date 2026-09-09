@@ -331,5 +331,11 @@ int main(void)
     int port    = (int)env_number("IOXD_PORT", 8080);
     int p = port > 0 && port < 65536 ? port : 8080;
     ioxd_listen(p + 1, NULL);                                  /* a second plain port: the same routes */
+    const char *certs = getenv("IOXD_CERTS");                  /* and a TLS port, given a certificate directory */
+    if (certs) {
+        ioxd_tls *tls = ioxd_tls_new(certs);
+        if (tls)
+            ioxd_listen(p + 2, tls);
+    }
     return ioxd_run(workers, p);
 }

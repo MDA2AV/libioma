@@ -5,6 +5,7 @@
 #include "http/router.h"
 #include "io/pipe.h"
 #include "io/proactor.h"
+#include "tls/tls.h"
 
 #include <pthread.h>
 #include <sched.h>
@@ -127,13 +128,35 @@ static int run_workers(int workers, int port, handler_fn handler)
     return 0;
 }
 
+/* A TLS listener's connection runs the handshake before its handler; a plain one goes straight in. */
+static int prologue(struct ioxd_pipe *pipe)
+{
+    struct listener *l = pipe->in.conn->listener;
+    return l->tls ? ioxd__tls_prologue(pipe, l->tls) : 0;
+}
+
+static void serve_http(struct ioxd_pipe *pipe)
+{
+    if (prologue(pipe) == 0)
+        ioxd__serve(pipe);
+}
+
 int ioxd_run(int workers, int port)
 {
     ioxd__router_build();                          /* the routes, resolved once, shared read-only */
-    return run_workers(workers, port, ioxd__serve);
+    return run_workers(workers, port, serve_http);
+}
+
+static ioxd_pipe_handler g_pipe_handler;
+
+static void serve_pipe(struct ioxd_pipe *pipe)
+{
+    if (prologue(pipe) == 0)
+        g_pipe_handler(pipe);
 }
 
 int ioxd_run_pipes(int workers, int port, ioxd_pipe_handler fn)
 {
-    return run_workers(workers, port, fn);
+    g_pipe_handler = fn;
+    return run_workers(workers, port, serve_pipe);
 }

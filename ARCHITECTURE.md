@@ -155,7 +155,7 @@ therefore never recycled while a completion for it is still coming.
 
 `ioxd__await_item` hands the next queued buffer over whole - the pipe's reader owns it from then
 until it returns it to the ring - and parks if the queue is empty. `await_send` stages a SEND SQE
-(`MSG_WAITALL`, so the kernel finishes short sends itself) and parks until its CQE; the pipe's
+(the loop around it finishes short sends; kernel TLS refuses `MSG_WAITALL`) and parks until its CQE; the pipe's
 writer is the only caller. Nothing above the pipe touches either.
 
 ### Shared nothing

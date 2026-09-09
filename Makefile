@@ -25,6 +25,15 @@ LTO     := $(shell $(CC) -Werror -flto -ffat-lto-objects -x c -c /dev/null -o /d
 CFLAGS  ?= -O3 -g $(LTO)
 WARN    := -Wall -Wextra $(STD)
 CPP     := -D_GNU_SOURCE -Iinclude -Ilib -Ithird_party/picohttpparser
+# TLS: OpenSSL for the handshake only; the kernel does the records (TLS.md). make TLS=0 leaves it out.
+TLS     ?= 1
+ifeq ($(TLS),1)
+CPP     += -DIOXD_TLS=1
+LIBS    := -lssl -lcrypto
+else
+CPP     += -DIOXD_TLS=0
+LIBS    :=
+endif
 HDRS    := $(wildcard include/*.h include/ioxd/*.h lib/*/*.h)
 PTHREAD := -pthread
 
@@ -36,7 +45,7 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run json/json
+UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine http/api http/router http/run json/json tls/store tls/handshake
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 
@@ -54,7 +63,7 @@ libioxd.a: $(OBJ)
 	$(AR) rcs $@ $^
 
 libioxd.so: $(PICOBJ)
-	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD)
+	$(CC) $(CFLAGS) -shared -Wl,-soname,$(SONAME) -o $@ $^ $(PTHREAD) $(LIBS)
 
 # --- static objects (used by libioxd.a and the examples) ---
 obj/%.o: lib/%.c $(HDRS)
@@ -82,21 +91,22 @@ obj/pic/picohttpparser.o: third_party/picohttpparser/picohttpparser.c
 examples: $(EXAMPLES)
 # Link the static archive directly so the example runs in-tree without installing the .so.
 ioxd-hello: playground/hello/main.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD)
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 # --- tests: the unit test, then the fixture server with both suites against it ---
 $(TESTSRV): tests/server.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD)
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 $(UNIT): tests/unit.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD)
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 $(PIPESRV): tests/pipe-server.c libioxd.a
-	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD)
+	$(CC) $(CFLAGS) $(WARN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 CHECK_PORT ?= 8099
 PIPE_PORT  ?= 8101                       # the fixture takes CHECK_PORT and the one after
 check: $(TESTSRV) $(UNIT) $(PIPESRV)
 	@./$(UNIT) || exit 1; \
-	 IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
+	 [ -f tests/certs/default/cert.pem ] || sh tests/mkcerts.sh tests/certs >/dev/null; \
+	 IOXD_WORKERS=2 IOXD_PORT=$(CHECK_PORT) IOXD_CERTS=tests/certs ./$(TESTSRV) >/dev/null 2>&1 & pid=$$!; \
 	 for i in $$(seq 1 50); do ss -ltn | grep -q ":$(CHECK_PORT) " && break; sleep 0.1; done; \
 	 python3 tests/smoke.py $(CHECK_PORT); s=$$?; python3 tests/stress.py $(CHECK_PORT); t=$$?; \
 	 kill -INT $$pid; wait $$pid 2>/dev/null; \
@@ -107,7 +117,7 @@ check: $(TESTSRV) $(UNIT) $(PIPESRV)
 
 # --- pkg-config ---
 ioxd.pc: ioxd.pc.in
-	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' $< > $@
+	sed -e 's|@PREFIX@|$(PREFIX)|g' -e 's|@VERSION@|$(VERSION)|g' -e 's|@LIBS@|$(LIBS)|g' $< > $@
 
 # --- install / uninstall ---
 install: lib ioxd.pc

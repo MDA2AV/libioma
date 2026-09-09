@@ -33,6 +33,7 @@ struct rx_item {
 enum recv_state {
     RECV_ARMED,                           /* multishot recv in flight; the kernel may post CQEs */
     RECV_STARVED,                         /* it ended on -ENOBUFS; re-armed once buffers return */
+    RECV_PAUSED,                          /* stopped on purpose, its ref kept; resume re-arms   */
     RECV_DONE,                            /* it posted its terminal CQE                         */
 };
 
@@ -44,6 +45,7 @@ struct conn {
     struct rx_item  rx[RX_QUEUE];         /* delivered while nobody was reading                */
     unsigned        rx_head, rx_tail;
     enum recv_state recv;
+    bool            pausing;              /* a cancel is in flight to pause the recv           */
     int             refs;                 /* the handler coroutine + the armed/starved recv    */
     bool            closed;               /* the handler returned; fd closed                   */
     bool            eof;                  /* recv ended: peer FIN, error, or queue overflow    */
@@ -56,6 +58,14 @@ struct conn {
  * when the completion arrives. */
 int await_send(conn_t *c, const void *buf, size_t len);  /* len when all sent, else -errno     */
 int ioxd__await_item(conn_t *c, struct rx_item *out);    /* the next received buffer, whole: 1, 0 at the end, <0 -errno (the reader's primitive) */
+
+/* For a protocol prologue (TLS): stop the multishot recv so nothing more leaves the socket, take
+ * what it already delivered, read exact byte counts straight from the socket, program the
+ * socket, then resume. All suspend like any await. */
+int  ioxd__recv_pause (conn_t *c);                        /* 0 once stopped; -1 if the input already ended */
+void ioxd__recv_resume(conn_t *c);
+int  ioxd__recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into dst, or <0                     */
+int  ioxd__setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
 
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
 conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the pool, or fresh  */

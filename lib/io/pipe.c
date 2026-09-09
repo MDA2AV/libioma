@@ -271,6 +271,41 @@ int ioxd_pipereader_copy(ioxd_pipereader *pr, void *dst, size_t n)
     }
 }
 
+bool ioxd_pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
+{
+    if (pr->error)
+        return false;
+    ioxd_slice l = live_span(pr);
+    if (l.len <= pr->examined) {                          /* all seen: take a delivered buffer, if one is queued */
+        if (pr->conn->rx_head == pr->conn->rx_tail || more(pr) <= 0)
+            return false;
+        l = live_span(pr);
+    }
+    *live = l;
+    return true;
+}
+
+bool ioxd_pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
+{
+    if (!pr->live_in_buf) {
+        if (pr->has_cur && pr->cur_pos < pr->cur.len) {      /* live bytes in place: they move first */
+            if (!gather(pr))
+                return false;
+        } else {
+            pr->buf_pos = pr->buf_end = pr->floor;
+            pr->live_in_buf = true;
+        }
+    }
+    if (pr->buf_end + n > pr->cap) {
+        compact(pr);
+        if (pr->buf_end + n > pr->cap)
+            return false;
+    }
+    memcpy(pr->buf + pr->buf_end, data, n);
+    pr->buf_end += n;
+    return true;
+}
+
 /* ── the writer ────────────────────────────────────────────────────────────────────────── */
 
 void ioxd_pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)

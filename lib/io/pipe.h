@@ -47,6 +47,8 @@ void        ioxd_pipereader_run_begin(ioxd_pipereader *pr);                    /
 ioxd_slice  ioxd_pipereader_run      (const ioxd_pipereader *pr);              /* the run in progress */
 void        ioxd_pipereader_release  (ioxd_pipereader *pr);                    /* forget every kept byte; live bytes stay */
 int         ioxd_pipereader_copy     (ioxd_pipereader *pr, void *dst, size_t n);   /* up to n live bytes into dst, consumed; >0, 0 at the end, <0 error */
+bool        ioxd_pipereader_avail    (ioxd_pipereader *pr, ioxd_slice *live);   /* like read, but never waits: false when nothing unexamined was delivered */
+bool        ioxd_pipereader_inject   (ioxd_pipereader *pr, const void *data, size_t n);   /* bytes that arrived by another route, appended to the live bytes; false: no room */
 
 /* The writer: a slab with a head and a tail. Data goes in at the tail (reserve/advance, or write);
  * a frame's front goes into the lead just before the pending data and its back into the slack just

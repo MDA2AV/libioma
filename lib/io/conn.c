@@ -189,6 +189,12 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     if (result <= 0) {                                  /* peer FIN (0), an error, or our own cancel */
         if (has_buf)
             ioxd__bufring_return(&p->bufs, buf_id);
+        if (c->pausing && result == -ECANCELED) {       /* our pause, not the end of input */
+            c->pausing = false;
+            c->recv    = RECV_PAUSED;
+            wake_reader(c);
+            return;
+        }
         if (!c->eof) {
             c->eof = true;
             c->err = result;
@@ -221,7 +227,11 @@ void ioxd__on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
     }
 
     if (!more) {                                     /* the kernel ended the multishot: re-arm    */
-        if (!c->closed && !c->eof) {
+        if (c->pausing) {                            /* ended on its own while a pause was asked */
+            c->pausing = false;
+            c->recv    = RECV_PAUSED;
+            wake_reader(c);
+        } else if (!c->closed && !c->eof) {
             ioxd__arm_recv(p, c);
         } else {
             c->recv = RECV_DONE;
@@ -257,8 +267,9 @@ static void conn_close(conn_t *c)
 
     if (c->recv == RECV_ARMED) {
         submit_cancel(p, UD(c, TAG_RECV));
-    } else if (c->recv == RECV_STARVED) {
-        starved_remove(p, c);
+    } else if (c->recv == RECV_STARVED || c->recv == RECV_PAUSED) {
+        if (c->recv == RECV_STARVED)
+            starved_remove(p, c);
         c->recv = RECV_DONE;
         c->refs--;                                   /* the recv side's reference; ours, dropped last, keeps c alive */
     }
@@ -305,6 +316,73 @@ int ioxd__await_item(conn_t *c, struct rx_item *out)
 
 
 /* Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno. */
+int ioxd__recv_pause(conn_t *c)
+{
+    proactor_t *p = c->p;
+    if (c->recv == RECV_ARMED) {
+        c->pausing = true;
+        submit_cancel(p, UD(c, TAG_RECV));
+        while (c->recv == RECV_ARMED) {              /* data may still land meanwhile: fine, it is queued */
+            c->waiter = coro_current();
+            coro_yield();
+        }
+        c->pausing = false;
+    }
+    if (c->recv == RECV_STARVED) {
+        starved_remove(p, c);
+        c->recv = RECV_PAUSED;
+    }
+    return c->recv == RECV_PAUSED ? 0 : -1;
+}
+
+void ioxd__recv_resume(conn_t *c)
+{
+    if (c->recv == RECV_PAUSED)
+        ioxd__arm_recv(c->p, c);
+}
+
+int ioxd__recv_exact(conn_t *c, void *dst, size_t n)
+{
+    uint8_t *at = dst;
+    size_t   left = n;
+    while (left) {
+        op_t op;
+        struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+        sqe->opcode    = IORING_OP_RECV;
+        sqe->fd        = c->fd;
+        sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
+        sqe->addr      = (uint64_t)(uintptr_t)at;
+        sqe->len       = (uint32_t)left;
+        sqe->msg_flags = MSG_WAITALL;
+        int got = await_op(sqe, &op);
+        if (got < 0)
+            return got;
+        if (got == 0)
+            return -ECONNRESET;
+        at   += got;
+        left -= (size_t)got;
+    }
+    return (int)n;
+}
+
+int ioxd__setsockopt(conn_t *c, int level, int name, const void *val, size_t len)
+{
+    op_t op;
+    struct io_uring_sqe *sqe = ioxd__sqe(c->p);
+    sqe->opcode  = IORING_OP_URING_CMD;
+    sqe->fd      = c->fd;
+    sqe->flags   = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
+    sqe->cmd_op  = SOCKET_URING_OP_SETSOCKOPT;
+    sqe->level   = (uint32_t)level;
+    sqe->optname = (uint32_t)name;
+    sqe->optval  = (uint64_t)(uintptr_t)val;
+    sqe->optlen  = (uint32_t)len;
+    int rc = await_op(sqe, &op);
+    if ((rc == -EOPNOTSUPP || rc == -EINVAL) && !c->p->ring.fixed_files)   /* a kernel without the command */
+        rc = setsockopt(c->fd, level, name, val, (socklen_t)len) < 0 ? -errno : 0;
+    return rc;
+}
+
 int await_send(conn_t *c, const void *buf, size_t len)
 {
     const uint8_t *src  = buf;
@@ -317,7 +395,7 @@ int await_send(conn_t *c, const void *buf, size_t len)
         sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
         sqe->addr      = (uint64_t)(uintptr_t)src;
         sqe->len       = left > UINT32_MAX ? UINT32_MAX : (uint32_t)left;
-        sqe->msg_flags = MSG_NOSIGNAL | MSG_WAITALL;  /* no SIGPIPE; the kernel finishes short sends */
+        sqe->msg_flags = MSG_NOSIGNAL;                /* no SIGPIPE; the loop finishes short sends (kernel TLS refuses MSG_WAITALL) */
         int n = await_op(sqe, &op);
         if (n < 0)
             return n;

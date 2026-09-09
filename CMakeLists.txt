@@ -65,6 +65,8 @@ add_library(ioxd
         lib/http/router.c
         lib/http/run.c
         lib/json/json.c
+        lib/tls/store.c
+        lib/tls/handshake.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioxd::ioxd ALIAS ioxd)
 
@@ -76,6 +78,15 @@ target_include_directories(ioxd
             lib
             third_party/picohttpparser)
 target_compile_definitions(ioxd PRIVATE _GNU_SOURCE)
+# TLS: OpenSSL for the handshake only; the kernel does the records (TLS.md).
+option(IOXD_TLS "TLS listeners (needs OpenSSL 3)" ON)
+if(IOXD_TLS)
+    find_package(OpenSSL 3 REQUIRED)
+    target_compile_definitions(ioxd PRIVATE IOXD_TLS=1)
+    target_link_libraries(ioxd PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+else()
+    target_compile_definitions(ioxd PRIVATE IOXD_TLS=0)
+endif()
 target_compile_options(ioxd PRIVATE -Wall -Wextra)
 # Fat LTO objects when supported: the archive stays plain-linkable, and consumers that link with
 # -flto get cross-file inlining (the demo below does).
