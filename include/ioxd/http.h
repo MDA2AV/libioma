@@ -31,6 +31,9 @@
 #ifndef IOXD_RESP_HEAD_CAP
 #define IOXD_RESP_HEAD_CAP    3072          /* bytes the added headers may serialize to      */
 #endif
+#ifndef IOXD_ROUTE_ARENA
+#define IOXD_ROUTE_ARENA      256           /* per-request bytes the router decodes into     */
+#endif
 
 /* ── the request ───────────────────────────────────────────────────────────────────────── */
 
@@ -54,7 +57,7 @@ typedef struct ioxd_request {
     size_t      n_headers;
     ioxd_kv     params[IOXD_MAX_PARAMS];        /* query parameters, percent-decoded         */
     size_t      n_params;
-    ioxd_kv     route_params[IOXD_MAX_ROUTE_PARAMS];   /* the :name captures, in pattern order      */
+    ioxd_kv     route_params[IOXD_MAX_ROUTE_PARAMS];   /* the :name captures, percent-decoded       */
     size_t      n_route_params;
 
     size_t      content_length;                 /* what the head declared; 0 if nothing      */
@@ -62,6 +65,7 @@ typedef struct ioxd_request {
     ioxd_slice  body;                           /* the whole body, once ioxd_body_all read it */
     bool        keep_alive;                     /* computed from version + Connection         */
     bool        expect_continue;                /* "Expect: 100-continue": the body waits for the interim reply the first body read sends */
+    char        route_arena[IOXD_ROUTE_ARENA];  /* private: the router's per-request scratch */
 } ioxd_request;
 
 /* ── the response ──────────────────────────────────────────────────────────────────────── */
