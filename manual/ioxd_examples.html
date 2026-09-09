@@ -13,8 +13,10 @@
 <h2>NAME</h2><p>ioxd_examples - whole programs, one per way of using the library; each builds as ioxd-example-&lt;name&gt; with <code>make examples</code></p>
 <h2>DESCRIPTION</h2>
 <table><tr><td><a href="#groups">groups.c</a></td><td>routes in groups: a prefix plus middleware, nesting, an endpoint's own middleware, a fallback of your own - as plain calls for one part of the tree and as the script for the rest, since they register the same thing.</td></tr>
+<tr><td><a href="#json">json.c</a></td><td>JSON replies: a struct described once and serialized with one call, a list of thousands streamed as one array, an object written field by field, and an error object with its status.</td></tr>
 <tr><td><a href="#middleware">middleware.c</a></td><td>middleware written by hand: one that stamps a header on every reply, one that times the request around the rest of the chain, one that gates a route and short-circuits, and how a middleware hands what it found to the handler.</td></tr>
 <tr><td><a href="#pipes">pipes.c</a></td><td>a protocol of your own on the pipe the HTTP engine itself reads and writes through: raw TCP, one coroutine per connection, the same suspend-and-resume. A frame here is a 4-byte big-endian length and a payload; the reply is the payload reversed, framed the same way.</td></tr>
+<tr><td><a href="#static_files">static_files.c</a></td><td>files from a directory, served by hand: the path's last segment names the file, its extension the content type, fstat the length, an ETag the version, and the bytes go through the reply slab piece by piece with a declared length. HEAD and 304 cost no read.</td></tr>
 <tr><td><a href="#stream_request">stream_request.c</a></td><td>a request body streamed, so a body of any size never sits in memory whole: read through a fixed buffer until it ends, whatever its framing, or taken chunk by chunk exactly as the sender framed it.</td></tr>
 <tr><td><a href="#stream_response">stream_response.c</a></td><td>replies that stream: a body bigger than the slab goes out chunked as the slab fills, a flush sends what is there on purpose so a client sees lines as they are made, a declared length lets a large body of known size go out with Content-Length instead, and reserve/advance write straight into the slab.</td></tr></table>
 <h3 id="groups">groups.c</h3>
@@ -104,6 +106,106 @@ curl -i -X DELETE http://127.0.0.1:8080/api/v1/users/42     # 405 with an allow 
     }
     <a href="ioxd_router.html#IOXD_DEFAULT">IOXD_DEFAULT</a>(not_found);
 
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+}</pre></div>
+<h3 id="json">json.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-json
+curl http://127.0.0.1:8080/users/42
+curl http://127.0.0.1:8080/users?n=5000 | head -c 200
+curl http://127.0.0.1:8080/users/abc                   # {"error":"the id must be an integer"}
+curl -i http://127.0.0.1:8080/health</pre>
+<p>The writer is forward-only and allocates nothing: the bytes go into the reply slab, escaped as they are written, and stream out chunked when a document outgrows it. Nesting and commas are its business; a handler says what it means. Every call returns false once the reply failed or the call had no place in the document, and the rest is then dropped, so checking the last call - or <a href="ioxd_json.html#ioxd_json_done">ioxd_json_done</a> at the end - is enough.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+
+<span class="c-cm">/* The shape of a user, described once: the struct and user_to_json come out of it. */</span>
+<span class="c-pp">#define ADDRESS_FIELDS(X)                       \</span>
+    X(VALUE,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, city)             \
+    X(VALUE,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, zip)              <span class="c-cm">/* NULL comes out as null */</span>
+<a href="ioxd_json.html#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(address, ADDRESS_FIELDS)
+
+<span class="c-pp">#define USER_FIELDS(X)                          \</span>
+    X(VALUE,    <span class="c-ty">int64_t</span>,      id)               \
+    X(VALUE,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, name)             \
+    X(VALUE,    <span class="c-ty">bool</span>,         active)           \
+    X(OBJECT,   address,      address)          <span class="c-cm">/* nested, by value                   */</span> \
+    X(OPTIONAL, address,      billing)          <span class="c-cm">/* a pointer: null when there is none */</span> \
+    X(ARRAY,    <span class="c-kw">const</span> <span class="c-ty">char</span> *, tags,   n_tags)   <span class="c-cm">/* scalars, and the field with the count */</span>
+<a href="ioxd_json.html#IOXD_JSON_STRUCT">IOXD_JSON_STRUCT</a>(user, USER_FIELDS)
+
+<span class="c-kw">static</span> <span class="c-kw">struct</span> user make_user(<span class="c-ty">int64_t</span> id)
+{
+    <span class="c-kw">static</span> <span class="c-kw">const</span> <span class="c-ty">char</span> *tags[] = { <span class="c-str">"new"</span>, <span class="c-str">"c23"</span> };
+    <span class="c-kw">return</span> (<span class="c-kw">struct</span> user){
+        .id = id, .name = <span class="c-str">"Zo\xc3\xab \"Z\" O'Neil"</span>, .active = id % <span class="c-num">2</span> == <span class="c-num">0</span>,     <span class="c-cm">/* escaped on the way out */</span>
+        .address = { .city = <span class="c-str">"Porto"</span>, .zip = <span class="c-kw">NULL</span> },
+        .billing = <span class="c-kw">NULL</span>,
+        .tags = tags, .n_tags = <span class="c-num">2</span>,
+    };
+}
+
+<span class="c-cm">/* An error as a document, with its status: {"error":"..."}. */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> error_reply(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-ty">int</span> status, <span class="c-kw">const</span> <span class="c-ty">char</span> *message)
+{
+    ctx-&gt;res.status = status;
+    <a href="ioxd_json.html#ioxd_json">ioxd_json</a> j = <a href="ioxd_json.html#ioxd_json_reply">ioxd_json_reply</a>(ctx);              <span class="c-cm">/* content-type: application/json */</span>
+    <a href="ioxd_json.html#ioxd_json_object">ioxd_json_object</a>(&amp;j);
+    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"error"</span>, message);
+    <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
+}
+
+<span class="c-cm">/* GET /users/:id - one user, one call. */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> one_user(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <span class="c-ty">int64_t</span> id;
+    <span class="c-kw">if</span> (!<a href="ioxd_slice.html#ioxd_to_i64">ioxd_to_i64</a>(ctx-&gt;req.route_params[<span class="c-num">0</span>].value, &amp;id)) {
+        error_reply(ctx, <span class="c-num">400</span>, <span class="c-str">"the id must be an integer"</span>);
+        <span class="c-kw">return</span>;
+    }
+    <span class="c-kw">struct</span> user u = make_user(id);
+    <a href="ioxd_json.html#ioxd_json">ioxd_json</a> j = <a href="ioxd_json.html#ioxd_json_reply">ioxd_json_reply</a>(ctx);
+    user_to_json(&amp;j, &amp;u);
+}
+
+<span class="c-cm">/* GET /users?n= - an array of n users: the slab fills and streams, chunked, as it goes. */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> many_users(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <span class="c-ty">int64_t</span> n = <span class="c-num">100</span>;
+    <span class="c-kw">for</span> (<span class="c-ty">size_t</span> i = <span class="c-num">0</span>; i &lt; ctx-&gt;req.n_params; i++)
+        <span class="c-kw">if</span> (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.params[i].key, <span class="c-str">"n"</span>))
+            <a href="ioxd_slice.html#ioxd_to_i64">ioxd_to_i64</a>(ctx-&gt;req.params[i].value, &amp;n);
+    <a href="ioxd_json.html#ioxd_json">ioxd_json</a> j = <a href="ioxd_json.html#ioxd_json_reply">ioxd_json_reply</a>(ctx);
+    <a href="ioxd_json.html#ioxd_json_array">ioxd_json_array</a>(&amp;j);
+    <span class="c-kw">for</span> (<span class="c-ty">int64_t</span> id = <span class="c-num">1</span>; id &lt;= n; id++) {
+        <span class="c-kw">struct</span> user u = make_user(id);
+        <span class="c-kw">if</span> (!user_to_json(&amp;j, &amp;u))
+            <span class="c-kw">return</span>;                                  <span class="c-cm">/* the peer is gone: nothing more to write */</span>
+    }
+    <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
+}
+
+<span class="c-cm">/* GET /health - written field by field: a key, then its value by C type. */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> health(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_json.html#ioxd_json">ioxd_json</a> j = <a href="ioxd_json.html#ioxd_json_reply">ioxd_json_reply</a>(ctx);
+    <a href="ioxd_json.html#ioxd_json_object">ioxd_json_object</a>(&amp;j);
+    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"status"</span>, <span class="c-str">"ok"</span>);
+    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"workers"</span>, <span class="c-num">4</span>);
+    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"load"</span>, <span class="c-num">0.25</span>);
+    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"ports"</span>);                      <span class="c-cm">/* a nested array, by hand */</span>
+    <a href="ioxd_json.html#ioxd_json_array">ioxd_json_array</a>(&amp;j);
+    <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8080</span>);
+    <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8443</span>);
+    <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
+    <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
+    <span class="c-kw">if</span> (!<a href="ioxd_json.html#ioxd_json_done">ioxd_json_done</a>(&amp;j))                         <span class="c-cm">/* nothing failed, nothing left open */</span>
+        ctx-&gt;res.status = <span class="c-num">500</span>;
+}
+
+<span class="c-ty">int</span> main(<span class="c-ty">void</span>)
+{
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/users/:id"</span>, one_user);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/users"</span>,     many_users);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/health"</span>,    health);
     <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
     <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
@@ -250,6 +352,117 @@ printf '\0\0\0\5hello' | nc -q1 127.0.0.1 8100 | xxd     # 00000005 6f6c6c6568</
 {
     <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8100</span>, <span class="c-kw">NULL</span>);
     <span class="c-kw">return</span> <a href="ioxd_pipe.html#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-num">0</span>, frames);
+}</pre></div>
+<h3 id="static_files">static_files.c</h3>
+<div class="entry"><div class="text"><pre class="ex">mkdir -p www &amp;&amp; echo <span class="c-str">'&lt;h1&gt;hello&lt;/h1&gt;'</span> &gt; www/index.html &amp;&amp; echo <span class="c-str">'h1 { color: teal }'</span> &gt; www/site.css
+make examples &amp;&amp; ./ioxd-example-static_files www
+curl -i http:<span class="c-cm">//127.0.0.1:8080/</span>
+curl -i http:<span class="c-cm">//127.0.0.1:8080/static/site.css</span>
+curl -i -H <span class="c-str">'If-None-Match: "&lt;the etag&gt;"'</span> http:<span class="c-cm">//127.0.0.1:8080/static/site.css   # 304</span></pre>
+<p>The reads are read(2), synchronous on the worker: what the page cache holds comes back at once, a cold file stalls that worker's other connections for the read. Serving files through io_uring, with a snapshot in memory and change detection, is FILES.md - designed, not built.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+
+<span class="c-pp">#include &lt;fcntl.h&gt;</span>
+<span class="c-pp">#include &lt;limits.h&gt;</span>
+<span class="c-pp">#include &lt;stdio.h&gt;</span>
+<span class="c-pp">#include &lt;string.h&gt;</span>
+<span class="c-pp">#include &lt;sys/stat.h&gt;</span>
+<span class="c-pp">#include &lt;unistd.h&gt;</span>
+
+<span class="c-kw">static</span> <span class="c-kw">const</span> <span class="c-ty">char</span> *g_dir = <span class="c-str">"www"</span>;
+
+<span class="c-cm">/* The content type from the extension; what is not known is bytes. */</span>
+<span class="c-kw">static</span> <span class="c-kw">const</span> <span class="c-ty">char</span> *type_of(<span class="c-kw">const</span> <span class="c-ty">char</span> *name)
+{
+    <span class="c-kw">static</span> <span class="c-kw">const</span> <span class="c-kw">struct</span> { <span class="c-kw">const</span> <span class="c-ty">char</span> *ext, *type; } types[] = {
+        { <span class="c-str">".html"</span>, <span class="c-str">"text/html; charset=utf-8"</span> }, { <span class="c-str">".css"</span>, <span class="c-str">"text/css"</span> }, { <span class="c-str">".js"</span>, <span class="c-str">"text/javascript"</span> },
+        { <span class="c-str">".json"</span>, <span class="c-str">"application/json"</span> },          { <span class="c-str">".svg"</span>, <span class="c-str">"image/svg+xml"</span> }, { <span class="c-str">".png"</span>, <span class="c-str">"image/png"</span> },
+        { <span class="c-str">".jpg"</span>, <span class="c-str">"image/jpeg"</span> },                 { <span class="c-str">".txt"</span>, <span class="c-str">"text/plain; charset=utf-8"</span> },
+    };
+    <span class="c-kw">const</span> <span class="c-ty">char</span> *dot = strrchr(name, <span class="c-str">'.'</span>);
+    <span class="c-kw">if</span> (dot)
+        <span class="c-kw">for</span> (<span class="c-ty">size_t</span> i = <span class="c-num">0</span>; i &lt; <span class="c-kw">sizeof</span> types / <span class="c-kw">sizeof</span> *types; i++)
+            <span class="c-kw">if</span> (strcmp(dot, types[i].ext) == <span class="c-num">0</span>)
+                <span class="c-kw">return</span> types[i].type;
+    <span class="c-kw">return</span> <span class="c-str">"application/octet-stream"</span>;
+}
+
+<span class="c-cm">/* The file, or a 404. One path segment names it, so it cannot leave the directory; ".." and a
+ * hidden file are refused all the same. */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> send_file(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *name)
+{
+    <span class="c-kw">if</span> (name[<span class="c-num">0</span>] == <span class="c-str">'\0'</span> || name[<span class="c-num">0</span>] == <span class="c-str">'.'</span> || strstr(name, <span class="c-str">".."</span>)) {
+        ctx-&gt;res.status = <span class="c-num">404</span>;
+        <span class="c-kw">return</span>;
+    }
+    <span class="c-ty">char</span> path[PATH_MAX];
+    snprintf(path, <span class="c-kw">sizeof</span> path, <span class="c-str">"%s/%s"</span>, g_dir, name);
+    <span class="c-ty">int</span> fd = open(path, O_RDONLY | O_CLOEXEC);
+    <span class="c-kw">struct</span> stat st;
+    <span class="c-kw">if</span> (fd &lt; <span class="c-num">0</span> || fstat(fd, &amp;st) &lt; <span class="c-num">0</span> || !S_ISREG(st.st_mode)) {
+        <span class="c-kw">if</span> (fd &gt;= <span class="c-num">0</span>)
+            close(fd);
+        ctx-&gt;res.status = <span class="c-num">404</span>;
+        <span class="c-kw">return</span>;
+    }
+
+    <span class="c-cm">/* the version: size and modification time; a client that has it gets a 304 and no body */</span>
+    <span class="c-ty">char</span> etag[<span class="c-num">64</span>];
+    snprintf(etag, <span class="c-kw">sizeof</span> etag, <span class="c-str">"\"%llx-%llx\""</span>, (<span class="c-ty">unsigned</span> <span class="c-ty">long</span> <span class="c-ty">long</span>)st.st_size, (<span class="c-ty">unsigned</span> <span class="c-ty">long</span> <span class="c-ty">long</span>)st.st_mtime);
+    <span class="c-kw">for</span> (<span class="c-ty">size_t</span> i = <span class="c-num">0</span>; i &lt; ctx-&gt;req.n_headers; i++)
+        <span class="c-kw">if</span> (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.headers[i].key, <span class="c-str">"if-none-match"</span>) &amp;&amp; <a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.headers[i].value, etag)) {
+            ctx-&gt;res.status = <span class="c-num">304</span>;
+            <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, <span class="c-str">"etag"</span>, etag);
+            close(fd);
+            <span class="c-kw">return</span>;
+        }
+
+    <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, <span class="c-str">"etag"</span>, etag);
+    <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, <span class="c-str">"cache-control"</span>, <span class="c-str">"max-age=60"</span>);
+    <a href="ioxd_http.html#ioxd_content_type">ioxd_content_type</a>(ctx, type_of(name));
+    <a href="ioxd_http.html#ioxd_content_length">ioxd_content_length</a>(ctx, (<span class="c-ty">size_t</span>)st.st_size);   <span class="c-cm">/* Content-Length framing, whatever the size */</span>
+    <span class="c-kw">if</span> (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.method, <span class="c-str">"HEAD"</span>)) {   <span class="c-cm">/* the head is all that goes out: no read */</span>
+        close(fd);
+        <span class="c-kw">return</span>;
+    }
+    <span class="c-kw">for</span> (off_t left = st.st_size; left &gt; <span class="c-num">0</span>;) {
+        <span class="c-ty">size_t</span> piece = left &lt; <span class="c-num">8192</span> ? (<span class="c-ty">size_t</span>)left : <span class="c-num">8192</span>;
+        <span class="c-ty">char</span>  *at = <a href="ioxd_http.html#ioxd_reserve">ioxd_reserve</a>(ctx, piece);        <span class="c-cm">/* room in the slab, flushed first when full */</span>
+        <span class="c-kw">if</span> (!at)
+            <span class="c-kw">break</span>;                                   <span class="c-cm">/* the peer is gone */</span>
+        <span class="c-ty">ssize_t</span> n = read(fd, at, piece);
+        <span class="c-kw">if</span> (n &lt;= <span class="c-num">0</span>)
+            <span class="c-kw">break</span>;                                   <span class="c-cm">/* short of the declared length: the engine closes */</span>
+        <a href="ioxd_http.html#ioxd_advance">ioxd_advance</a>(ctx, (<span class="c-ty">size_t</span>)n);
+        left -= n;
+    }
+    close(fd);
+}
+
+<span class="c-cm">/* GET /static/:name */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> file_route(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <span class="c-ty">char</span> name[NAME_MAX + <span class="c-num">1</span>];
+    <span class="c-kw">if</span> (!<a href="ioxd_slice.html#ioxd_cstr">ioxd_cstr</a>(ctx-&gt;req.route_params[<span class="c-num">0</span>].value, name, <span class="c-kw">sizeof</span> name)) {   <span class="c-cm">/* too long, or a NUL inside */</span>
+        ctx-&gt;res.status = <span class="c-num">404</span>;
+        <span class="c-kw">return</span>;
+    }
+    send_file(ctx, name);
+}
+
+<span class="c-cm">/* GET / */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> index_route(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    send_file(ctx, <span class="c-str">"index.html"</span>);
+}
+
+<span class="c-ty">int</span> main(<span class="c-ty">int</span> argc, <span class="c-ty">char</span> **argv)
+{
+    <span class="c-kw">if</span> (argc &gt; <span class="c-num">1</span>)
+        g_dir = argv[<span class="c-num">1</span>];
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/"</span>,             index_route);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>(<span class="c-str">"/static/:name"</span>, file_route);
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h3 id="stream_request">stream_request.c</h3>
 <div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-stream_request

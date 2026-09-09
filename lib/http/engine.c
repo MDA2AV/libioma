@@ -406,10 +406,14 @@ static int flush(ioxd_ctx *ctx, bool final)
         int          status   = wire_status(res->status);
         bool         bodyless = status < 200 || status == 204 || status == 304;
         enum framing framing  = FRAME_LENGTH;
-        size_t       body_len = res->has_length && !final ? res->content_length : pw->len;
         state->no_body = state->head_only || bodyless;
-        if (res->has_length && final)
-            res->content_length = pw->len;                /* buffered whole: the length is what was written */
+        /* A declared length stands while the body streams, and on a reply that carries no body at
+         * all - HEAD says what the GET would have sent, whether or not the handler wrote it. A
+         * reply buffered whole is measured instead: the length is what was written. */
+        bool   declared = res->has_length && (!final || state->no_body);
+        size_t body_len = declared ? res->content_length : pw->len;
+        if (res->has_length && !declared)
+            res->content_length = pw->len;
         if (bodyless) {
             framing = status == 304 && res->has_length ? FRAME_LENGTH : FRAME_NONE;
         } else if (!res->has_length && !final) {
