@@ -4,6 +4,7 @@
  */
 #include <ioxd.h>
 
+#include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -218,6 +219,24 @@ static void doc_numbers(ioxd_json *j)
     ioxd_json_double(j, INFINITY); ioxd_json_double(j, NAN);
     ioxd_json_end(j);
 }
+/* A float is not a double: 6 to 9 significant digits, round-tripped against the float itself. */
+static void doc_floats(ioxd_json *j)
+{
+    ioxd_json_array(j);
+    ioxd_json_float(j, 0.1F); ioxd_json_float(j, 1.0F / 3.0F); ioxd_json_float(j, 16777217.0F);
+    ioxd_json_float(j, -0.0F); ioxd_json_float(j, 1e20F);
+    ioxd_json_float(j, INFINITY); ioxd_json_float(j, NAN);
+    ioxd_json_end(j);
+}
+/* The reals whose text the decimal point of a locale would spoil. */
+static void doc_reals(ioxd_json *j)
+{
+    ioxd_json_array(j);
+    ioxd_json_double(j, 0.1); ioxd_json_double(j, -2.5e-7); ioxd_json_float(j, 0.5F);
+    ioxd_json_end(j);
+}
+/* Bytes are bytes: what is not valid UTF-8 goes out exactly as it came in. */
+static void doc_bad_utf8(ioxd_json *j) { ioxd_json_string(j, S("\xff\xfe\x80 ok")); }
 static void doc_top_level(ioxd_json *j) { ioxd_json_cstr(j, "just a string"); }
 static void doc_array_of_arrays(ioxd_json *j)
 {
@@ -269,16 +288,82 @@ static void doc_struct_empty(ioxd_json *j)
     struct user u = { .id = 1, .name = NULL, .handle = S(""), .address = { NULL, NULL } };
     user_to_json(j, &u);
 }
+/* The field macro as a statement, which must not be a discarded value, and as a condition. */
 static void doc_field_macro(ioxd_json *j)
 {
     ioxd_json_object(j);
     IOXD_JSON_FIELD(j, "n", 5);
     IOXD_JSON_FIELD(j, "x", 2.5);
+    IOXD_JSON_FIELD(j, "f", 0.1F);                  /* a float takes the float writer */
     IOXD_JSON_FIELD(j, "s", "str");
     IOXD_JSON_FIELD(j, "b", false);
-    IOXD_JSON_FIELD(j, "u", 7U);
+    if (!IOXD_JSON_FIELD(j, "u", 7U))
+        return;
     IOXD_JSON_FIELD(j, "sl", S("slice"));
     ioxd_json_end(j);
+}
+
+/* Where a value may go: a key only in an object, one key per value, an end only once the pair it
+ * closes is complete. Every refusal is marked failed, so nothing goes unreported. */
+static void test_json_levels(void)
+{
+    char   buf[128];
+    size_t len;
+
+    ioxd_json j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(!ioxd_json_key(&j, "k") && j.failed);                  /* a key at the top level */
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_array(&j) && !ioxd_json_key(&j, "k") && j.failed);       /* a key in an array */
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_object(&j) && !ioxd_json_int(&j, 1) && j.failed);        /* a value, no key */
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_object(&j) && ioxd_json_key(&j, "a") && !ioxd_json_key(&j, "b") && j.failed);
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_object(&j) && ioxd_json_key(&j, "a") && !ioxd_json_end(&j) && j.failed);
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(!ioxd_json_end(&j) && j.failed);                       /* nothing open, and it says so */
+    CHECK(!ioxd_json_object(&j));                                /* failed stays failed */
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_array(&j) && !ioxd_json_raw(&j, S("")) && j.failed);  /* nothing is no value */
+
+    j = ioxd_json_mem(buf, sizeof buf, &len);
+    CHECK(ioxd_json_done(&j));                                   /* nothing written, none wrong */
+    CHECK(ioxd_json_object(&j) && !ioxd_json_done(&j));          /* the object is still open */
+    CHECK(ioxd_json_key(&j, "a") && ioxd_json_int(&j, 1) && !ioxd_json_done(&j));
+    CHECK(ioxd_json_end(&j) && ioxd_json_done(&j));              /* now it is whole */
+    CHECK(!ioxd_json_end(&j) && !ioxd_json_done(&j));            /* one end too many */
+}
+
+/* The decimal point is '.' whatever LC_NUMERIC says: the numbers are formatted in the writer's
+ * own "C" locale and the thread's is handed straight back. A locale with a point of its own is
+ * not installed everywhere, so this says so and skips when there is none. */
+static void test_json_locale(void)
+{
+    static const char *const others[] = {
+        "ps_AF.UTF-8", "fa_IR.UTF-8",                            /* a point two bytes long */
+        "de_DE.UTF-8", "fr_FR.UTF-8",                            /* a comma                */
+    };
+    char        saved[64];
+    const char *was = setlocale(LC_NUMERIC, NULL);
+    snprintf(saved, sizeof saved, "%s", was ? was : "C");
+
+    const char *set = NULL;
+    for (size_t i = 0; i < sizeof others / sizeof *others && !set; i++)
+        set = setlocale(LC_NUMERIC, others[i]);
+    if (!set) {
+        printf("note: no locale with a point of its own installed; that check skipped\n");
+        return;
+    }
+    CHECK(strcmp(localeconv()->decimal_point, ".") != 0);        /* the locale really differs */
+    CHECK(json_is("[0.1,-2.5e-07,0.5]", doc_reals));             /* and the JSON does not */
+    CHECK(strcmp(localeconv()->decimal_point, ".") != 0);        /* the thread's was handed back */
+    setlocale(LC_NUMERIC, saved);
 }
 
 static void test_json(void)
@@ -287,10 +372,13 @@ static void test_json(void)
                   "\"address\":{\"city\":\"Porto\",\"zip\":null},\"billing\":{\"city\":\"Lisboa\",\"zip\":\"1000-001\"},"
                   "\"tags\":[\"new\",\"vip\"],\"orders\":[{\"number\":1,\"total\":9.5,\"items\":[7,9]},{\"number\":2,\"total\":0.25,\"items\":[]}]}", doc_struct));
     CHECK(json_is("{\"id\":1,\"name\":null,\"active\":false,\"handle\":\"\",\"visits\":0,\"address\":{\"city\":null,\"zip\":null},\"billing\":null,\"tags\":[],\"orders\":[]}", doc_struct_empty));
-    CHECK(json_is("{\"n\":5,\"x\":2.5,\"s\":\"str\",\"b\":false,\"u\":7,\"sl\":\"slice\"}", doc_field_macro));
+    CHECK(json_is("{\"n\":5,\"x\":2.5,\"f\":0.1,\"s\":\"str\",\"b\":false,\"u\":7,\"sl\":\"slice\"}", doc_field_macro));
 
     CHECK(json_is("{\"id\":42,\"name\":\"Zo\xc3\xab \\\"Z\\\" O'Neil\\n\\t\\u0001\",\"tags\":[\"a\",\"b\"],\"empty\":{},\"none\":null,\"ok\":true,\"raw\":[1,2]}", doc_nested));
     CHECK(json_is("[0,-7,-9223372036854775808,9223372036854775807,18446744073709551615,0.1,2.5,-0,1e+21,9007199254740992,0.3333333333333333,null,null]", doc_numbers));
+    CHECK(json_is("[0.1,0.33333334,16777216,-0,1e+20,null,null]", doc_floats));
+    CHECK(json_is("[0.1,-2.5e-07,0.5]", doc_reals));
+    CHECK(json_is("\"\xff\xfe\x80 ok\"", doc_bad_utf8));
     CHECK(json_is("\"just a string\"", doc_top_level));
     CHECK(json_is("[[1],[]]", doc_array_of_arrays));
 
@@ -301,14 +389,42 @@ static void test_json(void)
     CHECK(!ioxd_json_cstr(&j, "too long for what is left") && j.failed);
     CHECK(!ioxd_json_int(&j, 1));                                /* failed stays failed */
 
+    /* Every level has a bit of its own, the deepest included: all the way down and out again. */
     char   deep[512];
     j = ioxd_json_mem(deep, sizeof deep, &len);
     bool ok = true;
     for (int i = 0; i < IOXD_JSON_DEPTH; i++)
         ok = ok && ioxd_json_array(&j);
-    CHECK(ok && !ioxd_json_array(&j));                           /* one level too many */
+    for (int i = 0; i < IOXD_JSON_DEPTH; i++)
+        ok = ok && ioxd_json_end(&j);
+    CHECK(ok && ioxd_json_done(&j) && len == 2 * (size_t)IOXD_JSON_DEPTH);
+
     j = ioxd_json_mem(deep, sizeof deep, &len);
-    CHECK(!ioxd_json_end(&j));                                   /* nothing open */
+    ok = true;
+    for (int i = 0; i < IOXD_JSON_DEPTH; i++)
+        ok = ok && ioxd_json_array(&j);
+    ok = ok && ioxd_json_int(&j, 1);                        /* the deepest level owes a comma */
+    size_t written = len;
+    CHECK(ok && !ioxd_json_array(&j) && len == written);     /* too deep: not even that comma */
+
+    /* Longer than one run of the sink, byte for byte through the run loop. */
+    char big[4096];
+    char longer[2000];
+    memset(longer, 'x', sizeof longer);
+    j = ioxd_json_mem(big, sizeof big, &len);
+    CHECK(ioxd_json_string(&j, (ioxd_slice){ longer, sizeof longer }) && ioxd_json_done(&j));
+    CHECK(len == sizeof longer + 2 && big[0] == '"' && big[len - 1] == '"'
+          && memcmp(big + 1, longer, sizeof longer) == 0);
+
+    /* A run the sink refuses whole is asked for again halved, down to 64 bytes: what is left of
+     * the buffer is filled to within a short run of the end before the writer gives up. */
+    char tight[700];
+    j = ioxd_json_mem(tight, sizeof tight, &len);
+    CHECK(!ioxd_json_string(&j, (ioxd_slice){ longer, sizeof longer }) && j.failed);
+    CHECK(len >= sizeof tight - 64);
+
+    test_json_levels();
+    test_json_locale();
 }
 
 int main(void)
