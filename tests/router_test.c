@@ -285,7 +285,7 @@ static void test_head(void)
     request("OPTIONS", "/doc");
     CHECK(reached("h_doc_options"));
     request("PUT", "/doc");                         /* every method the path has, HEAD once */
-    CHECK(g_ctx.res.status == 405 && allow_is("GET, HEAD, OPTIONS"));
+    CHECK(g_ctx.res.status == 405 && replied_header("allow", "GET, HEAD, OPTIONS"));
 }
 
 static void test_chain(void)
