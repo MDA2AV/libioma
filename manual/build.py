@@ -308,7 +308,7 @@ def page_html(title, section, body, version_str, nav_extra=""):
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="functions.html">all names</a>{nav_extra}</nav>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="ioxd_examples.html">examples</a> &rsaquo; <a href="functions.html">all names</a>{nav_extra}</nav>
 <main>
 <div class="hdr"><span>{upper}</span><span>libioxd Programmer's Manual</span><span>{upper}</span></div>
 {body}
@@ -708,7 +708,7 @@ def build():
                         index.setdefault(n, (page, anchor_id(n)))
     index.setdefault("ioxd_run", ("ioxd_http", "ioxd_run"))
     for header, page, subject, top_paras, entries in parsed:
-        see = [(p, "3") for _h, p, _s in PAGES if p != page] + [("ioxd", "7")]
+        see = [(p, "3") for _h, p, _s in PAGES if p != page] + [("ioxd_examples", "7"), ("ioxd", "7")]
         out = render_page(header, page, subject, top_paras, entries, index, version_str, EXAMPLES.get(page, []), see)
         with open(os.path.join(HERE, page + ".html"), "w") as f:
             f.write(out)
@@ -716,6 +716,33 @@ def build():
     # ioxd(7)
     with open(os.path.join(HERE, "ioxd.7.html"), "w") as f:
         f.write(page_html("ioxd", "7", OVERVIEW, version_str))
+
+    # ioxd_examples(7): the programs under playground/examples, whole, their top comment first
+    link = make_linker(index, "ioxd_examples")
+    ex_dir = os.path.join(ROOT, "playground", "examples")
+    parts = ["<h2>NAME</h2><p>ioxd_examples - whole programs, one per way of using the library; each builds as "
+             "ioxd-example-&lt;name&gt; with <code>make examples</code></p>",
+             "<h2>DESCRIPTION</h2>"]
+    toc = []
+    for fn in sorted(os.listdir(ex_dir)):
+        if not fn.endswith(".c"):
+            continue
+        with open(os.path.join(ex_dir, fn)) as f:
+            src = f.read()
+        head = re.match(r"/\*(.*?)\*/\n", src, re.S)
+        intro = comment_text(head.group(0).split("\n")) if head else []
+        code = src[head.end():].lstrip("\n") if head else src
+        name = fn[:-2]
+        title = intro[0] if intro and not isinstance(intro[0], tuple) else fn
+        title = re.sub(r"^\S+\s+-\s+", "", title)
+        toc.append(f'<tr><td><a href="#{name}">{esc(fn)}</a></td><td>{link(esc(title))}</td></tr>')
+        parts.append(f'<h3 id="{name}">{esc(fn)}</h3>')
+        parts.append('<div class="entry"><div class="text">' + render_paras(intro[1:], link) + "</div>"
+                     '<pre class="ex">' + link(esc(code.rstrip())) + "</pre></div>")
+    parts.insert(2, "<table>" + "\n".join(toc) + "</table>")
+    parts.append("<h2>SEE ALSO</h2><p>" + ", ".join(f'<a href="{p}.html">{p}(3)</a>' for _h, p, _s in PAGES) + ', <a href="ioxd.7.html">ioxd(7)</a></p>')
+    with open(os.path.join(HERE, "ioxd_examples.html"), "w") as f:
+        f.write(page_html("ioxd_examples", "7", "\n".join(parts), version_str))
 
     # every name
     rows = []
@@ -735,7 +762,8 @@ def build():
 one page per public header, generated from the headers themselves, so what a page says is what the
 header declares. Start with the overview.</p>
 <h2>SECTION 7: OVERVIEW</h2>
-<table><tr><td><a href="ioxd.7.html">ioxd(7)</a></td><td></td><td>the library, its model and its limits</td></tr></table>
+<table><tr><td><a href="ioxd.7.html">ioxd(7)</a></td><td></td><td>the library, its model and its limits</td></tr>
+<tr><td><a href="ioxd_examples.html">ioxd_examples(7)</a></td><td></td><td>whole programs: streaming, middleware, groups, raw pipes</td></tr></table>
 <h2>SECTION 3: HEADERS</h2>
 <table>{rows}
 <tr><td><a href="functions.html">functions(3)</a></td><td></td><td>every public name, alphabetically</td></tr></table>

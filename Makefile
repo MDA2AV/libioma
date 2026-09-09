@@ -56,7 +56,8 @@ UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe http/engine ht
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 
-EXAMPLES := ioxd-hello
+EXAMPLE_SRC := $(wildcard playground/examples/*.c)
+EXAMPLES := ioxd-hello $(patsubst playground/examples/%.c,ioxd-example-%,$(EXAMPLE_SRC))
 TESTSRV  := tests/ioxd-test-server
 PIPESRV  := tests/ioxd-pipe-server
 UNIT     := tests/ioxd-unit
@@ -113,6 +114,9 @@ obj/pic/picohttpparser.o: third_party/picohttpparser/picohttpparser.c obj/flags
 examples: $(EXAMPLES)
 # Link the static archive directly so the example runs in-tree without installing the .so.
 ioxd-hello: playground/hello/main.c libioxd.a
+	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
+# The manual's examples, playground/examples/<name>.c, each a whole program: ioxd-example-<name>.
+ioxd-example-%: playground/examples/%.c libioxd.a
 	$(CC) $(CFLAGS) $(WARN) $(HARDEN) $(CPP) $(PTHREAD) $< libioxd.a -o $@ $(PTHREAD) $(LIBS)
 
 # --- tests: the unit test, then the fixture server with both suites against it ---

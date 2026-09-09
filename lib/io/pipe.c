@@ -441,6 +441,7 @@ int         ioxd_pipe_read   (ioxd_pipe *p, ioxd_slice *live)          { return 
 void        ioxd_pipe_examine(ioxd_pipe *p, size_t n)                  { ioxd_pipereader_examine(&p->in, n); }
 void        ioxd_pipe_drop   (ioxd_pipe *p, size_t n)                  { ioxd_pipereader_drop(&p->in, n); }
 const char *ioxd_pipe_keep   (ioxd_pipe *p, size_t n)                  { return ioxd_pipereader_keep(&p->in, n); }
+ioxd_slice  ioxd_pipe_kept   (ioxd_pipe *p)                            { return ioxd_pipereader_run(&p->in); }
 void        ioxd_pipe_release(ioxd_pipe *p)                            { ioxd_pipereader_release(&p->in); }
 int         ioxd_pipe_copy   (ioxd_pipe *p, void *dst, size_t n)       { return ioxd_pipereader_copy(&p->in, dst, n); }
 void       *ioxd_pipe_reserve(ioxd_pipe *p, size_t n)                  { return ioxd_pipewriter_reserve(&p->out, n); }

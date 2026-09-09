@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ioxd_examples(7) - libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="ioxd_examples.html">examples</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>IOXD_EXAMPLES(7)</span><span>libioxd Programmer's Manual</span><span>IOXD_EXAMPLES(7)</span></div>
+<h2>NAME</h2><p>ioxd_examples - whole programs, one per way of using the library; each builds as ioxd-example-&lt;name&gt; with <code>make examples</code></p>
+<h2>DESCRIPTION</h2>
+<table><tr><td><a href="#groups">groups.c</a></td><td>routes in groups: a prefix plus middleware, nesting, an endpoint's own middleware, a fallback of your own - as plain calls for one part of the tree and as the script for the rest, since they register the same thing.</td></tr>
+<tr><td><a href="#middleware">middleware.c</a></td><td>middleware written by hand: one that stamps a header on every reply, one that times the request around the rest of the chain, one that gates a route and short-circuits, and how a middleware hands what it found to the handler.</td></tr>
+<tr><td><a href="#pipes">pipes.c</a></td><td>a protocol of your own on the pipe the HTTP engine itself reads and writes through: raw TCP, one coroutine per connection, the same suspend-and-resume. A frame here is a 4-byte big-endian length and a payload; the reply is the payload reversed, framed the same way.</td></tr>
+<tr><td><a href="#stream_request">stream_request.c</a></td><td>a request body streamed, so a body of any size never sits in memory whole: read through a fixed buffer until it ends, whatever its framing, or taken chunk by chunk exactly as the sender framed it.</td></tr>
+<tr><td><a href="#stream_response">stream_response.c</a></td><td>replies that stream: a body bigger than the slab goes out chunked as the slab fills, a flush sends what is there on purpose so a client sees lines as they are made, a declared length lets a large body of known size go out with Content-Length instead, and reserve/advance write straight into the slab.</td></tr></table>
+<h3 id="groups">groups.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-groups
+curl -i http://127.0.0.1:8080/legacy/ping
+curl -i http://127.0.0.1:8080/api/v1/users/42
+curl -i http://127.0.0.1:8080/api/v1/admin/stats            # 403 from the group's gate
+curl -i -H 'X-Admin: 1' http://127.0.0.1:8080/api/v1/admin/stats
+curl -i http://127.0.0.1:8080/nowhere                       # the fallback, as JSON
+curl -i -X DELETE http://127.0.0.1:8080/api/v1/users/42     # 405 with an allow header</pre>
+<p><a href="ioxd_http.html#ioxd_run">ioxd_run</a> resolves it all once: every full path into a segment tree, every endpoint's middleware - the root's, then each group's from the outside in, then its own - into one flat chain. A request costs one walk and no scan.</p></div><pre class="ex">#include &lt;ioxd.h&gt;
+
+/* --- middleware --- */
+
+static void api_version(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, "x-api-version", "1");
+    <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+}
+
+static void require_admin(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    for (size_t i = 0; i &lt; ctx-&gt;req.n_headers; i++)
+        if (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.headers[i].key, "x-admin")) {
+            <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+            return;
+        }
+    ctx-&gt;res.status = 403;
+    <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "admins only\n");
+}
+
+static void no_cache(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, "cache-control", "no-store");
+    <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+}
+
+/* --- handlers --- */
+
+static void ping(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "pong\n");
+}
+
+static void user(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> id = ctx-&gt;req.route_params[0].value;
+    <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "user %.*s\n", (int)id.len, id.p);
+}
+
+static void update_user(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> id = ctx-&gt;req.route_params[0].value;
+    <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "user %.*s updated\n", (int)id.len, id.p);
+}
+
+static void stats(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "all good\n");
+}
+
+/* The fallback for what no route matches; a path that matches without the method is a built-in
+ * 405 with an allow header, whatever this does. */
+static void not_found(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    ctx-&gt;res.status = 404;
+    <a href="ioxd_http.html#ioxd_content_type">ioxd_content_type</a>(ctx, "application/json");
+    <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "{\"error\":\"no %.*s here\"}", (int)ctx-&gt;req.path.len, ctx-&gt;req.path.p);
+}
+
+int main(void)
+{
+    /* as calls: a group is a handle, an endpoint too */
+    <a href="ioxd_router.html#ioxd_group">ioxd_group</a> *legacy = <a href="ioxd_router.html#ioxd_group_new">ioxd_group_new</a>(NULL, "/legacy");
+    <a href="ioxd_router.html#ioxd_group_use">ioxd_group_use</a>(legacy, no_cache);
+    <a href="ioxd_router.html#ioxd_get">ioxd_get</a>(legacy, "/ping", ping);                 /* GET /legacy/ping, behind no_cache */
+
+    /* as a script: the block after <a href="ioxd_router.html#IOXD_GROUP">IOXD_GROUP</a> is the group, and it nests */
+    <a href="ioxd_router.html#IOXD_GROUP">IOXD_GROUP</a>("/api", api_version) {
+        <a href="ioxd_router.html#IOXD_GROUP">IOXD_GROUP</a>("/v1") {
+            <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a> ("/users/:id", user);
+            <a href="ioxd_router.html#IOXD_POST">IOXD_POST</a>("/users/:id", update_user, no_cache);     /* this endpoint's own middleware */
+            <a href="ioxd_router.html#IOXD_GROUP">IOXD_GROUP</a>("/admin", require_admin) {
+                <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>("/stats", stats);           /* /api/v1/admin/stats: api_version, require_admin, then stats */
+            }
+        }
+    }
+    <a href="ioxd_router.html#IOXD_DEFAULT">IOXD_DEFAULT</a>(not_found);
+
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
+    return <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(0);
+}</pre></div>
+<h3 id="middleware">middleware.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-middleware
+curl -i http://127.0.0.1:8080/public
+curl -i http://127.0.0.1:8080/whoami                              # 401
+curl -i -H 'Authorization: Bearer secret' http://127.0.0.1:8080/whoami</pre>
+<p>A middleware is a function of the context and the rest of the chain: whatever it does before <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a> runs before the handler, whatever it does after runs after, and not calling <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a> at all is the short-circuit. Headers meant for a streamed reply must be added before <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a> - the head may already be on the wire afterwards.</p></div><pre class="ex">#include &lt;ioxd.h&gt;
+
+#include &lt;stdatomic.h&gt;
+#include &lt;stdio.h&gt;
+#include &lt;time.h&gt;
+
+/* Every reply gets an x-request-id, counted across workers. Before <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>, so a reply that
+ * streams has it too; <a href="ioxd_http.html#ioxd_header">ioxd_header</a> copies the value, so the local buffer is fine. */
+static void request_id(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    static _Atomic unsigned long counter;
+    char id[32];
+    snprintf(id, sizeof id, "%lu", atomic_fetch_add(&amp;counter, 1) + 1);
+    <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, "x-request-id", id);
+    <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+}
+
+/* The request, its status and how long the chain took, on stderr, once the chain has run. */
+static void timing(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &amp;t0);
+    <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+    clock_gettime(CLOCK_MONOTONIC, &amp;t1);
+    long us = (t1.tv_sec - t0.tv_sec) * 1000000L + (t1.tv_nsec - t0.tv_nsec) / 1000;
+    fprintf(stderr, "%.*s %.*s -&gt; %d in %ld us\n", (int)ctx-&gt;req.method.len, ctx-&gt;req.method.p,
+            (int)ctx-&gt;req.path.len, ctx-&gt;req.path.p, ctx-&gt;res.status, us);
+}
+
+/* What the gate found, for the handler: on the middleware's own frame, which outlives the chain. */
+struct principal {
+    const char *name;
+    bool        admin;
+};
+
+/* The gate: a bearer token, or a 401 and no handler at all. */
+static void auth(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="ioxd_http.html#ioxd_next">ioxd_next</a> *next)
+{
+    <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> token = { NULL, 0 };
+    for (size_t i = 0; i &lt; ctx-&gt;req.n_headers; i++)      /* names arrive lower-cased */
+        if (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.headers[i].key, "authorization"))
+            token = ctx-&gt;req.headers[i].value;
+    if (!<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(token, "Bearer secret")) {
+        ctx-&gt;res.status = 401;
+        <a href="ioxd_http.html#ioxd_header">ioxd_header</a>(ctx, "www-authenticate", "Bearer");
+        <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "a bearer token, please\n");
+        return;                                      /* no <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>: the handler never runs */
+    }
+    struct principal who = { .name = "diogo", .admin = true };
+    ctx-&gt;user = &amp;who;                                /* handed down; valid until the chain returns */
+    <a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a>(ctx, next);
+}
+
+static void public_route(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "for everyone\n");
+}
+
+static void whoami(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    const struct principal *who = ctx-&gt;user;
+    <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "%s%s\n", who-&gt;name, who-&gt;admin ? " (admin)" : "");
+}
+
+int main(void)
+{
+    <a href="ioxd_router.html#IOXD_USE">IOXD_USE</a>(request_id);                            /* root middleware: every request, the 404s too */
+    <a href="ioxd_router.html#IOXD_USE">IOXD_USE</a>(timing);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>("/public", public_route);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>("/whoami", whoami, auth);               /* this endpoint's own middleware, after the root's */
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
+    return <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(0);
+}</pre></div>
+<h3 id="pipes">pipes.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-pipes
+printf '\0\0\0\5hello' | nc -q1 127.0.0.1 8100 | xxd     # 00000005 6f6c6c6568</pre>
+<p>Reading never copies unless it has to: read hands over the bytes the kernel delivered as one span, in place; copy takes a fixed-size piece into your own buffer; keep consumes bytes but holds them, contiguous with what was kept before, until release - so a message that arrives in several deliveries is assembled by the reader (in the kernel's buffer while it fits one, in the pipe's own once it spans two) and kept() is the whole of it. Writing goes through a slab: reserve room, write into it, advance, flush.</p></div><pre class="ex">#include &lt;ioxd.h&gt;
+
+#include &lt;stdint.h&gt;
+
+#define FRAME_MAX 16000                              /* what fits the pipe's 16 KB with room to spare */
+
+static void frames(<a href="ioxd_pipe.html#ioxd_pipe">ioxd_pipe</a> *pipe)
+{
+    for (;;) {
+        /* the length: four bytes, whatever deliveries they came in */
+        unsigned char head[4];
+        for (int got = 0; got &lt; 4;) {
+            int n = <a href="ioxd_pipe.html#ioxd_pipe_copy">ioxd_pipe_copy</a>(pipe, head + got, (size_t)(4 - got));
+            if (n &lt;= 0)
+                return;                              /* the peer is done, or gone */
+            got += n;
+        }
+        size_t len = (size_t)head[0] &lt;&lt; 24 | (size_t)head[1] &lt;&lt; 16 | (size_t)head[2] &lt;&lt; 8 | head[3];
+        if (len == 0 || len &gt; FRAME_MAX)
+            return;                                  /* not a frame we take: close */
+
+        /* the payload: kept in place as it arrives, one span at the end */
+        for (size_t have = 0; have &lt; len;) {
+            <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> live = { NULL, 0 };
+            if (<a href="ioxd_pipe.html#ioxd_pipe_read">ioxd_pipe_read</a>(pipe, &amp;live) &lt;= 0)
+                return;
+            size_t take = live.len &lt; len - have ? live.len : len - have;
+            if (!<a href="ioxd_pipe.html#ioxd_pipe_keep">ioxd_pipe_keep</a>(pipe, take))
+                return;                              /* FULL: kept plus live outgrew the pipe */
+            have += take;
+        }
+        <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> payload = <a href="ioxd_pipe.html#ioxd_pipe_kept">ioxd_pipe_kept</a>(pipe);   /* len bytes, contiguous */
+
+        /* the reply, framed the same way, written straight into the slab: the length, then the
+         * payload reversed in pieces no larger than the slab (8 KB) - reserve flushes what is
+         * there when a piece would not fit, so a reply of any size streams through it */
+        unsigned char *out = <a href="ioxd_pipe.html#ioxd_pipe_reserve">ioxd_pipe_reserve</a>(pipe, 4);
+        if (!out)
+            return;
+        out[0] = (unsigned char)(len &gt;&gt; 24); out[1] = (unsigned char)(len &gt;&gt; 16);
+        out[2] = (unsigned char)(len &gt;&gt; 8);  out[3] = (unsigned char)len;
+        <a href="ioxd_pipe.html#ioxd_pipe_advance">ioxd_pipe_advance</a>(pipe, 4);
+        for (size_t done = 0; done &lt; len;) {
+            size_t piece = len - done &lt; 4096 ? len - done : 4096;
+            out = <a href="ioxd_pipe.html#ioxd_pipe_reserve">ioxd_pipe_reserve</a>(pipe, piece);
+            if (!out)
+                return;
+            for (size_t i = 0; i &lt; piece; i++)
+                out[i] = (unsigned char)payload.p[len - 1 - done - i];
+            <a href="ioxd_pipe.html#ioxd_pipe_advance">ioxd_pipe_advance</a>(pipe, piece);
+            done += piece;
+        }
+        if (<a href="ioxd_pipe.html#ioxd_pipe_flush">ioxd_pipe_flush</a>(pipe) &lt; 0)
+            return;
+        <a href="ioxd_pipe.html#ioxd_pipe_release">ioxd_pipe_release</a>(pipe);                     /* the kept bytes go; the next frame's stay */
+    }
+}
+
+int main(void)
+{
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8100, NULL);
+    return <a href="ioxd_pipe.html#ioxd_run_pipes">ioxd_run_pipes</a>(0, frames);
+}</pre></div>
+<h3 id="stream_request">stream_request.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-stream_request
+head -c 50000000 /dev/urandom &gt; big; curl -T big http://127.0.0.1:8080/upload
+curl -H 'Transfer-Encoding: chunked' -T big http://127.0.0.1:8080/chunks</pre>
+<p><a href="ioxd_http.html#ioxd_body_read_until">ioxd_body_read_until</a> fills the buffer or reaches the end; <a href="ioxd_http.html#ioxd_body_read_next_chunk">ioxd_body_read_next_chunk</a> hands over one chunk of a chunked body, whole. Both return 0 once the body is consumed and -1 on a malformed body or a peer that is gone - the engine then answers the 400 or closes, so the handler just returns. Nothing is drained twice: what a handler leaves unread, the engine reads past after it, up to a limit, so the connection stays in sync for the next request.</p></div><pre class="ex">#include &lt;ioxd.h&gt;
+
+#include &lt;stdint.h&gt;
+#include &lt;stdlib.h&gt;
+
+/* PUT or POST /upload: any framing, 4 KB at a time, hashed as it goes (FNV-1a). */
+static void upload(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    char     buf[4096];
+    uint64_t hash = 1469598103934665603ULL, total = 0;
+    for (;;) {
+        int n = <a href="ioxd_http.html#ioxd_body_read_until">ioxd_body_read_until</a>(ctx, buf, sizeof buf);
+        if (n &lt; 0)
+            return;                                  /* malformed or gone: the engine answers */
+        if (n == 0)
+            break;                                   /* the whole body has been read */
+        for (int i = 0; i &lt; n; i++)
+            hash = (hash ^ (unsigned char)buf[i]) * 1099511628211ULL;
+        total += (uint64_t)n;
+    }
+    <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "%llu bytes, fnv1a %016llx\n", (unsigned long long)total, (unsigned long long)hash);
+}
+
+/* POST /chunks: a chunked body, each chunk as the sender framed it. A chunk larger than the
+ * buffer is a 413, and curl frames 64 KB at a time, so the buffer is that big - and off the
+ * coroutine's stack, which is 128 KB with the engine's own frames on it. */
+static void chunks(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    if (!ctx-&gt;req.chunked) {
+        ctx-&gt;res.status = 400;
+        <a href="ioxd_http.html#ioxd_text">ioxd_text</a>(ctx, "send it chunked\n");
+        return;
+    }
+    enum { CHUNK_MAX = 65536 };
+    char *buf = malloc(CHUNK_MAX);
+    if (!buf) {
+        ctx-&gt;res.status = 500;
+        return;
+    }
+    int count = 0;
+    for (;;) {
+        int n = <a href="ioxd_http.html#ioxd_body_read_next_chunk">ioxd_body_read_next_chunk</a>(ctx, buf, CHUNK_MAX);
+        if (n &lt; 0)
+            break;                                   /* malformed, gone, or a chunk too large: 413 */
+        if (n == 0) {                                /* the last chunk: the body is done */
+            <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "%d chunks in all\n", count);
+            break;
+        }
+        count++;
+        if (count &lt;= 5)                              /* the reply streams too, chunked, as the slab fills */
+            <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "chunk %d: %d bytes\n", count, n);
+    }
+    free(buf);
+}
+
+int main(void)
+{
+    <a href="ioxd_router.html#IOXD_PUT">IOXD_PUT</a> ("/upload", upload);
+    <a href="ioxd_router.html#IOXD_POST">IOXD_POST</a>("/upload", upload);
+    <a href="ioxd_router.html#IOXD_PUT">IOXD_PUT</a> ("/chunks", chunks);
+    <a href="ioxd_router.html#IOXD_POST">IOXD_POST</a>("/chunks", chunks);
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
+    return <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(0);
+}</pre></div>
+<h3 id="stream_response">stream_response.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-stream_response
+curl -N http://127.0.0.1:8080/rows?n=100000            # chunked; -N shows it arriving
+curl -o /dev/null -w '%{size_download}\n' http://127.0.0.1:8080/blob?n=50000000
+curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body</pre>
+<p>The head goes out with the first send and is frozen from then on: a status or a header set after a flush is too late (<a href="ioxd_http.html#ioxd_header">ioxd_header</a> returns false). A write or a flush returns -1 once the peer is gone, and a handler should stop then; there is nobody to send to.</p></div><pre class="ex">#include &lt;ioxd.h&gt;
+
+#include &lt;string.h&gt;
+
+/* The n of ?n=..., or a fallback. */
+static long count_param(const <a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, long fallback)
+{
+    for (size_t i = 0; i &lt; ctx-&gt;req.n_params; i++) {
+        int64_t v;
+        if (<a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(ctx-&gt;req.params[i].key, "n") &amp;&amp; <a href="ioxd_slice.html#ioxd_to_i64">ioxd_to_i64</a>(ctx-&gt;req.params[i].value, &amp;v) &amp;&amp; v &gt;= 0)
+            return (long)v;
+    }
+    return fallback;
+}
+
+/* GET /rows?n=: n lines. The slab streams by itself when it fills; the flush every 100 rows
+ * sends earlier, so a client sees the feed move instead of 8 KB at a time. */
+static void rows(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    long n = count_param(ctx, 1000);
+    for (long i = 1; i &lt;= n; i++) {
+        if (<a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, "row %ld\n", i) &lt; 0)
+            return;                                  /* the peer is gone */
+        if (i % 100 == 0 &amp;&amp; <a href="ioxd_http.html#ioxd_flush">ioxd_flush</a>(ctx) &lt; 0)
+            return;
+    }
+}
+
+/* GET /blob?n=: n bytes with a declared length, written in place. Content-Length rather than
+ * chunked framing, so a client knows the size up front; the engine holds the reply to it - a
+ * handler that writes more is cut at n and the connection closed, one that writes less closes. */
+static void blob(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    long n = count_param(ctx, 1000000);
+    <a href="ioxd_http.html#ioxd_content_length">ioxd_content_length</a>(ctx, (size_t)n);
+    <a href="ioxd_http.html#ioxd_content_type">ioxd_content_type</a>(ctx, "application/octet-stream");
+    for (long left = n; left &gt; 0;) {
+        size_t piece = left &lt; 4096 ? (size_t)left : 4096;
+        char  *at = <a href="ioxd_http.html#ioxd_reserve">ioxd_reserve</a>(ctx, piece);        /* room in the slab; a flush first if it is full */
+        if (!at)
+            return;
+        memset(at, 'x', piece);
+        <a href="ioxd_http.html#ioxd_advance">ioxd_advance</a>(ctx, piece);
+        left -= (long)piece;
+    }
+}
+
+int main(void)
+{
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>("/rows", rows);
+    <a href="ioxd_router.html#IOXD_GET">IOXD_GET</a>("/blob", blob);
+    <a href="ioxd_http.html#ioxd_bind">ioxd_bind</a>(8080, NULL);
+    return <a href="ioxd_http.html#ioxd_run">ioxd_run</a>(0);
+}</pre></div>
+<h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_EXAMPLES(7)</span></div>
+</main>
+</body>
+</html>

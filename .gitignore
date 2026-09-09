@@ -8,6 +8,7 @@ libioxd.so
 libioxd.so.*
 libioxd-tiny.a
 ioxd-hello
+ioxd-example-*
 ioxd.pc
 
 # old binaries
