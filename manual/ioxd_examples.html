@@ -13,7 +13,7 @@
 <h2>NAME</h2><p>ioxd_examples - whole programs, one per way of using the library; each builds as ioxd-example-&lt;name&gt; with <code>make examples</code></p>
 <h2>DESCRIPTION</h2>
 <table><tr><td><a href="#groups">groups.c</a></td><td>routes in groups: a prefix plus middleware, nesting, an endpoint's own middleware, a fallback of your own - as plain calls for one part of the tree and as the script for the rest, since they register the same thing.</td></tr>
-<tr><td><a href="#json">json.c</a></td><td>JSON replies: a struct described once and serialized with one call, a list of thousands streamed as one array, an object written field by field, and an error object with its status.</td></tr>
+<tr><td><a href="#json">json.c</a></td><td>JSON replies: a struct described once and serialized with one call, a list of thousands streamed as one array, an object written call by call, and an error object with its status.</td></tr>
 <tr><td><a href="#middleware">middleware.c</a></td><td>middleware written by hand: one that stamps a header on every reply, one that times the request around the rest of the chain, one that gates a route and short-circuits, and how a middleware hands what it found to the handler.</td></tr>
 <tr><td><a href="#pipes">pipes.c</a></td><td>a protocol of your own on the pipe the HTTP engine itself reads and writes through: raw TCP, one coroutine per connection, the same suspend-and-resume. A frame here is a 4-byte big-endian length and a payload; the reply is the payload reversed, framed the same way.</td></tr>
 <tr><td><a href="#static_files">static_files.c</a></td><td>files from a directory, served by hand: the path's last segment names the file, its extension the content type, fstat the length, an ETag the version, and the bytes go through the reply slab piece by piece with a declared length. HEAD and 304 cost no read.</td></tr>
@@ -183,19 +183,20 @@ curl -i http://127.0.0.1:8080/health</pre>
     <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
 }
 
-<span class="c-cm">/* GET /health - written field by field: a key, then its value by C type. */</span>
+<span class="c-cm">/* GET /health - the bare writer, no macros: a key, then the value's call by type; object,
+ * array and end for the nesting. <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, "workers", 4) would be the key and the
+ * value in one line, the call picked from the C type. */</span>
 <span class="c-kw">static</span> <span class="c-ty">void</span> health(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
 {
     <a href="ioxd_json.html#ioxd_json">ioxd_json</a> j = <a href="ioxd_json.html#ioxd_json_reply">ioxd_json_reply</a>(ctx);
     <a href="ioxd_json.html#ioxd_json_object">ioxd_json_object</a>(&amp;j);
-    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"status"</span>, <span class="c-str">"ok"</span>);
-    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"workers"</span>, <span class="c-num">4</span>);
-    <a href="ioxd_json.html#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(&amp;j, <span class="c-str">"load"</span>, <span class="c-num">0.25</span>);
-    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"ports"</span>);                      <span class="c-cm">/* a nested array, by hand */</span>
-    <a href="ioxd_json.html#ioxd_json_array">ioxd_json_array</a>(&amp;j);
-    <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8080</span>);
-    <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8443</span>);
-    <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
+    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"status"</span>);  <a href="ioxd_json.html#ioxd_json_cstr">ioxd_json_cstr</a>(&amp;j, <span class="c-str">"ok"</span>);
+    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"workers"</span>); <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">4</span>);
+    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"load"</span>);    <a href="ioxd_json.html#ioxd_json_double">ioxd_json_double</a>(&amp;j, <span class="c-num">0.25</span>);
+    <a href="ioxd_json.html#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"ports"</span>);   <a href="ioxd_json.html#ioxd_json_array">ioxd_json_array</a>(&amp;j);
+                                  <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8080</span>);
+                                  <a href="ioxd_json.html#ioxd_json_int">ioxd_json_int</a>(&amp;j, <span class="c-num">8443</span>);
+                                  <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
     <a href="ioxd_json.html#ioxd_json_end">ioxd_json_end</a>(&amp;j);
     <span class="c-kw">if</span> (!<a href="ioxd_json.html#ioxd_json_done">ioxd_json_done</a>(&amp;j))                         <span class="c-cm">/* nothing failed, nothing left open */</span>
         ctx-&gt;res.status = <span class="c-num">500</span>;

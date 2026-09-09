@@ -1,6 +1,6 @@
 /*
  * json.c - JSON replies: a struct described once and serialized with one call, a list of
- * thousands streamed as one array, an object written field by field, and an error object with
+ * thousands streamed as one array, an object written call by call, and an error object with
  * its status.
  *
  *     make examples && ./ioxd-example-json
@@ -83,19 +83,20 @@ static void many_users(ioxd_ctx *ctx)
     ioxd_json_end(&j);
 }
 
-/* GET /health - written field by field: a key, then its value by C type. */
+/* GET /health - the bare writer, no macros: a key, then the value's call by type; object,
+ * array and end for the nesting. IOXD_JSON_FIELD(&j, "workers", 4) would be the key and the
+ * value in one line, the call picked from the C type. */
 static void health(ioxd_ctx *ctx)
 {
     ioxd_json j = ioxd_json_reply(ctx);
     ioxd_json_object(&j);
-    IOXD_JSON_FIELD(&j, "status", "ok");
-    IOXD_JSON_FIELD(&j, "workers", 4);
-    IOXD_JSON_FIELD(&j, "load", 0.25);
-    ioxd_json_key(&j, "ports");                      /* a nested array, by hand */
-    ioxd_json_array(&j);
-    ioxd_json_int(&j, 8080);
-    ioxd_json_int(&j, 8443);
-    ioxd_json_end(&j);
+    ioxd_json_key(&j, "status");  ioxd_json_cstr(&j, "ok");
+    ioxd_json_key(&j, "workers"); ioxd_json_int(&j, 4);
+    ioxd_json_key(&j, "load");    ioxd_json_double(&j, 0.25);
+    ioxd_json_key(&j, "ports");   ioxd_json_array(&j);
+                                  ioxd_json_int(&j, 8080);
+                                  ioxd_json_int(&j, 8443);
+                                  ioxd_json_end(&j);
     ioxd_json_end(&j);
     if (!ioxd_json_done(&j))                         /* nothing failed, nothing left open */
         ctx->res.status = 500;
