@@ -6,6 +6,7 @@
 #include "io/pipe.h"
 
 void ioxd__engine_serve(ioxd_pipe *pipe);         /* requests on the connection until it ends */
+ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's writer, for a serializer that writes in place (json.c) */
 
 /* ── engine.c: the notes ──────────────────────────────────────────────────────────────────── */
 

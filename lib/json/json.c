@@ -1,5 +1,6 @@
 #include "ioxd/json.h"
-#include "ioxd/pipe.h"
+#include "http/engine.h"
+#include "io/pipe.h"
 
 #include <locale.h>
 #include <math.h>
@@ -9,70 +10,101 @@
 #include <string.h>
 
 #define RUN_MAX 1024
-#define RUN_MIN 64
 
 static_assert(IOXD_JSON_DEPTH < 64, "a level per bit of has_value and is_object, plus the root");
 
-static char *reserve(ioxd_json *j, size_t n)
+static inline char *tail(ioxd_json *j, size_t *room)
 {
-    switch (j->kind) {
-    case IOXD_JSON_TO_REPLY: return ioxd_reserve(j->to.ctx, n);
-    case IOXD_JSON_TO_PIPE:  return ioxd_pipe_reserve(j->to.pipe, n);
-    case IOXD_JSON_TO_MEM:   return j->to.mem.p && *j->to.mem.len + n <= j->to.mem.cap
-                                        ? j->to.mem.p + *j->to.mem.len : nullptr;
+    if (j->kind == IOXD_JSON_TO_MEM) {
+        if (!j->to.mem.p) {
+            *room = 0;
+            return nullptr;
+        }
+        *room = j->to.mem.cap - *j->to.mem.len;
+        return j->to.mem.p + *j->to.mem.len;
     }
-    return nullptr;
+    ioxd_pipewriter *pw = j->tail;
+    *room = pw->cap - pw->len;
+    return pw->buf + pw->lead + pw->len;
 }
 
-static void advance(ioxd_json *j, size_t n)
+static inline void commit(ioxd_json *j, size_t n)
+{
+    if (j->kind == IOXD_JSON_TO_MEM)
+        *j->to.mem.len += n;
+    else
+        ((ioxd_pipewriter *)j->tail)->len += n;
+}
+
+static inline bool sink_failed(const ioxd_json *j)
 {
     switch (j->kind) {
-    case IOXD_JSON_TO_REPLY: ioxd_advance(j->to.ctx, n); break;
-    case IOXD_JSON_TO_PIPE:  ioxd_pipe_advance(j->to.pipe, n); break;
-    case IOXD_JSON_TO_MEM:   *j->to.mem.len += n; break;
+    case IOXD_JSON_TO_REPLY: return ((ioxd_pipewriter *)j->tail)->failed || j->to.ctx->res.failed;
+    case IOXD_JSON_TO_PIPE:  return ((ioxd_pipewriter *)j->tail)->failed;
+    case IOXD_JSON_TO_MEM:   return false;
     }
+    return true;
+}
+
+static char *make_room(ioxd_json *j, size_t n)
+{
+    char *at = nullptr;
+    switch (j->kind) {
+    case IOXD_JSON_TO_REPLY: at = ioxd_reserve(j->to.ctx, n); break;
+    case IOXD_JSON_TO_PIPE:  at = ioxd_pipe_reserve(j->to.pipe, n); break;
+    case IOXD_JSON_TO_MEM:   break;
+    }
+    if (!at)
+        j->failed = true;
+    return at;
+}
+
+static inline char *want(ioxd_json *j, size_t n)
+{
+    size_t room;
+    char  *at = tail(j, &room);
+    if (room >= n && !sink_failed(j))
+        return at;
+    return make_room(j, n);
 }
 
 static bool put(ioxd_json *j, const char *p, size_t n)
 {
     while (n) {
-        size_t run = n < RUN_MAX ? n : RUN_MAX;
-        char  *at  = reserve(j, run);
-        while (!at && run > RUN_MIN) {
-            run = run / 2 > RUN_MIN ? run / 2 : RUN_MIN;
-            at  = reserve(j, run);
+        size_t room;
+        char  *at = tail(j, &room);
+        if (room == 0 || sink_failed(j)) {
+            if (!make_room(j, n < RUN_MAX ? n : RUN_MAX))
+                return false;
+            at = tail(j, &room);
         }
-        if (!at) {
-            j->failed = true;
-            return false;
-        }
-        memcpy(at, p, run);
-        advance(j, run);
-        p += run;
-        n -= run;
+        size_t k = n < room ? n : room;
+        memcpy(at, p, k);
+        commit(j, k);
+        p += k;
+        n -= k;
     }
     return true;
 }
 
-static bool put_cstr(ioxd_json *j, const char *s)
-{
-    return put(j, s, strlen(s));
-}
-
-static bool needs_escape(unsigned char c)
+static inline bool needs_escape(unsigned char c)
 {
     return c < 0x20 || c == '"' || c == '\\';
 }
 
-static bool put_string(ioxd_json *j, const char *p, size_t n)
+static size_t clean_run(const char *p, size_t n)
+{
+    size_t run = 0;
+    while (run < n && !needs_escape((unsigned char)p[run]))
+        run++;
+    return run;
+}
+
+static bool put_escaped(ioxd_json *j, const char *p, size_t n)
 {
     static const char hex[] = "0123456789abcdef";
-    if (!put(j, "\"", 1))
-        return false;
     while (n) {
-        size_t run = 0;
-        while (run < n && !needs_escape((unsigned char)p[run]))
-            run++;
+        size_t run = clean_run(p, n);
         if (run && !put(j, p, run))
             return false;
         p += run;
@@ -81,8 +113,8 @@ static bool put_string(ioxd_json *j, const char *p, size_t n)
             break;
         unsigned char c = (unsigned char)*p++;
         n--;
-        char esc[6] = { '\\', 0, 0, 0, 0, 0 };
-        size_t len = 2;
+        char   esc[6] = { '\\', 0, 0, 0, 0, 0 };
+        size_t len    = 2;
         switch (c) {
         case '"':  esc[1] = '"';  break;
         case '\\': esc[1] = '\\'; break;
@@ -103,33 +135,64 @@ static bool put_string(ioxd_json *j, const char *p, size_t n)
         if (!put(j, esc, len))
             return false;
     }
-    return put(j, "\"", 1);
-}
-
-static bool separator(ioxd_json *j)
-{
-    if (j->failed)
-        return false;
-    if (j->after_key) {
-        j->after_key = false;
-        return true;
-    }
-    uint64_t bit = (uint64_t)1 << j->depth;
-    if (j->has_value & bit)
-        return put(j, ",", 1);
-    j->has_value |= bit;
     return true;
 }
 
-static bool value_ok(ioxd_json *j)
+static bool put_string(ioxd_json *j, size_t comma, const char *p, size_t n, char after)
+{
+    size_t need = comma + n + 2 + (after != 0);
+    if (need <= RUN_MAX && clean_run(p, n) == n) {
+        size_t room;
+        char  *at = tail(j, &room);
+        if (need <= room && !sink_failed(j)) {
+            if (comma)
+                *at++ = ',';
+            *at++ = '"';
+            memcpy(at, p, n);
+            at[n] = '"';
+            if (after)
+                at[n + 1] = after;
+            commit(j, need);
+            return true;
+        }
+    }
+    if ((comma && !put(j, ",", 1)) || !put(j, "\"", 1) || !put_escaped(j, p, n) || !put(j, "\"", 1))
+        return false;
+    return after == 0 || put(j, &after, 1);
+}
+
+static inline int value_lead(ioxd_json *j)
 {
     if (j->failed)
-        return false;
-    if ((j->is_object & ((uint64_t)1 << j->depth)) && !j->after_key) {
-        j->failed = true;
-        return false;
+        return -1;
+    if (j->after_key) {
+        j->after_key = false;
+        return 0;
     }
-    return separator(j);
+    uint64_t bit = (uint64_t)1 << j->depth;
+    if (j->is_object & bit) {
+        j->failed = true;
+        return -1;
+    }
+    if (j->has_value & bit)
+        return 1;
+    j->has_value |= bit;
+    return 0;
+}
+
+static bool put_value(ioxd_json *j, const char *p, size_t n)
+{
+    int comma = value_lead(j);
+    if (comma < 0)
+        return false;
+    char *at = want(j, (size_t)comma + n);
+    if (!at)
+        return false;
+    if (comma)
+        *at++ = ',';
+    memcpy(at, p, n);
+    commit(j, (size_t)comma + n);
+    return true;
 }
 
 ioxd_json ioxd_json_reply(ioxd_ctx *ctx)
@@ -137,6 +200,7 @@ ioxd_json ioxd_json_reply(ioxd_ctx *ctx)
     ioxd_content_type(ctx, "application/json");
     ioxd_json j = { .kind = IOXD_JSON_TO_REPLY };
     j.to.ctx = ctx;
+    j.tail   = ioxd__engine_writer(ctx);
     return j;
 }
 
@@ -144,6 +208,7 @@ ioxd_json ioxd_json_pipe(ioxd_pipe *pipe)
 {
     ioxd_json j = { .kind = IOXD_JSON_TO_PIPE };
     j.to.pipe = pipe;
+    j.tail    = &pipe->out;
     return j;
 }
 
@@ -165,7 +230,8 @@ static bool open_level(ioxd_json *j, char bracket)
         j->failed = true;
         return false;
     }
-    if (!value_ok(j))
+    int comma = value_lead(j);
+    if (comma < 0)
         return false;
     j->depth++;
     uint64_t bit = (uint64_t)1 << j->depth;
@@ -174,7 +240,14 @@ static bool open_level(ioxd_json *j, char bracket)
         j->is_object |= bit;
     else
         j->is_object &= ~bit;
-    return put(j, &bracket, 1);
+    char *at = want(j, (size_t)comma + 1);
+    if (!at)
+        return false;
+    if (comma)
+        *at++ = ',';
+    *at = bracket;
+    commit(j, (size_t)comma + 1);
+    return true;
 }
 
 bool ioxd_json_object(ioxd_json *j)
@@ -197,7 +270,12 @@ bool ioxd_json_end(ioxd_json *j)
     }
     bool object = j->is_object & ((uint64_t)1 << j->depth);
     j->depth--;
-    return put(j, object ? "}" : "]", 1);
+    char *at = want(j, 1);
+    if (!at)
+        return false;
+    *at = object ? '}' : ']';
+    commit(j, 1);
+    return true;
 }
 
 bool ioxd_json_done(ioxd_json *j)
@@ -205,32 +283,40 @@ bool ioxd_json_done(ioxd_json *j)
     return !j->failed && j->depth == 0;
 }
 
-bool ioxd_json_key(ioxd_json *j, const char *name)
+bool ioxd__json_key_n(ioxd_json *j, const char *name, size_t len)
 {
     if (j->failed)
         return false;
-    if (!(j->is_object & ((uint64_t)1 << j->depth)) || j->after_key) {
+    uint64_t bit = (uint64_t)1 << j->depth;
+    if (!(j->is_object & bit) || j->after_key) {
         j->failed = true;
         return false;
     }
-    if (!separator(j))
-        return false;
-    if (!put_string(j, name, strlen(name)) || !put(j, ":", 1))
+    size_t comma = (j->has_value & bit) ? 1 : 0;
+    j->has_value |= bit;
+    if (!put_string(j, comma, name, len, ':'))
         return false;
     j->after_key = true;
     return true;
 }
 
+bool ioxd_json_key(ioxd_json *j, const char *name)
+{
+    return ioxd__json_key_n(j, name, strlen(name));
+}
+
 bool ioxd_json_string(ioxd_json *j, ioxd_slice s)
 {
-    return value_ok(j) && put_string(j, s.p, s.len);
+    int comma = value_lead(j);
+    return comma >= 0 && put_string(j, (size_t)comma, s.p, s.len, 0);
 }
 
 bool ioxd_json_cstr(ioxd_json *j, const char *s)
 {
     if (!s)
         return ioxd_json_null(j);
-    return value_ok(j) && put_string(j, s, strlen(s));
+    int comma = value_lead(j);
+    return comma >= 0 && put_string(j, (size_t)comma, s, strlen(s), 0);
 }
 
 static char *digits(char *tmp_end, uint64_t v)
@@ -247,7 +333,7 @@ bool ioxd_json_uint(ioxd_json *j, uint64_t v)
 {
     char  tmp[24];
     char *p = digits(tmp + sizeof tmp, v);
-    return value_ok(j) && put(j, p, (size_t)(tmp + sizeof tmp - p));
+    return put_value(j, p, (size_t)(tmp + sizeof tmp - p));
 }
 
 bool ioxd_json_int(ioxd_json *j, int64_t v)
@@ -257,7 +343,7 @@ bool ioxd_json_int(ioxd_json *j, int64_t v)
     char    *p = digits(tmp + sizeof tmp, magnitude);
     if (v < 0)
         *--p = '-';
-    return value_ok(j) && put(j, p, (size_t)(tmp + sizeof tmp - p));
+    return put_value(j, p, (size_t)(tmp + sizeof tmp - p));
 }
 
 static pthread_once_t c_locale_once = PTHREAD_ONCE_INIT;
@@ -298,7 +384,7 @@ bool ioxd_json_double(ioxd_json *j, double v)
         j->failed = true;
         return false;
     }
-    return value_ok(j) && put(j, tmp, (size_t)n);
+    return put_value(j, tmp, (size_t)n);
 }
 
 bool ioxd_json_float(ioxd_json *j, float v)
@@ -311,17 +397,17 @@ bool ioxd_json_float(ioxd_json *j, float v)
         j->failed = true;
         return false;
     }
-    return value_ok(j) && put(j, tmp, (size_t)n);
+    return put_value(j, tmp, (size_t)n);
 }
 
 bool ioxd_json_bool(ioxd_json *j, bool v)
 {
-    return value_ok(j) && put_cstr(j, v ? "true" : "false");
+    return v ? put_value(j, "true", 4) : put_value(j, "false", 5);
 }
 
 bool ioxd_json_null(ioxd_json *j)
 {
-    return value_ok(j) && put_cstr(j, "null");
+    return put_value(j, "null", 4);
 }
 
 bool ioxd_json_raw(ioxd_json *j, ioxd_slice json)
@@ -330,5 +416,10 @@ bool ioxd_json_raw(ioxd_json *j, ioxd_slice json)
         j->failed = true;
         return false;
     }
-    return value_ok(j) && put(j, json.p, json.len);
+    int comma = value_lead(j);
+    if (comma < 0)
+        return false;
+    if (comma && !put(j, ",", 1))
+        return false;
+    return put(j, json.p, json.len);
 }

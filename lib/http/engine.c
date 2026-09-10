@@ -512,6 +512,11 @@ int ioxd_flush(ioxd_ctx *ctx)
     return flush(ctx, false);
 }
 
+ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx)
+{
+    return WRITER(ctx);
+}
+
 void *ioxd_reserve(ioxd_ctx *ctx, size_t n)
 {
     ioxd_response   *res = &ctx->res;

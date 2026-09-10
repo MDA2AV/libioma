@@ -6,21 +6,19 @@
 /* ── json.c: the notes ──────────────────────────────────────────────────────────────────── */
 
 /*
- * json/json.c - the forward-only JSON writer of ioxd.h. Every value goes straight to the sink:
- * a run of safe bytes at a time, an escape at a time, a number formatted into a small stack
- * buffer. The sink is the reply, a raw pipe, or a buffer; the writer never allocates.
+ * json/json.c - the forward-only JSON writer of ioxd.h. Every call writes in place at the
+ * sink's tail - the reply slab, a raw pipe's slab, or a buffer - a comma and a value, or a
+ * comma and a quoted key, as one run of stores, and moves the tail past them. The engine is
+ * only asked for room when the slab is full, which is when it sends. Numbers are formatted
+ * into a small stack buffer first; the writer never allocates.
  */
 
 /* at file scope:
- *   - bytes asked of the sink at a time  [#define RUN_MAX 1024]
- *   - and the least worth asking for  [#define RUN_MIN 64]
+ *   - bytes asked of the sink at a time, when a slab has to be flushed for them
+ *     [#define RUN_MAX 1024]
  *   - One bit per level in has_value and is_object, the root's included: the deepest must
  *     still fit.  [static_assert(IOXD_JSON_DEPTH < 64, "a level per bit of has_value and
  *     is_object,]
- *   - ── the sinks ───────────────────────────────────────────────────────────────────────────
- *     [ioxd_json ioxd_json_reply(ioxd_ctx *ctx)]
- *   - ── the values ──────────────────────────────────────────────────────────────────────────
- *     [/ * Open a container: its own level starts empty. The depth is checked before any]
  *   - snprintf and strtod spell the decimal point the way LC_NUMERIC says, and JSON knows only
  *     '.'; a locale like fa_IR spells it with several bytes, so mending one byte afterwards is
  *     not enough. The numbers are formatted in a private "C" locale instead - made once for
@@ -28,32 +26,64 @@
  *     disturbs another and nothing reads the shared static localeconv returns.
  */
 
-/* reserve:
- * n bytes of the sink to write into, or nullptr; the caller then advances by what it wrote.
+/* tail:
+ * Where the next byte goes and how many fit before the sink is full: the slab's tail for a
+ * reply or a pipe (the writer the sink was opened with), the buffer's end for memory. Read
+ * afresh on every call, since the handler may have written to the same slab in between.
+ */
+
+/* commit:
+ * Move the tail past n bytes written there.
+ */
+
+/* sink_failed:
+ * The peer is gone, or the reply failed: nothing more is written, and the writer says so.
+ */
+
+/* make_room:
+ * The slow path: n bytes of room from the sink, which sends its slab first when they do not
+ * fit - a reply or a pipe; a buffer has no more. nullptr marks the writer failed.
+ */
+
+/* want:
+ * n bytes at the tail: what is there when it fits, else make_room.
  */
 
 /* put:
- * Raw bytes to the sink, in runs the slab can take; false marks the writer failed. A sink
- * refuses a reserve larger than its slab outright, so a refused run is halved and asked for
- * again, down to RUN_MIN: a slab smaller than RUN_MAX still takes the document.
+ * Raw bytes of any length: what fits at the tail, then a flush and the rest, RUN_MAX at a time.
  */
 
 /* needs_escape:
  * The bytes that must be escaped: the quote, the backslash, and control characters.
  */
 
-/* put_string:
- * A string, quoted and escaped: safe runs are copied whole, escapes one at a time.
+/* clean_run:
+ * How many bytes from p can go out as they are.
+ */
+
+/* put_escaped:
+ * A string's bytes, escaped: safe runs copied whole, escapes one at a time.
  *   - \u00XX  [default:]
  */
 
-/* separator:
- * Before a value or a key: the comma its level owes, unless it follows a key.
+/* put_string:
+ * A quoted string, with the comma before it and the byte after it (a key's colon) when there
+ * are any: one run of stores when it needs no escape and fits at the tail, which is nearly
+ * every key and most values; otherwise piece by piece through put.
  */
 
-/* value_ok:
- * A value may start here: inside an object it has to follow a key, or the document is broken
- * and the writer fails. Outside one - in an array, or at the top level - anything goes.
+/* value_lead:
+ * A value may start here? -1 and the writer failed when not: inside an object a value has to
+ * follow a key. Else the commas owed: none after a key or for a level's first value, one
+ * otherwise - the level's has_value bit records that one is there now.
+ */
+
+/* put_value:
+ * A value already formatted: the comma it owes and its bytes, in one run.
+ */
+
+/* ioxd_json_reply:
+ * The reply as the sink: its content type, and the slab's writer for the fast path.
  */
 
 /* open_level:
@@ -71,8 +101,10 @@
  * Nothing failed, and nothing is left open: the document is whole.
  */
 
-/* ioxd_json_key:
- * A key belongs in an object, and one key per value: anything else is a broken document.
+/* ioxd__json_key_n:
+ * A key belongs in an object, and one key per value: anything else is a broken document. The
+ * comma, the quoted key and its colon go out as one run; the macros pass a literal's length,
+ * folded at compile time.
  */
 
 /* ioxd_json_cstr:

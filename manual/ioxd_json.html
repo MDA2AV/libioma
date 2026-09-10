@@ -55,6 +55,7 @@
         <span class="c-kw">struct</span> ioxd_pipe *pipe;
         <span class="c-kw">struct</span> { <span class="c-ty">char</span> *p; <span class="c-ty">size_t</span> cap, *len; } mem;
     } to;
+    <span class="c-ty">void</span>    *tail;                              <span class="c-cm">/* private: the slab's writer, where the bytes land */</span>
 
     <span class="c-ty">uint64_t</span> has_value;                         <span class="c-cm">/* per level: a value is there, so a comma is due */</span>
     <span class="c-ty">uint64_t</span> is_object;                         <span class="c-cm">/* per level: it closes with '}' rather than ']'  */</span>
@@ -80,7 +81,7 @@ ioxd_json ioxd_json_mem  (<span class="c-ty">char</span> *buf, <span class="c-ty
 <span class="c-ty">bool</span> ioxd_json_null  (ioxd_json *j);
 <span class="c-ty">bool</span> ioxd_json_raw   (ioxd_json *j, ioxd_slice json);
 </pre>
-<div class="text"><p>A forward-only JSON writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation. The bytes go straight into the reply - or a raw pipe, or a buffer - escaped as they are written, and stream out as the slab fills. Nesting and commas are tracked, so a handler just says what it means:</p>
+<div class="text"><p>A forward-only JSON writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation. The bytes go straight into the reply slab - or a raw pipe's, or a buffer - written in place at its tail, escaped as they are written, and stream out as the slab fills: a call is a few stores, not a copy through the engine. Nesting and commas are tracked, so a handler just says what it means:</p>
 <pre class="ex"><a href="#ioxd_json">ioxd_json</a> j = <a href="#ioxd_json_reply">ioxd_json_reply</a>(ctx);                  <span class="c-cm">// content-type: application/json</span>
 <a href="#ioxd_json_object">ioxd_json_object</a>(&amp;j);
     <a href="#ioxd_json_key">ioxd_json_key</a>(&amp;j, <span class="c-str">"id"</span>);    <a href="#ioxd_json_int">ioxd_json_int</a>(&amp;j, id);
@@ -118,7 +119,7 @@ IOXD_JSON_VALUE(ioxd_json *j, x)
 <pre class="decl" id="IOXD_JSON_FIELD">
 IOXD_JSON_FIELD(ioxd_json *j, <span class="c-kw">const</span> <span class="c-ty">char</span> *name, x)
 </pre>
-<div class="text"><p>A key and its value in one line. The answer goes through a function so that a field written for its effect - `<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n);` - is a plain statement and not a value the compiler sees discarded, while `if (<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n))` still reads it.</p></div>
+<div class="text"><p>A key and its value in one line. The answer goes through a function so that a field written for its effect - `<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n);` - is a plain statement and not a value the compiler sees discarded, while `if (<a href="#IOXD_JSON_FIELD">IOXD_JSON_FIELD</a>(j, "n", n))` still reads it. The key goes with its length, so a literal's is folded at compile time.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="IOXD_JSON_STRUCT">
@@ -164,7 +165,7 @@ IOXD_JSON_WRITER(name, FIELDS)
 user_to_json(&amp;j, &amp;u);                                 <span class="c-cm">/* {"id":42,"name":"Zoe","tags":[...],"orders":[{...}]} */</span></pre>
 <h2>SEE ALSO</h2>
 <p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
-<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_JSON(3)</span></div>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_JSON(3)</span></div>
 </main>
 </body>
 </html>

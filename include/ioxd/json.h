@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "ioxd/http.h"
 
@@ -14,9 +15,10 @@ struct ioxd_pipe;                               /* ioxd/pipe.h */
 /* ── JSON, written as you go ───────────────────────────────────────────────────────────── */
 
 /* A forward-only JSON writer, the shape of .NET's Utf8JsonWriter: no tree, no allocation. The
- * bytes go straight into the reply - or a raw pipe, or a buffer - escaped as they are written,
- * and stream out as the slab fills. Nesting and commas are tracked, so a handler just says what
- * it means:
+ * bytes go straight into the reply slab - or a raw pipe's, or a buffer - written in place at
+ * its tail, escaped as they are written, and stream out as the slab fills: a call is a few
+ * stores, not a copy through the engine. Nesting and commas are tracked, so a handler just says
+ * what it means:
  *
  *     ioxd_json j = ioxd_json_reply(ctx);                  // content-type: application/json
  *     ioxd_json_object(&j);
@@ -47,6 +49,7 @@ typedef struct ioxd_json {
         struct ioxd_pipe *pipe;
         struct { char *p; size_t cap, *len; } mem;
     } to;
+    void    *tail;                              /* private: the slab's writer, where the bytes land */
 
     uint64_t has_value;                         /* per level: a value is there, so a comma is due */
     uint64_t is_object;                         /* per level: it closes with '}' rather than ']'  */
@@ -89,10 +92,12 @@ bool ioxd_json_raw   (ioxd_json *j, ioxd_slice json);            /* already JSON
 
 /* A key and its value in one line. The answer goes through a function so that a field written for
  * its effect - `IOXD_JSON_FIELD(j, "n", n);` - is a plain statement and not a value the compiler
- * sees discarded, while `if (IOXD_JSON_FIELD(j, "n", n))` still reads it. */
+ * sees discarded, while `if (IOXD_JSON_FIELD(j, "n", n))` still reads it. The key goes with its
+ * length, so a literal's is folded at compile time. */
 static inline bool ioxd__json_wrote(bool ok) { return ok; }
+bool ioxd__json_key_n(ioxd_json *j, const char *name, size_t len);      /* what the macros call: ioxd_json_key with the length known */
 #define IOXD_JSON_FIELD(j, name, x)                                                                \
-    ioxd__json_wrote(ioxd_json_key((j), (name)) && IOXD_JSON_VALUE((j), (x)))
+    ioxd__json_wrote(ioxd__json_key_n((j), (name), strlen(name)) && IOXD_JSON_VALUE((j), (x)))
 
 /* A struct described once, serialized with one call. The description is a list of fields, each
  * line its kind, its C type (or, for a nested struct, that struct's name) and its name:
@@ -133,12 +138,13 @@ static inline bool ioxd__json_wrote(bool ok) { return ok; }
 #define IOXD__JSON_MEMBER_ARRAY(type, field, count)   type *field; size_t count;
 #define IOXD__JSON_MEMBER_OBJECTS(sname, field, count) const struct sname *field; size_t count;
 #define IOXD__JSON_WRITE(kind, ...)                   IOXD__JSON_WRITE_##kind(__VA_ARGS__)
-#define IOXD__JSON_WRITE_VALUE(type, field)           ioxd_json_key(j, #field); IOXD_JSON_VALUE(j, v->field);
-#define IOXD__JSON_WRITE_OBJECT(sname, field)         ioxd_json_key(j, #field); sname##_to_json(j, &v->field);
-#define IOXD__JSON_WRITE_OPTIONAL(sname, field)       ioxd_json_key(j, #field); if (v->field) sname##_to_json(j, v->field); else ioxd_json_null(j);
-#define IOXD__JSON_WRITE_ARRAY(type, field, count)    ioxd_json_key(j, #field); ioxd_json_array(j); \
+#define IOXD__JSON_KEY(field)                         ioxd__json_key_n(j, #field, sizeof #field - 1)
+#define IOXD__JSON_WRITE_VALUE(type, field)           IOXD__JSON_KEY(field); IOXD_JSON_VALUE(j, v->field);
+#define IOXD__JSON_WRITE_OBJECT(sname, field)         IOXD__JSON_KEY(field); sname##_to_json(j, &v->field);
+#define IOXD__JSON_WRITE_OPTIONAL(sname, field)       IOXD__JSON_KEY(field); if (v->field) sname##_to_json(j, v->field); else ioxd_json_null(j);
+#define IOXD__JSON_WRITE_ARRAY(type, field, count)    IOXD__JSON_KEY(field); ioxd_json_array(j);      \
     for (size_t i_ = 0; i_ < v->count; i_++) { IOXD_JSON_VALUE(j, v->field[i_]); }                    \
     ioxd_json_end(j);
-#define IOXD__JSON_WRITE_OBJECTS(sname, field, count) ioxd_json_key(j, #field); ioxd_json_array(j); \
+#define IOXD__JSON_WRITE_OBJECTS(sname, field, count) IOXD__JSON_KEY(field); ioxd_json_array(j);      \
     for (size_t i_ = 0; i_ < v->count; i_++) { sname##_to_json(j, &v->field[i_]); }                   \
     ioxd_json_end(j);
