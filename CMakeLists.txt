@@ -134,7 +134,6 @@ if(IOXD_EXAMPLES)
     target_link_libraries(ioxd-pipe-server PRIVATE ioxd::ioxd)
     add_executable(ioxd-unit tests/unit.c)
     target_link_libraries(ioxd-unit PRIVATE ioxd::ioxd)
-    target_include_directories(ioxd-unit PRIVATE lib)   # it checks io/spsc.h, the receive ring, on its own
     add_executable(ioxd-router-test tests/router_test.c)
     target_link_libraries(ioxd-router-test PRIVATE ioxd::ioxd)
     # The suites, through the one script `make check` runs, so the sequence lives in one place.

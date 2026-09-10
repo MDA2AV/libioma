@@ -3,15 +3,13 @@
 
 `make check` runs it against the default build; `make check-tiny` runs it against a build with
 -DBUF_COUNT=8 -DBUF_SIZE=64 -DRX_QUEUE=4, which starves the provided buffer group on every
-request and pauses the per-connection recv at the first stall.
+request and overflows the per-connection queue at the first stall.
 
 At shutdown the server must report "0 still open" on every worker.
 """
-import os
 import socket
 import struct
 import sys
-import threading
 import time
 
 PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
@@ -75,10 +73,10 @@ for s in conns:
 results.append(check("server healthy after starvation", healthy()))
 
 # 2. Flood without ever reading. The server's send parks once our receive buffer and its send
-#    buffer are full; data keeps arriving until the connection's recv queue reaches its mark, at
-#    which point the server pauses the multishot and the socket's window holds us. Our sendall
-#    then stalls (the server stopped reading); closing with unread data RSTs the socket, which
-#    fails the parked send and lets the handler finish. Nothing may wedge.
+#    buffer are full; data keeps arriving until the connection's recv queue overflows, at which
+#    point the server ends its input and cancels the multishot. Our sendall then stalls (the
+#    server stopped reading); closing with unread data RSTs the socket, which fails the parked
+#    send and lets the handler finish. Nothing may wedge.
 FLOOD_LIMIT = 20                                  # seconds: the send timeout above, with room
 s = connect(timeout=3)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -98,60 +96,6 @@ s.close()
 results.append(check(f"flood without reading: {outcome} after {took:.1f}s",
                      outcome != "sent all" and took < FLOOD_LIMIT))
 results.append(check("server healthy after flood", healthy()))
-
-# 2b. A streamed echo: the handler sends each piece while the rest of the body is still arriving,
-#     so its recv queue fills while it is parked on a send. The recv is paused at the mark and
-#     re-armed as the handler drains - through a queue of 4 in the tiny build, under starvation -
-#     and every byte comes back, in order. Sent from a thread: the echo cannot be read after the
-#     upload, since a server that had to buffer it all would be the flood above.
-def dechunk(data):
-    out = b""
-    while True:
-        line, _, data = data.partition(b"\r\n")
-        n = int(line.split(b";")[0], 16)
-        if n == 0:
-            return out
-        out += data[:n]
-        data = data[n + 2:]
-
-
-def streamed_echo(body, chunked):
-    s = connect(timeout=30)
-    if chunked:
-        head = b"POST /echo-stream HTTP/1.1\r\nHost: x\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n"
-        wire = b"".join(b"%x\r\n%s\r\n" % (len(body[i:i + 65536]), body[i:i + 65536])
-                        for i in range(0, len(body), 65536)) + b"0\r\n\r\n"
-    else:
-        head = b"POST /echo-stream HTTP/1.1\r\nHost: x\r\nConnection: close\r\nContent-Length: %d\r\n\r\n" % len(body)
-        wire = body
-    sender = threading.Thread(target=lambda: s.sendall(head + wire))
-    sender.start()
-    data = b""
-    while True:
-        try:
-            piece = s.recv(1 << 20)
-        except socket.timeout:
-            break
-        if not piece:
-            break
-        data += piece
-    sender.join()
-    s.close()
-    reply_head, _, rest = data.partition(b"\r\n\r\n")
-    if not reply_head.startswith(b"HTTP/1.1 200"):
-        return reply_head[:40]
-    return dechunk(rest) if b"transfer-encoding: chunked" in reply_head.lower() else rest
-
-
-body = os.urandom(1 << 20)
-t0 = time.time()
-back = streamed_echo(body, chunked=False)
-results.append(check(f"1 MiB streamed echo, Content-Length, in {time.time() - t0:.1f}s (recv paused at the mark, re-armed as it drains)",
-                     back == body))
-t0 = time.time()
-back = streamed_echo(body[:256 << 10], chunked=True)
-results.append(check(f"256 KiB streamed echo, chunked, in {time.time() - t0:.1f}s", back == body[:256 << 10]))
-results.append(check("server healthy after streamed echoes", healthy()))
 
 # 3. Reset in the middle of a request: the multishot recv completes with -ECONNRESET.
 s = connect()

@@ -9,8 +9,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "io/spsc.h"
-
 static int checks, failures;
 
 /* Count a check; report a failed one by line. */
@@ -432,30 +430,6 @@ static void test_json(void)
 }
 
 /* ioxd_configure: a zero keeps a default, a bad value is refused and changes nothing. */
-/* io/spsc.h: the receive queue keeps every item through a burst past its inline slots, in order,
- * and reset hands a grown ring back. */
-static void test_spsc(void)
-{
-    struct spsc q = { 0 };
-    ioxd__spsc_reset(&q);
-    CHECK(ioxd__spsc_empty(&q) && q.items == q.slots);
-    for (unsigned i = 0; i < 3 * RX_QUEUE + 1; i++) {
-        if (ioxd__spsc_full(&q))
-            CHECK(ioxd__spsc_grow(&q));
-        ioxd__spsc_push(&q)->len = i;
-    }
-    CHECK(ioxd__spsc_count(&q) == 3 * RX_QUEUE + 1 && q.items != q.slots && q.mask + 1 == 4 * RX_QUEUE);
-    bool in_order = true;
-    for (unsigned i = 0; i < 3 * RX_QUEUE + 1; i++)
-        in_order = in_order && ioxd__spsc_pop(&q).len == i;
-    CHECK(in_order && ioxd__spsc_empty(&q));
-    for (unsigned i = 0; i < RX_QUEUE; i++)                    /* wraps within the grown ring */
-        ioxd__spsc_push(&q)->len = 100 + i;
-    CHECK(ioxd__spsc_count(&q) == RX_QUEUE && ioxd__spsc_pop(&q).len == 100);
-    ioxd__spsc_reset(&q);
-    CHECK(ioxd__spsc_empty(&q) && q.items == q.slots && q.mask == RX_QUEUE - 1);
-}
-
 static void test_config(void)
 {
     CHECK(ioxd_configure(&(ioxd_config){ 0 }) == 0);
@@ -481,7 +455,6 @@ static void test_delay_off_worker(void)
 int main(void)
 {
     test_integers();
-    test_spsc();
     test_config();
     test_delay_off_worker();
     test_json();
