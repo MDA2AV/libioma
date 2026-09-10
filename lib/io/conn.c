@@ -285,13 +285,42 @@ void ioxd__conn_close(conn_t *c)
     conn_unref(c);
 }
 
+static int link_recv_item(void *link, struct rx_item *out)
+{
+    return ioxd__conn_recv_item(link, out);
+}
+
+static bool link_has_item(void *link)
+{
+    conn_t *c = link;
+    return !ioxd__spsc_empty(&c->rx);
+}
+
+static void link_release(void *link, const struct rx_item *item)
+{
+    conn_t *c = link;
+    ioxd__bufring_return(&c->p->bufs, item->buf_id);
+}
+
+static int link_send(void *link, const void *data, size_t n)
+{
+    return ioxd__conn_send(link, data, n);
+}
+
+const ioxd_pipe_link ioxd__conn_link = {
+    .recv_item = link_recv_item,
+    .has_item  = link_has_item,
+    .release   = link_release,
+    .send      = link_send,
+};
+
 void ioxd__conn_main(void *arg)
 {
     conn_t          *c = arg;
     char             gather[IOXD_PIPE_GATHER];
     char             slab[IOXD_PIPE_LEAD + IOXD_PIPE_CAP + IOXD_PIPE_SLACK];
     struct ioxd_pipe pipe;
-    ioxd__pipe_init(&pipe, c, gather, sizeof gather, slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
+    ioxd__pipe_init(&pipe, c, &ioxd__conn_link, c, gather, sizeof gather, slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
     c->p->handler(&pipe);
     ioxd__pipe_close(&pipe);
     ioxd__conn_close(c);

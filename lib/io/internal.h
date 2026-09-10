@@ -29,7 +29,15 @@ enum {
     TAG_ACCEPT = 3,                               /* the listener's multishot accept          */
     TAG_CLOSE = 4,                                /* a socket's close: only a failure is news */
     TAG_DRAIN = 5,                                /* the shutdown's blanket cancel            */
+    TAG_CALL = 6,                                 /* an ioxd_cqe_target: it is called with the CQE */
 };
+
+/* A completion that calls back: the first member of whatever staged the SQE (a QUIC socket's
+ * recv, one of its sends, its timer), so one tag serves every operation the loop has no case
+ * for. The loop calls on_cqe with the result and the flags. */
+typedef struct ioxd_cqe_target {
+    void (*on_cqe)(struct ioxd_cqe_target *target, int res, unsigned flags);
+} ioxd_cqe_target;
 
 #define UD(ptr, tag) ((uintptr_t)(ptr) | (uintptr_t)(tag))
 #define UD_PTR(ud)   ((void *)(uintptr_t)((ud) & ~(uint64_t)7))

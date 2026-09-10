@@ -1,4 +1,5 @@
 #include "io/internal.h"
+#include "quic/quic.h"
 
 #include <errno.h>
 #include <netinet/in.h>
@@ -162,6 +163,11 @@ static void dispatch(proactor_t *p, struct io_uring_cqe *cqe)
             p->cancel_each = true;
         }
         break;
+    case TAG_CALL: {
+        ioxd_cqe_target *target = ptr;
+        target->on_cqe(target, cqe->res, cqe->flags);
+        break;
+    }
     default:
         break;
     }
@@ -193,6 +199,10 @@ static void rearm_starved(proactor_t *p)
 {
     unsigned room = p->bufs.returned;
     p->bufs.returned = 0;
+    if (room)
+        for (int i = 0; i < p->n_listeners; i++)
+            if (p->listeners[i].quic)
+                ioxd__quic_rearm(&p->listeners[i]);
     if (p->nstarved == 0 || room == 0)
         return;
 
@@ -236,6 +246,11 @@ static void begin_drain(proactor_t *p)
     p->draining = true;
     for (int i = 0; i < p->n_listeners; i++) {
         struct listener *l = &p->listeners[i];
+        if (l->quic) {
+            ioxd__quic_drain(l);
+            l->stalled = true;
+            continue;
+        }
         if (!l->stalled) {
             struct io_uring_sqe *sqe = ioxd__proactor_sqe(p);
             sqe->opcode    = IORING_OP_ASYNC_CANCEL;
@@ -324,10 +339,16 @@ void ioxd__proactor_run(proactor_t *p)
     size_t at = 0;
     for (int i = 0; i < p->n_listeners; i++) {
         struct listener *l = &p->listeners[i];
-        l->p  = p;
-        l->fd = listener_open(l->port);
-        arm_accept(l);
-        int n = snprintf(ports + at, sizeof ports - at, "%s:%u%s", i ? " " : "", l->port, l->certs ? "/tls" : "");
+        l->p = p;
+        if (l->quic) {
+            if (ioxd__quic_open(p, l) < 0)
+                abort();
+        } else {
+            l->fd = listener_open(l->port);
+            arm_accept(l);
+        }
+        int n = snprintf(ports + at, sizeof ports - at, "%s:%u%s", i ? " " : "", l->port,
+                         l->quic ? "/quic" : l->certs ? "/tls" : "");
         if (n < 0)
             break;
         at += (size_t)n < sizeof ports - at ? (size_t)n : sizeof ports - at - 1;
@@ -349,6 +370,7 @@ void ioxd__proactor_run(proactor_t *p)
             break;
 
         run_ready(p);
+        ioxd__quic_service(p);
         rearm_starved(p);
         ioxd__bufring_publish(&p->bufs);
 
@@ -377,8 +399,12 @@ void ioxd__proactor_run(proactor_t *p)
             p->id, (unsigned long long)p->accepted, p->live,
             (unsigned long long)p->ring.cq_overflows);
 
-    for (int i = 0; i < p->n_listeners; i++)
-        close(p->listeners[i].fd);
+    for (int i = 0; i < p->n_listeners; i++) {
+        if (p->listeners[i].quic)
+            ioxd__quic_close(&p->listeners[i]);
+        else
+            close(p->listeners[i].fd);
+    }
     ioxd__bufring_unregister(&p->bufs, &p->ring);
     ioxd__uring_exit(&p->ring);
     if (p->live == 0) {

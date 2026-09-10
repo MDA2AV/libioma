@@ -5,7 +5,9 @@
  * the API: "copy N" reads the next N bytes into a buffer of the handler's own and sends them
  * back, "hold N" waits for them where the kernel left them - however many receives that takes -
  * keeps them (which consumes them, so nothing is read twice), writes them back out and gives the
- * reader its room again. `make check` runs tests/pipes.py against it.
+ * reader its room again. `make check` runs tests/pipes.py against it. With IOXD_CERTS naming a
+ * certificate store, the same echo answers QUIC streams on the next port up, protocol "echo":
+ * tests/quic.py talks to that one.
  */
 #include <ioxd.h>
 
@@ -114,7 +116,13 @@ static void echo(ioxd_pipe *pipe)
 
 int main(int argc, char **argv)
 {
-    int port = argc > 1 ? (int)strtol(argv[1], NULL, 10) : 8100;
+    int         port  = argc > 1 ? (int)strtol(argv[1], NULL, 10) : 8100;
+    const char *certs = getenv("IOXD_CERTS");                  /* NOLINT(concurrency-mt-unsafe): no threads yet */
     ioxd_bind(port, NULL);
+    if (certs && *certs) {
+        ioxd_certs *store = ioxd_certs_load(certs);
+        if (!store || ioxd_bind_quic(port + 1, store, (const char *const[]){ "echo", NULL }) != 0)
+            return 1;
+    }
     return ioxd_run_pipes(2, echo);
 }

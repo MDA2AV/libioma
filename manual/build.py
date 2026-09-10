@@ -31,6 +31,7 @@ PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/timer.h",  "ioxd_timer",  "a delay that parks the connection, not the worker"),
     ("ioxd/socket.h", "ioxd_socket", "outbound connections, as pipes"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
+    ("ioxd/quic.h",   "ioxd_quic",   "a QUIC port: its streams as pipes"),
 ]
 
 
@@ -442,9 +443,9 @@ OVERVIEW = """
 cc main.c $(pkg-config --cflags --libs ioxd) -o server</pre>
 
 <h2>DESCRIPTION</h2>
-<p>libioxd serves HTTP/1.1, plain or over TLS 1.3, from a thread per core. Each worker owns an io_uring
-ring, a ring of receive buffers the kernel delivers into, and its own sockets on every bound port
-(SO_REUSEPORT); nothing is shared between workers while serving. Every connection runs on its own
+<p>libioxd serves HTTP/1.1, plain or over TLS 1.3, from a thread per core, and QUIC, every stream of
+it a pipe. Each worker owns an io_uring ring, a ring of receive buffers the kernel delivers into, and
+its own sockets on every bound port (SO_REUSEPORT); nothing is shared between workers while serving. Every connection runs on its own
 coroutine, so a handler reads the body and writes the reply in straight-line code: a call that has to
 wait for the wire suspends the coroutine, and the worker's loop resumes it on the completion.</p>
 
@@ -495,7 +496,9 @@ The runtime's own sizes - the ring, the receive buffers, the coroutine stacks, t
 
 <h3>Building</h3>
 <p>Linux 6.x on x86-64, gcc 14 or newer (the library is C23; the headers are usable from C11), OpenSSL 3 for
-the TLS handshake (built by default; <code>make TLS=0</code> or <code>-DIOXD_TLS=OFF</code> leaves it out).
+the TLS handshake (built by default; <code>make TLS=0</code> or <code>-DIOXD_TLS=OFF</code> leaves it out),
+and for QUIC libngtcp2 with its OpenSSL backend over OpenSSL 3.5 or newer (in when pkg-config finds them;
+<code>make QUIC=1</code> or <code>-DIOXD_QUIC=ON</code> insists, <code>QUIC=0</code> / <code>OFF</code> leaves it out).
 <code>make</code> produces libioxd.a and libioxd.so; <code>make install</code> the headers and a pkg-config file;
 CMake exports <code>ioxd::ioxd</code>. Kernel TLS needs a kernel with SOCKET_URING_OP_SETSOCKOPT (6.7 or newer)
 when the registered file table is on, which is the default.</p>
@@ -513,6 +516,7 @@ when the registered file table is on, which is the default.</p>
 <dt><a href="ioxd_timer.html">&lt;ioxd/timer.h&gt;</a></dt><dd>a delay that parks the connection, not the worker</dd>
 <dt><a href="ioxd_socket.html">&lt;ioxd/socket.h&gt;</a></dt><dd>outbound connections, as pipes</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
+<dt><a href="ioxd_quic.html">&lt;ioxd/quic.h&gt;</a></dt><dd>a QUIC port: its streams as pipes</dd>
 </dl>
 
 <h2>SEE ALSO</h2>
@@ -521,6 +525,29 @@ repository at <a href="https://github.com/MDA2AV/libioxd">github.com/MDA2AV/libi
 """
 
 EXAMPLES = {
+    "ioxd_quic": [
+        ("A line echo, on TCP and on QUIC streams, with one handler:",
+         """static void echo(ioxd_pipe *pipe)
+{
+    for (;;) {
+        ioxd_slice live = { NULL, 0 };
+        if (ioxd_pipe_read(pipe, &live) <= 0)       /* the stream's end, or the connection's */
+            return;                                 /* returning ends the stream: its FIN goes out */
+        ioxd_pipe_write(pipe, live.p, live.len);
+        ioxd_pipe_drop(pipe, live.len);
+        if (ioxd_pipe_flush(pipe) < 0)
+            return;
+    }
+}
+
+int main(void)
+{
+    ioxd_certs *certs = ioxd_certs_load("certs");   /* QUIC is TLS 1.3: a store is required */
+    ioxd_bind(8080, NULL);
+    ioxd_bind_quic(8443, certs, (const char *const[]){ "echo", NULL });
+    return ioxd_run_pipes(0, echo);
+}"""),
+    ],
     "ioxd_config": [
         ("Twice the receive buffers, before the run; every other field keeps its default:",
          """ioxd_config config = { .recv_buffers = 8192 };

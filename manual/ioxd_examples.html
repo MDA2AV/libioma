@@ -16,6 +16,7 @@
 <tr><td><a href="#json">json.c</a></td><td>JSON replies: a struct described once and serialized with one call, a list of thousands streamed as one array, an object written call by call, and an error object with its status.</td></tr>
 <tr><td><a href="#middleware">middleware.c</a></td><td>middleware written by hand: one that stamps a header on every reply, one that times the request around the rest of the chain, one that gates a route and short-circuits, and how a middleware hands what it found to the handler.</td></tr>
 <tr><td><a href="#pipes">pipes.c</a></td><td>a protocol of your own on the pipe the HTTP engine itself reads and writes through: raw TCP, one coroutine per connection, the same suspend-and-resume. A frame here is a 4-byte big-endian length and a payload; the reply is the payload reversed, framed the same way.</td></tr>
+<tr><td><a href="#quic_echo">quic_echo.c</a></td><td>a line echo on QUIC: every stream a client opens is served by the same pipe handler that serves a TCP connection, so one function answers both. QUIC needs certificates - it is TLS 1.3, always - and an application protocol to agree on; "echo" is this program's.</td></tr>
 <tr><td><a href="#static_files">static_files.c</a></td><td>files from a directory, served by hand: the path's last segment names the file, its extension the content type, fstat the length, an ETag the version, and the bytes go through the reply slab piece by piece with a declared length. HEAD and 304 cost no read.</td></tr>
 <tr><td><a href="#stream_request">stream_request.c</a></td><td>a request body streamed, so a body of any size never sits in memory whole: read through a fixed buffer until it ends, whatever its framing, or taken chunk by chunk exactly as the sender framed it.</td></tr>
 <tr><td><a href="#stream_response">stream_response.c</a></td><td>replies that stream: a body bigger than the slab goes out chunked as the slab fills, a flush sends what is there on purpose so a client sees lines as they are made, a declared length lets a large body of known size go out with Content-Length instead, and reserve/advance write straight into the slab.</td></tr></table>
@@ -354,6 +355,48 @@ printf '\0\0\0\5hello' | nc -q1 127.0.0.1 8100 | xxd     # 00000005 6f6c6c6568</
     <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8100</span>, <span class="c-kw">NULL</span>);
     <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-num">0</span>, frames);
 }</pre></div>
+<h3 id="quic_echo">quic_echo.c</h3>
+<div class="entry"><div class="text"><pre class="ex">make examples &amp;&amp; ./ioxd-example-quic_echo certs      # the store of <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a>: certs/default/{cert,key}.pem
+printf 'hello\n' | nc 127.0.0.1 8080                 # the same echo over TCP
+# over QUIC: any client that can open a stream with ALPN "echo", e.g. aioquic in python</pre>
+<p>A stream is a pipe: read what the peer sent, write what goes back, return when done - the return sends the stream's end. The handler runs on a coroutine of its own per stream, so a slow stream never holds another. A one-way stream reads but cannot be written: <a href="ioxd_pipe.html#ioxd_pipe_write">ioxd_pipe_write</a> returns -1 on it.</p></div><pre class="ex"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+
+<span class="c-pp">#include &lt;string.h&gt;</span>
+
+<span class="c-cm">/* Lines in, echoes out, until the peer ends the stream (or the connection). */</span>
+<span class="c-kw">static</span> <span class="c-ty">void</span> echo(<a href="ioxd_pipe.html#ioxd_pipe">ioxd_pipe</a> *pipe)
+{
+    <span class="c-kw">for</span> (;;) {
+        <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> live = { <span class="c-kw">NULL</span>, <span class="c-num">0</span> };
+        <span class="c-kw">if</span> (<a href="ioxd_pipe.html#ioxd_pipe_read">ioxd_pipe_read</a>(pipe, &amp;live) &lt;= <span class="c-num">0</span>)            <span class="c-cm">/* the end, or the peer is gone */</span>
+            <span class="c-kw">return</span>;
+        <span class="c-kw">const</span> <span class="c-ty">char</span> *nl = memchr(live.p, <span class="c-str">'\n'</span>, live.len);
+        <span class="c-kw">if</span> (!nl) {                                        <span class="c-cm">/* half a line: wait for the rest */</span>
+            <a href="ioxd_pipe.html#ioxd_pipe_examine">ioxd_pipe_examine</a>(pipe, live.len);
+            <span class="c-kw">continue</span>;
+        }
+        <span class="c-ty">size_t</span> len = (<span class="c-ty">size_t</span>)(nl - live.p) + <span class="c-num">1</span>;
+        <span class="c-ty">char</span>  *out = <a href="ioxd_pipe.html#ioxd_pipe_reserve">ioxd_pipe_reserve</a>(pipe, <span class="c-num">6</span> + len);   <span class="c-cm">/* "echo: " + the line, straight into the slab */</span>
+        <span class="c-kw">if</span> (!out)
+            <span class="c-kw">return</span>;
+        memcpy(out, <span class="c-str">"echo: "</span>, <span class="c-num">6</span>);
+        memcpy(out + <span class="c-num">6</span>, live.p, len);
+        <a href="ioxd_pipe.html#ioxd_pipe_advance">ioxd_pipe_advance</a>(pipe, <span class="c-num">6</span> + len);
+        <a href="ioxd_pipe.html#ioxd_pipe_drop">ioxd_pipe_drop</a>(pipe, len);
+        <span class="c-kw">if</span> (<a href="ioxd_pipe.html#ioxd_pipe_flush">ioxd_pipe_flush</a>(pipe) &lt; <span class="c-num">0</span>)
+            <span class="c-kw">return</span>;
+    }
+}
+
+<span class="c-ty">int</span> main(<span class="c-ty">int</span> argc, <span class="c-ty">char</span> **argv)
+{
+    ioxd_certs *certs = <a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a>(argc &gt; <span class="c-num">1</span> ? argv[<span class="c-num">1</span>] : <span class="c-str">"certs"</span>);
+    <span class="c-kw">if</span> (!certs)
+        <span class="c-kw">return</span> <span class="c-num">1</span>;
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);                                <span class="c-cm">/* the echo over TCP, plain */</span>
+    <a href="ioxd_quic.html#ioxd_bind_quic">ioxd_bind_quic</a>(<span class="c-num">8443</span>, certs, (<span class="c-kw">const</span> <span class="c-ty">char</span> *<span class="c-kw">const</span>[]){ <span class="c-str">"echo"</span>, <span class="c-kw">NULL</span> });   <span class="c-cm">/* and over QUIC streams */</span>
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run_pipes">ioxd_run_pipes</a>(<span class="c-num">0</span>, echo);
+}</pre></div>
 <h3 id="static_files">static_files.c</h3>
 <div class="entry"><div class="text"><pre class="ex">mkdir -p www &amp;&amp; echo <span class="c-str">'&lt;h1&gt;hello&lt;/h1&gt;'</span> &gt; www/index.html &amp;&amp; echo <span class="c-str">'h1 { color: teal }'</span> &gt; www/site.css
 make examples &amp;&amp; ./ioxd-example-static_files www
@@ -606,7 +649,7 @@ curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body
     <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
     <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
-<h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
+<h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_quic.html">ioxd_quic(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_EXAMPLES(7)</span></div>
 </main>
 </body>

@@ -100,12 +100,24 @@ int ioxd_bind(int port, ioxd_certs *certs)
     return 0;
 }
 
-static int run_workers(int workers, handler_fn handler)
+static bool any_quic(void)
+{
+    for (int i = 0; i < g_n_listeners; i++)
+        if (g_listeners[i].quic)
+            return true;
+    return false;
+}
+
+static int run_workers(int workers, handler_fn handler, handler_fn stream_handler)
 {
     if (workers <= 0)
         workers = cpu_count();
     if (g_n_listeners == 0) {
         fprintf(stderr, "ioxd_run: nothing bound: ioxd_bind a port first\n");
+        return 2;
+    }
+    if (!stream_handler && any_quic()) {
+        fprintf(stderr, "ioxd_run: a QUIC port is bound, and HTTP/3 is not here yet: ioxd_run_pipes serves QUIC streams\n");
         return 2;
     }
 
@@ -135,6 +147,8 @@ static int run_workers(int workers, handler_fn handler)
         ws[i].cpu     = i;
         ws[i].cfg     = cfg;
         ws[i].handler = handler;
+        ws[i].stream_handler = stream_handler;
+        ws[i].n_workers = workers;
         ws[i].n_listeners = g_n_listeners;
         memcpy(ws[i].listeners, g_listeners, sizeof g_listeners);
         ws[i].stop    = &g_stop;
@@ -149,7 +163,8 @@ static int run_workers(int workers, handler_fn handler)
     if (started) {
         fprintf(stderr, "ioxd: %d workers on", started);
         for (int i = 0; i < g_n_listeners; i++)
-            fprintf(stderr, " :%u%s", g_listeners[i].port, g_listeners[i].certs ? "/tls" : "");
+            fprintf(stderr, " :%u%s", g_listeners[i].port,
+                    g_listeners[i].quic ? "/quic" : g_listeners[i].certs ? "/tls" : "");
         fputc('\n', stderr);
     }
 
@@ -186,7 +201,7 @@ int ioxd__run_http(int workers, size_t ctx_size)
         return 1;
     }
     ioxd__router_build();
-    return run_workers(workers, serve_http);
+    return run_workers(workers, serve_http, nullptr);
 }
 
 static ioxd_pipe_handler g_pipe_handler;
@@ -203,5 +218,49 @@ static void serve_pipe(ioxd_pipe *pipe)
 int ioxd_run_pipes(int workers, ioxd_pipe_handler fn)
 {
     g_pipe_handler = fn;
-    return run_workers(workers, serve_pipe);
+    return run_workers(workers, serve_pipe, fn);
 }
+
+#if IOXD_QUIC
+int ioxd_bind_quic(int port, ioxd_certs *certs, const char *const *alpn)
+{
+    if (port < 1 || port > 65535 || g_n_listeners == IOXD_MAX_LISTENERS) {
+        fprintf(stderr, "ioxd_bind_quic: port %d refused (1..65535, at most %d ports)\n", port, IOXD_MAX_LISTENERS);
+        return -1;
+    }
+    if (!certs) {
+        fprintf(stderr, "ioxd_bind_quic: port %d refused: QUIC is always TLS, and no certificate store was given\n", port);
+        return -1;
+    }
+    size_t total = 0;
+    int    n     = 0;
+    for (; alpn && alpn[n]; n++) {
+        size_t len = strlen(alpn[n]);
+        if (len == 0 || len > 255) {
+            fprintf(stderr, "ioxd_bind_quic: port %d refused: a protocol name must be 1 to 255 bytes\n", port);
+            return -1;
+        }
+        total += 1 + len;
+    }
+    if (n == 0 || total > 65535) {
+        fprintf(stderr, "ioxd_bind_quic: port %d refused: QUIC needs an application protocol to answer (\"h3\", or one of your own)\n", port);
+        return -1;
+    }
+    uint8_t *wire = malloc(2 + total);
+    if (!wire) {
+        perror("ioxd_bind_quic");
+        return -1;
+    }
+    wire[0] = (uint8_t)(total & 0xFF);
+    wire[1] = (uint8_t)(total >> 8);
+    size_t at = 2;
+    for (int i = 0; i < n; i++) {
+        size_t len = strlen(alpn[i]);
+        wire[at++] = (uint8_t)len;
+        memcpy(wire + at, alpn[i], len);
+        at += len;
+    }
+    g_listeners[g_n_listeners++] = (struct listener){ .port = (uint16_t)port, .certs = certs, .quic = true, .alpn = wire, .alpn_len = total };
+    return 0;
+}
+#endif

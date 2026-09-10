@@ -16,6 +16,10 @@ struct table *ioxd__certs_acquire (ioxd_certs *certs);                 /* the ta
 void          ioxd__certs_release (ioxd_certs *certs, struct table *t);
 SSL_CTX      *ioxd__certs_fallback(const struct table *t);         /* the context a handshake starts on */
 void          ioxd__certs_bind    (SSL *ssl, struct table *t);     /* the table its ClientHello picks a host from */
+#if IOXD_QUIC
+SSL_CTX      *ioxd__certs_fallback_quic(const struct table *t);    /* the same, for a QUIC handshake: its contexts carry the QUIC TLS callbacks */
+void          ioxd__certs_bind_alpn(SSL *ssl, const uint8_t *alpn, size_t len);   /* the protocols its ALPN callback picks from, wire form */
+#endif
 #endif
 
 /* ── certs.c: the notes ──────────────────────────────────────────────────────────────────── */

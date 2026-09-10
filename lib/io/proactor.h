@@ -50,17 +50,21 @@ typedef void (*handler_fn)(struct ioxd_pipe *pipe);   /* a connection, as a pipe
  * the port's connections across workers; an accept CQE carries the listener it came from. */
 struct listener {
     proactor_t *p;
-    int         fd;                       /* the socket, or its file slot under fixed files    */
-    uint16_t    port;
     void *certs;                      /* the port's certificate store, or nullptr: plain   */
+    const uint8_t *alpn;                  /* a QUIC port's application protocols, wire form, most preferred first */
+    size_t      alpn_len;
+    struct quic_listener *ql;             /* a QUIC port's state on this worker, once open     */
 
     /* accept back-pressure: out of descriptors, file slots or memory, re-arming at once would
      * spin, so the accept is left unarmed until there is room again (see rearm_stalled). */
-    bool        stalled;
-    unsigned    stalled_live;             /* p->live when it stalled: re-arm once that drops   */
-    time_t      retry_at;                 /* ... or at this second, whichever comes first      */
+    time_t      retry_at;                 /* re-arm at this second, whichever comes first      */
     time_t      err_log_at;               /* the next second an accept error may be logged     */
     uint64_t    err_since_log;            /* accept errors swallowed since the last line       */
+    int         fd;                       /* the socket, or its file slot under fixed files    */
+    unsigned    stalled_live;             /* p->live when it stalled: re-arm once that drops   */
+    uint16_t    port;
+    bool        quic;                     /* UDP, a QUIC port (quic/quic.c): certs required   */
+    bool        stalled;
 };
 
 struct proactor {
@@ -69,7 +73,9 @@ struct proactor {
     int                    cpu;           /* pin the thread here; -1 = don't                   */
     struct listener        listeners[IOXD_MAX_LISTENERS];   /* port and certs set by the creator  */
     int                    n_listeners;
-    handler_fn             handler;
+    int                    n_workers;     /* how many there are: a QUIC connection id names its owner */
+    handler_fn             handler;       /* a TCP connection, as a pipe                       */
+    handler_fn             stream_handler;   /* a QUIC stream, as a pipe: the raw pipe handler, or nullptr */
     volatile sig_atomic_t *stop;
     ioxd_config            cfg;           /* every field filled in: the run resolved the defaults */
 
