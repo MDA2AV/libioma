@@ -67,7 +67,7 @@ ioxd_pipe *ioxd__socket_connect(proactor_t *p, const struct sockaddr *sa, sockle
     ioxd__conn_setsockopt(c, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     ioxd__conn_arm_recv(p, c);
     cp->conn = c;
-    ioxd__pipe_init(&cp->pipe, c, cp->gather, sizeof cp->gather, cp->slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
+    ioxd__pipe_init(&cp->pipe, c, &ioxd__conn_link, c, cp->gather, sizeof cp->gather, cp->slab, IOXD_PIPE_LEAD, IOXD_PIPE_CAP, IOXD_PIPE_SLACK);
     *err = 0;
     return &cp->pipe;
 }

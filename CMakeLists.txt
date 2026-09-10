@@ -69,6 +69,8 @@ add_library(ioxd
         lib/json/json.c
         lib/tls/certs.c
         lib/tls/handshake.c
+        lib/quic/quic.c
+        lib/quic/stream.c
         third_party/picohttpparser/picohttpparser.c)
 add_library(ioxd::ioxd ALIAS ioxd)
 
@@ -88,6 +90,35 @@ if(IOXD_TLS)
     target_link_libraries(ioxd PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 else()
     target_compile_definitions(ioxd PRIVATE IOXD_TLS=0)
+endif()
+# QUIC: ngtcp2 over OpenSSL 3.5's QUIC TLS API. AUTO takes it when pkg-config finds libngtcp2 and
+# its ossl backend; ON insists; OFF leaves it out. Needs IOXD_TLS.
+set(IOXD_QUIC AUTO CACHE STRING "QUIC ports (needs libngtcp2 with its OpenSSL backend, OpenSSL 3.5+): AUTO, ON or OFF")
+set(IOXD_HAVE_QUIC OFF)
+if(NOT IOXD_QUIC STREQUAL "OFF" AND IOXD_TLS)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        if(IOXD_QUIC STREQUAL "ON")
+            pkg_check_modules(NGTCP2 REQUIRED libngtcp2 libngtcp2_crypto_ossl)
+        else()
+            pkg_check_modules(NGTCP2 QUIET libngtcp2 libngtcp2_crypto_ossl)
+        endif()
+        if(NGTCP2_FOUND)
+            set(IOXD_HAVE_QUIC ON)
+        endif()
+    elseif(IOXD_QUIC STREQUAL "ON")
+        message(FATAL_ERROR "IOXD_QUIC=ON needs pkg-config to find libngtcp2")
+    endif()
+elseif(IOXD_QUIC STREQUAL "ON")
+    message(FATAL_ERROR "IOXD_QUIC=ON needs IOXD_TLS: QUIC is TLS 1.3 from the same certificate store")
+endif()
+if(IOXD_HAVE_QUIC)
+    target_compile_definitions(ioxd PRIVATE IOXD_QUIC=1)
+    target_include_directories(ioxd PRIVATE ${NGTCP2_INCLUDE_DIRS})
+    target_link_libraries(ioxd PUBLIC ${NGTCP2_LINK_LIBRARIES})
+    message(STATUS "QUIC: ngtcp2 ${NGTCP2_libngtcp2_VERSION}")
+else()
+    target_compile_definitions(ioxd PRIVATE IOXD_QUIC=0)
 endif()
 target_compile_options(ioxd PRIVATE -Wall -Wextra)
 # Fat LTO objects when supported: the archive stays plain-linkable, and consumers that link with
@@ -144,7 +175,11 @@ if(IOXD_EXAMPLES)
     enable_testing()
     set(IOXD_CHECK_PORT 8099    CACHE STRING "first port the fixture listens on; it takes the two after it")
     set(IOXD_PIPE_PORT  8102    CACHE STRING "port the pipe fixture listens on")
-    set(IOXD_TLS_PYTHON python3 CACHE STRING "a python with tlslite-ng, for tests/tls_early.py")
+    set(IOXD_TLS_PYTHON python3 CACHE STRING "a python with tlslite-ng and aioquic, for tests/tls_early.py and tests/quic.py")
+    set(IOXD_QUIC_FLAG 0)
+    if(IOXD_HAVE_QUIC)
+        set(IOXD_QUIC_FLAG 1)
+    endif()
     add_test(NAME unit COMMAND ioxd-unit)
     add_test(NAME router COMMAND ioxd-router-test)
     add_test(NAME suites COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
@@ -154,9 +189,10 @@ if(IOXD_EXAMPLES)
              --tls-python ${IOXD_TLS_PYTHON}
              --work ${CMAKE_CURRENT_BINARY_DIR}/check/suites)
     add_test(NAME pipes COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
-             --suite pipes
+             --suite pipes --suite quic --quic ${IOXD_QUIC_FLAG}
              --pipe-port ${IOXD_PIPE_PORT}
              --pipe-server $<TARGET_FILE:ioxd-pipe-server>
+             --tls-python ${IOXD_TLS_PYTHON}
              --work ${CMAKE_CURRENT_BINARY_DIR}/check/pipes)
     set_tests_properties(suites pipes PROPERTIES RUN_SERIAL TRUE)
     add_custom_target(check

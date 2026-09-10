@@ -33,3 +33,4 @@
 #include "ioxd/timer.h"    /* a delay that parks the connection, not the worker    */
 #include "ioxd/socket.h"   /* outbound connections, as pipes                       */
 #include "ioxd/tls.h"      /* certificates, for a TLS listener                    */
+#include "ioxd/quic.h"     /* a QUIC port: its streams as pipes                     */

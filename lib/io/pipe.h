@@ -17,8 +17,20 @@
  * bytes and the run in progress. */
 
 // BUF_SIZE can be increased to keep entire requests in a single rx_item, avoiding buffering
+/* What a pipe reads from and writes to: a TCP connection (io/conn.c's ioxd__conn_link) or a QUIC
+ * stream (quic/stream.c). Every call suspends the calling coroutine when it has to wait; the
+ * link's owner resumes it from the loop. */
+typedef struct ioxd_pipe_link {
+    int  (*recv_item)(void *link, struct rx_item *out);       /* 1 with the next delivered buffer, 0 at the end, <0 -errno */
+    bool (*has_item)(void *link);                             /* one is queued now: avail need not wait      */
+    void (*release)(void *link, const struct rx_item *item);  /* a delivered buffer is done with            */
+    int  (*send)(void *link, const void *data, size_t n);     /* all of it: n, else <0                       */
+} ioxd_pipe_link;
+
 typedef struct ioxd_pipereader {
-    conn_t        *conn;
+    void                 *link;         /* what recv_item and release act on */
+    const ioxd_pipe_link *ops;
+    conn_t               *conn;         /* the TCP connection behind the link, or nullptr: for the protocol prologues that read the socket directly */
     char          *buf;                 /* the gathering buffer, the consumer's */
     size_t         cap;
     size_t         floor;               /* buf[0, floor): kept bytes */
@@ -37,7 +49,7 @@ typedef struct ioxd_pipereader {
     int            error;               /* 0, or IOXD_PIPE_GONE / IOXD_PIPE_FULL, sticky */
 } ioxd_pipereader;
 
-void        ioxd__pipereader_init     (ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap);
+void        ioxd__pipereader_init     (ioxd_pipereader *pr, void *link, const ioxd_pipe_link *ops, conn_t *conn, char *buf, size_t cap);
 void        ioxd__pipereader_close    (ioxd_pipereader *pr);                    /* returns the buffers it holds */
 int         ioxd__pipereader_read     (ioxd_pipereader *pr, ioxd_slice *live);  /* 1: live bytes with something unexamined; waits for more otherwise; 0 at the end of input; <0 error */
 void        ioxd__pipereader_examine  (ioxd_pipereader *pr, size_t n);          /* looked at n live bytes: the next read waits for more */
@@ -55,7 +67,8 @@ bool        ioxd__pipereader_inject   (ioxd_pipereader *pr, const void *data, si
  * after it, and one flush sends the whole span. The HTTP reply puts its head and a chunk's size
  * line in front and a chunk's CRLF behind; a raw pipe may never touch them. */
 typedef struct ioxd_pipewriter {
-    conn_t *conn;
+    void                 *link;         /* what send acts on */
+    const ioxd_pipe_link *ops;
     char   *buf;                        /* [lead][cap][slack] */
     size_t  lead, cap, slack;
     size_t  head;                       /* bytes of the lead in use: a frame's front             */
@@ -64,7 +77,7 @@ typedef struct ioxd_pipewriter {
     bool    failed;                     /* the peer is gone: every call fails from here on       */
 } ioxd_pipewriter;
 
-void   ioxd__pipewriter_init   (ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack);
+void   ioxd__pipewriter_init   (ioxd_pipewriter *pw, void *link, const ioxd_pipe_link *ops, char *buf, size_t lead, size_t cap, size_t slack);
 void   ioxd__pipewriter_reset  (ioxd_pipewriter *pw);                          /* drop everything pending           */
 void  *ioxd__pipewriter_reserve(ioxd_pipewriter *pw, size_t n);                /* n bytes at the tail, flushing first when they do not fit; nullptr on failure or n > cap */
 void   ioxd__pipewriter_advance(ioxd_pipewriter *pw, size_t n);
@@ -103,7 +116,7 @@ struct ioxd_pipe {
     ioxd_pipereader in;
     ioxd_pipewriter out;
 };
-void ioxd__pipe_init (ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
+void ioxd__pipe_init (ioxd_pipe *p, void *link, const ioxd_pipe_link *ops, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack);
 void ioxd__pipe_close(ioxd_pipe *p);
 
 /* ── pipe.c: the notes ──────────────────────────────────────────────────────────────────── */

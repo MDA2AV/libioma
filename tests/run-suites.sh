@@ -1,7 +1,8 @@
 #!/bin/sh
 # run-suites.sh - the check sequence, in one place: the unit test, then the HTTP fixture with the
-# smoke, conformance, stress and early-TLS suites against it, then the pipe fixture with the pipe suite. Both
-# `make check` and CMake's `check` target run this, so the sequence lives here and nowhere else.
+# smoke, conformance, stress and early-TLS suites against it, then the pipe fixture with the pipe
+# suite and, in a build with QUIC, the QUIC suite on its streams. Both `make check` and CMake's
+# `check` target run this, so the sequence lives here and nowhere else.
 #
 #   sh tests/run-suites.sh --unit tests/ioxd-unit --server tests/ioxd-test-server \
 #                          --pipe-server tests/ioxd-pipe-server [--port 8099] [--pipe-port 8102]
@@ -12,9 +13,10 @@
 #   --server PATH     the HTTP fixture (tests/server.c)
 #   --pipe-server PATH the pipe fixture (tests/pipe-server.c)
 #   --python PY       the python the suites run under                             [python3]
-#   --tls-python PY   the python for tls_early.py (needs tlslite-ng)              [--python]
+#   --tls-python PY   the python for tls_early.py (needs tlslite-ng) and quic.py (aioquic) [--python]
 #   --work DIR        scratch: the fixture's log and the certificates it serves   [obj/check]
-#   --suite NAME      run only this one (repeatable): unit smoke conformance stress tls pipes
+#   --suite NAME      run only this one (repeatable): unit smoke conformance stress tls pipes quic
+#   --quic 0|1        whether the build has QUIC: the pipe fixture then serves it too      [0]
 #
 # The suites named in one run share the fixture they talk to, and are meant to: a fixture bound to
 # a port the suite before it left full of TIME_WAIT connections has some of its new connections
@@ -38,6 +40,7 @@ python=python3
 tls_python=
 work=
 suites=
+quic=0
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -50,13 +53,14 @@ while [ $# -gt 0 ]; do
     --tls-python)  tls_python=$2;  shift 2 ;;
     --work)        work=$2;        shift 2 ;;
     --suite)       suites="$suites $2"; shift 2 ;;
+    --quic)        quic=$2;        shift 2 ;;
     -h|--help)     sed -n '2,26p' "$0"; exit 0 ;;
     *)             echo "run-suites: unknown option $1" >&2; exit 2 ;;
     esac
 done
 [ -n "$tls_python" ] || tls_python=$python
 [ -n "$work" ] || work=$root/obj/check
-[ -n "$suites" ] || suites="unit smoke conformance stress tls pipes"
+[ -n "$suites" ] || suites="unit smoke conformance stress tls pipes quic"
 tls_port=$((port + 2))
 
 wanted() {
@@ -148,15 +152,27 @@ if wanted smoke || wanted stress || wanted tls; then
     [ $rc -eq 0 ] || { echo "--- $log ---"; cat "$log"; echo "--- end of $log ---"; }
 fi
 
-# --- the pipe fixture ---
-if wanted pipes; then
-    [ -n "$pipe_server" ] || { echo "run-suites: --pipe-server is required for the pipe suite" >&2; exit 2; }
+# --- the pipe fixture: the line echo on TCP, and on QUIC streams when the build has QUIC ---
+if wanted pipes || wanted quic; then
+    [ -n "$pipe_server" ] || { echo "run-suites: --pipe-server is required for the pipe and quic suites" >&2; exit 2; }
     log=$work/pipe.log
     inner=0
-    "$pipe_server" "$pipe_port" >"$log" 2>&1 &
+    if [ "$quic" = 1 ]; then
+        sh "$tests/mkcerts.sh" "$tests/certs" >/dev/null || rc=1
+        IOXD_CERTS="$tests/certs" "$pipe_server" "$pipe_port" >"$log" 2>&1 &
+    else
+        "$pipe_server" "$pipe_port" >"$log" 2>&1 &
+    fi
     pid=$!
     if wait_for_fixture "$pipe_port" "$log"; then
-        "$python" "$tests/pipes.py" "$pipe_port" || inner=1
+        wanted pipes && { "$python" "$tests/pipes.py" "$pipe_port" || inner=1; }
+        if wanted quic; then
+            if [ "$quic" = 1 ]; then
+                "$tls_python" "$tests/quic.py" $((pipe_port + 1)) || inner=1
+            else
+                echo "skip quic: this build has no QUIC (make QUIC=1 with libngtcp2 and OpenSSL 3.5)"
+            fi
+        fi
     else
         echo "FAIL the pipe fixture never listened on $pipe_port"
         inner=1

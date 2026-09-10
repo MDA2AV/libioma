@@ -144,7 +144,7 @@ static bool put_string(ioxd_json *j, size_t comma, const char *p, size_t n, char
     if (need <= RUN_MAX && clean_run(p, n) == n) {
         size_t room;
         char  *at = tail(j, &room);
-        if (need <= room && !sink_failed(j)) {
+        if (at && need <= room && !sink_failed(j)) {
             if (comma)
                 *at++ = ',';
             *at++ = '"';

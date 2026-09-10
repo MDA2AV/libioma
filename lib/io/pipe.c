@@ -3,9 +3,11 @@
 
 #include <string.h>
 
-void ioxd__pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap)
+void ioxd__pipereader_init(ioxd_pipereader *pr, void *link, const ioxd_pipe_link *ops, conn_t *conn, char *buf, size_t cap)
 {
     *pr      = (ioxd_pipereader){};
+    pr->link = link;
+    pr->ops  = ops;
     pr->conn = conn;
     pr->buf  = buf;
     pr->cap  = cap;
@@ -25,7 +27,7 @@ static void cur_done(ioxd_pipereader *pr)
     if (!pr->has_cur || pr->cur_pos < pr->cur.len || (pr->run_in_cur && pr->run_len))
         return;
     if (!pr->cur_is_pinned)
-        ioxd__bufring_return(&pr->conn->p->bufs, pr->cur.buf_id);
+        pr->ops->release(pr->link, &pr->cur);
     pr->has_cur       = false;
     pr->cur_is_pinned = false;
     pr->cur_pos       = 0;
@@ -71,7 +73,7 @@ static bool gather(ioxd_pipereader *pr)
 
 static int refuse(ioxd_pipereader *pr, const struct rx_item *item)
 {
-    ioxd__bufring_return(&pr->conn->p->bufs, item->buf_id);
+    pr->ops->release(pr->link, item);
     pr->error = IOXD_PIPE_FULL;
     return IOXD_PIPE_FULL;
 }
@@ -81,7 +83,7 @@ static int more(ioxd_pipereader *pr)
     if (pr->eof)
         return 0;
     struct rx_item item;
-    int rc = ioxd__conn_recv_item(pr->conn, &item);
+    int rc = pr->ops->recv_item(pr->link, &item);
     if (rc <= 0) {
         pr->eof = true;
         if (rc < 0)
@@ -104,7 +106,7 @@ static int more(ioxd_pipereader *pr)
     }
     memcpy(pr->buf + pr->buf_end, item.ptr, item.len);
     pr->buf_end += item.len;
-    ioxd__bufring_return(&pr->conn->p->bufs, item.buf_id);
+    pr->ops->release(pr->link, &item);
     return 1;
 }
 
@@ -239,7 +241,7 @@ void ioxd__pipereader_release(ioxd_pipereader *pr)
         if (pr->cur_is_pinned)
             pr->cur_is_pinned = false;
         else
-            ioxd__bufring_return(&pr->conn->p->bufs, pr->pinned.buf_id);
+            pr->ops->release(pr->link, &pr->pinned);
         pr->has_pinned = false;
     }
     cur_done(pr);
@@ -248,9 +250,9 @@ void ioxd__pipereader_release(ioxd_pipereader *pr)
 void ioxd__pipereader_close(ioxd_pipereader *pr)
 {
     if (pr->has_cur && !pr->cur_is_pinned)
-        ioxd__bufring_return(&pr->conn->p->bufs, pr->cur.buf_id);
+        pr->ops->release(pr->link, &pr->cur);
     if (pr->has_pinned)
-        ioxd__bufring_return(&pr->conn->p->bufs, pr->pinned.buf_id);
+        pr->ops->release(pr->link, &pr->pinned);
     pr->has_cur = pr->has_pinned = pr->cur_is_pinned = false;
 }
 
@@ -278,7 +280,7 @@ int ioxd__pipereader_avail(ioxd_pipereader *pr, ioxd_slice *live)
         return pr->error;
     ioxd_slice l = live_span(pr);
     while (l.len <= pr->examined) {
-        if (ioxd__spsc_empty(&pr->conn->rx))
+        if (!pr->ops->has_item(pr->link))
             return 0;
         int rc = more(pr);
         if (rc <= 0)
@@ -312,10 +314,11 @@ bool ioxd__pipereader_inject(ioxd_pipereader *pr, const void *data, size_t n)
     return true;
 }
 
-void ioxd__pipewriter_init(ioxd_pipewriter *pw, conn_t *conn, char *buf, size_t lead, size_t cap, size_t slack)
+void ioxd__pipewriter_init(ioxd_pipewriter *pw, void *link, const ioxd_pipe_link *ops, char *buf, size_t lead, size_t cap, size_t slack)
 {
     *pw       = (ioxd_pipewriter){};
-    pw->conn  = conn;
+    pw->link  = link;
+    pw->ops   = ops;
     pw->buf   = buf;
     pw->lead  = lead;
     pw->cap   = cap;
@@ -334,7 +337,7 @@ int ioxd__pipewriter_flush(ioxd_pipewriter *pw)
     size_t total = pw->head + pw->len + pw->tail;
     if (total == 0)
         return 0;
-    int rc = ioxd__conn_send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    int rc = pw->ops->send(pw->link, pw->buf + pw->lead - pw->head, total);
     pw->head = pw->len = pw->tail = 0;
     if (rc < 0) {
         pw->failed = true;
@@ -379,7 +382,7 @@ int ioxd__pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
-    if (ioxd__conn_send(pw->conn, data, n) < 0) {
+    if (pw->ops->send(pw->link, data, n) < 0) {
         pw->failed = true;
         return -1;
     }
@@ -405,10 +408,10 @@ int ioxd__pipewriter_send(ioxd_pipewriter *pw, const void *data, size_t n)
     return ioxd__pipewriter_write(pw, data, n) < 0 ? -1 : ioxd__pipewriter_flush(pw);
 }
 
-void ioxd__pipe_init(ioxd_pipe *p, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
+void ioxd__pipe_init(ioxd_pipe *p, void *link, const ioxd_pipe_link *ops, conn_t *conn, char *gather, size_t gather_cap, char *slab, size_t lead, size_t cap, size_t slack)
 {
-    ioxd__pipereader_init(&p->in, conn, gather, gather_cap);
-    ioxd__pipewriter_init(&p->out, conn, slab, lead, cap, slack);
+    ioxd__pipereader_init(&p->in, link, ops, conn, gather, gather_cap);
+    ioxd__pipewriter_init(&p->out, link, ops, slab, lead, cap, slack);
 }
 
 void ioxd__pipe_close(ioxd_pipe *p)

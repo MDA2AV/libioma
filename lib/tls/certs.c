@@ -8,6 +8,10 @@
 
 #if IOXD_TLS
 
+#if IOXD_QUIC
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#endif
+
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
@@ -20,6 +24,7 @@
 struct host {
     char    *name;
     SSL_CTX *ctx;
+    SSL_CTX *quic;                        /* the same certificate, configured for QUIC; nullptr without QUIC */
 };
 
 struct table {
@@ -27,6 +32,7 @@ struct table {
     struct host *hosts;
     int          n;
     SSL_CTX     *fallback;
+    SSL_CTX     *fallback_quic;
 };
 
 struct ioxd_certs {
@@ -36,11 +42,12 @@ struct ioxd_certs {
     pthread_mutex_t  reload;
 };
 
-static int            table_ex;
+static int            table_ex, alpn_ex;
 static pthread_once_t table_ex_once = PTHREAD_ONCE_INIT;
 static void make_table_ex(void)
 {
     table_ex = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
+    alpn_ex  = SSL_get_ex_new_index(0, nullptr, nullptr, nullptr, nullptr);
 }
 
 void ioxd__certs_bind(SSL *ssl, struct table *t)
@@ -72,13 +79,13 @@ static bool host_eq(const char *a, size_t alen, const char *b)
     return true;
 }
 
-static SSL_CTX *lookup(const struct table *t, const char *name, size_t len)
+static const struct host *lookup(const struct table *t, const char *name, size_t len)
 {
     if (len > 1 && name[len - 1] == '.')
         len--;
     for (int i = 0; i < t->n; i++)
         if (host_eq(name, len, t->hosts[i].name))
-            return t->hosts[i].ctx;
+            return &t->hosts[i];
     const char *dot = memchr(name, '.', len);
     if (dot) {
         char wild[256];
@@ -88,32 +95,103 @@ static SSL_CTX *lookup(const struct table *t, const char *name, size_t len)
             memcpy(wild + 1, dot, rest);
             for (int i = 0; i < t->n; i++)
                 if (host_eq(wild, rest + 1, t->hosts[i].name))
-                    return t->hosts[i].ctx;
+                    return &t->hosts[i];
         }
     }
     return nullptr;
+}
+
+static const struct host *hello_host(SSL *ssl)
+{
+    const struct table  *t = SSL_get_ex_data(ssl, table_ex);
+    const unsigned char *ext;
+    size_t               ext_len;
+    if (!t)
+        return nullptr;
+    if (!SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &ext, &ext_len) || ext_len < 5)
+        return nullptr;
+    size_t list_len = (size_t)ext[0] << 8 | ext[1];
+    size_t name_len = (size_t)ext[3] << 8 | ext[4];
+    if (ext[2] != 0 || name_len + 3 != list_len || list_len + 2 != ext_len)
+        return nullptr;
+    return lookup(t, (const char *)ext + 5, name_len);
 }
 
 static int on_client_hello(SSL *ssl, int *alert, void *arg)   /* NOLINT(readability-non-const-parameter): OpenSSL's signature */
 {
     (void)alert;
     (void)arg;
-    const struct table  *t = SSL_get_ex_data(ssl, table_ex);
-    const unsigned char *ext;
-    size_t               ext_len;
-    if (!t)
-        return SSL_CLIENT_HELLO_SUCCESS;
-    if (!SSL_client_hello_get0_ext(ssl, TLSEXT_TYPE_server_name, &ext, &ext_len) || ext_len < 5)
-        return SSL_CLIENT_HELLO_SUCCESS;
-    size_t list_len = (size_t)ext[0] << 8 | ext[1];
-    size_t name_len = (size_t)ext[3] << 8 | ext[4];
-    if (ext[2] != 0 || name_len + 3 != list_len || list_len + 2 != ext_len)
-        return SSL_CLIENT_HELLO_SUCCESS;
-    SSL_CTX *ctx = lookup(t, (const char *)ext + 5, name_len);
-    if (ctx)
-        SSL_set_SSL_CTX(ssl, ctx);
+    const struct host *h = hello_host(ssl);
+    if (h)
+        SSL_set_SSL_CTX(ssl, h->ctx);
     return SSL_CLIENT_HELLO_SUCCESS;
 }
+
+#if IOXD_QUIC
+static int on_client_hello_quic(SSL *ssl, int *alert, void *arg)   /* NOLINT(readability-non-const-parameter): OpenSSL's signature */
+{
+    (void)alert;
+    (void)arg;
+    const struct host *h = hello_host(ssl);
+    if (h && h->quic)
+        SSL_set_SSL_CTX(ssl, h->quic);
+    return SSL_CLIENT_HELLO_SUCCESS;
+}
+
+static int select_alpn(SSL *ssl, const unsigned char **out, unsigned char *outlen, const unsigned char *in,
+                       unsigned int inlen, void *arg)
+{
+    (void)arg;
+    const uint8_t *ours = SSL_get_ex_data(ssl, alpn_ex);
+    size_t         ours_len = ours ? ours[0] | (size_t)ours[1] << 8 : 0;
+    ours = ours ? ours + 2 : nullptr;
+    for (size_t off = 0; off < ours_len; off += 1 + ours[off]) {
+        size_t len = ours[off];
+        for (unsigned int at = 0; at < inlen; at += 1 + in[at]) {
+            if (in[at] == len && at + 1 + len <= inlen && memcmp(in + at + 1, ours + off + 1, len) == 0) {
+                *out    = in + at + 1;
+                *outlen = (unsigned char)len;
+                return SSL_TLSEXT_ERR_OK;
+            }
+        }
+    }
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+
+void ioxd__certs_bind_alpn(SSL *ssl, const uint8_t *alpn, size_t len)
+{
+    (void)len;
+    pthread_once(&table_ex_once, make_table_ex);
+    SSL_set_ex_data(ssl, alpn_ex, (void *)(uintptr_t)alpn);
+}
+
+static SSL_CTX *context_for_quic(const char *cert, const char *key)
+{
+    SSL_CTX *ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx)
+        return nullptr;
+    bool ok = SSL_CTX_set_min_proto_version(ctx, TLS1_3_VERSION)
+           && SSL_CTX_set_num_tickets(ctx, 0) == 1
+           && SSL_CTX_use_certificate_chain_file(ctx, cert) == 1
+           && SSL_CTX_use_PrivateKey_file(ctx, key, SSL_FILETYPE_PEM) == 1
+           && SSL_CTX_check_private_key(ctx) == 1;
+    if (!ok) {
+        SSL_CTX_free(ctx);
+        return nullptr;
+    }
+    SSL_CTX_set_options(ctx, SSL_OP_NO_RENEGOTIATION | SSL_OP_NO_TICKET | SSL_OP_NO_ANTI_REPLAY | SSL_OP_CIPHER_SERVER_PREFERENCE);
+    SSL_CTX_set_session_cache_mode(ctx, SSL_SESS_CACHE_OFF);
+    SSL_CTX_set_mode(ctx, SSL_MODE_RELEASE_BUFFERS);
+    SSL_CTX_set_client_hello_cb(ctx, on_client_hello_quic, nullptr);
+    SSL_CTX_set_alpn_select_cb(ctx, select_alpn, nullptr);
+    return ctx;
+}
+
+SSL_CTX *ioxd__certs_fallback_quic(const struct table *t)
+{
+    return t->fallback_quic;
+}
+#endif
 
 static SSL_CTX *context_for(const char *cert, const char *key)
 {
@@ -157,6 +235,7 @@ static void table_free(struct table *t)
 {
     for (int i = 0; i < t->n; i++) {
         SSL_CTX_free(t->hosts[i].ctx);
+        SSL_CTX_free(t->hosts[i].quic);
         free(t->hosts[i].name);
     }
     free(t->hosts);
@@ -202,8 +281,16 @@ static struct table *load(const char *dir, const struct table *old)
         if (ks.st_mode & ((unsigned)S_IRGRP | (unsigned)S_IROTH))
             fprintf(stderr, "ioxd_certs: %s: mode %03o, readable past its owner\n", key,
                     (unsigned)(ks.st_mode & 0777));
-        SSL_CTX    *ctx = context_for(cert, key);
-        const char *why = ctx ? not_current(ctx) : ssl_error();
+        SSL_CTX    *ctx  = context_for(cert, key);
+        SSL_CTX    *quic = nullptr;
+        const char *why  = ctx ? not_current(ctx) : ssl_error();
+#if IOXD_QUIC
+        if (ctx && !why) {
+            quic = context_for_quic(cert, key);
+            if (!quic)
+                why = ssl_error();
+        }
+#endif
         if (ctx && why) {
             SSL_CTX_free(ctx);
             ctx = nullptr;
@@ -213,8 +300,11 @@ static struct table *load(const char *dir, const struct table *old)
             if (old) {
                 for (int i = 0; i < old->n; i++)
                     if (strcmp(old->hosts[i].name, e->d_name) == 0) {
-                        ctx = old->hosts[i].ctx;
+                        ctx  = old->hosts[i].ctx;
+                        quic = old->hosts[i].quic;
                         SSL_CTX_up_ref(ctx);
+                        if (quic)
+                            SSL_CTX_up_ref(quic);
                     }
             }
             if (!ctx)
@@ -227,9 +317,11 @@ static struct table *load(const char *dir, const struct table *old)
             abort();
         }
         t->hosts = grown;
-        t->hosts[t->n++] = (struct host){ name, ctx };
-        if (strcmp(e->d_name, "default") == 0)
-            t->fallback = ctx;
+        t->hosts[t->n++] = (struct host){ name, ctx, quic };
+        if (strcmp(e->d_name, "default") == 0) {
+            t->fallback      = ctx;
+            t->fallback_quic = quic;
+        }
     }
     closedir(d);
     if (t->n == 0) {
@@ -240,8 +332,10 @@ static struct table *load(const char *dir, const struct table *old)
     if (!t->fallback) {
         const char *prev = old ? fallback_name(old) : nullptr;
         for (int i = 0; prev && !t->fallback && i < t->n; i++)
-            if (strcmp(t->hosts[i].name, prev) == 0)
-                t->fallback = t->hosts[i].ctx;
+            if (strcmp(t->hosts[i].name, prev) == 0) {
+                t->fallback      = t->hosts[i].ctx;
+                t->fallback_quic = t->hosts[i].quic;
+            }
         if (!t->fallback) {
             fprintf(stderr, "ioxd_certs: %s: no `default` host (default/cert.pem + key.pem) to answer"
                             " when SNI matches nothing\n", dir);

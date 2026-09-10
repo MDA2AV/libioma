@@ -62,6 +62,10 @@ int  ioxd__conn_recv_exact (conn_t *c, void *dst, size_t n);   /* n bytes into d
 int  ioxd__conn_setsockopt (conn_t *c, int level, int name, const void *val, size_t len);   /* 0 or -errno; over the ring */
 int  ioxd__conn_sendmsg    (conn_t *c, const struct msghdr *msg);   /* one sendmsg, for a message with control data */
 
+/* The connection as a pipe's link (io/pipe.h): its delivered buffers in, its socket out. */
+struct ioxd_pipe_link;
+extern const struct ioxd_pipe_link ioxd__conn_link;
+
 /* For the loop (proactor.c): a connection's life from accept to the pool. */
 conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd);   /* from the pool, or fresh  */
 void    ioxd__conn_main(void *arg);                      /* the connection's coroutine body      */

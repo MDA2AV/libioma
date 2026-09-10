@@ -1,8 +1,8 @@
 # libioxd
 
 An HTTP/1.1 server library in C for Linux: io_uring underneath, a thread per core, a stackful
-coroutine per connection, TLS 1.3 terminated in the kernel. A handler reads the request and writes
-the reply in straight-line code; the runtime does the waiting.
+coroutine per connection, TLS 1.3 terminated in the kernel, QUIC on ngtcp2 with every stream a pipe.
+A handler reads the request and writes the reply in straight-line code; the runtime does the waiting.
 
 ```c
 static void hello(ioxd_ctx *ctx)
