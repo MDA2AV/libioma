@@ -41,6 +41,18 @@ else
 CPP     += -DIOXD_TLS=0
 LIBS    :=
 endif
+# Response compression: brotli and zlib, each when pkg-config finds it (make BROTLI=0 or ZLIB=0
+# leaves one out; the middleware then codes with what it has).
+BROTLI  ?= $(shell pkg-config --exists libbrotlienc 2>/dev/null && echo 1 || echo 0)
+ZLIB    ?= $(shell pkg-config --exists zlib 2>/dev/null && echo 1 || echo 0)
+ifeq ($(BROTLI),1)
+CPP     += -DIOXD_BROTLI=1 $(patsubst -I%,-isystem %,$(shell pkg-config --cflags libbrotlienc))
+LIBS    += $(shell pkg-config --libs libbrotlienc)
+endif
+ifeq ($(ZLIB),1)
+CPP     += -DIOXD_ZLIB=1 $(patsubst -I%,-isystem %,$(shell pkg-config --cflags zlib))
+LIBS    += $(shell pkg-config --libs zlib)
+endif
 HDRS    := $(wildcard include/*.h include/ioxd/*.h lib/*/*.h)
 PTHREAD := -pthread
 
@@ -52,7 +64,7 @@ LIBDIR := $(PREFIX)/lib
 INCDIR := $(PREFIX)/include
 PCDIR  := $(LIBDIR)/pkgconfig
 
-UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe clients/timer clients/socket http/engine http/api http/find http/static http/router http/run json/json tls/certs tls/handshake
+UNITS  := io/uring io/coro io/bufring io/conn io/proactor io/pipe clients/timer clients/socket http/engine http/api http/find http/static http/compress http/router http/run json/json tls/certs tls/handshake
 OBJ    := $(addprefix obj/,$(addsuffix .o,$(UNITS))) obj/io/switch_x86_64.o obj/picohttpparser.o
 PICOBJ := $(addprefix obj/pic/,$(addsuffix .o,$(UNITS))) obj/pic/io/switch_x86_64.o obj/pic/picohttpparser.o
 

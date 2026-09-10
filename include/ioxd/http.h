@@ -122,6 +122,39 @@ void ioxd_next_run(ioxd_ctx *ctx, ioxd_next *next);
 ioxd_slice ioxd_req_header(const ioxd_ctx *ctx, const char *name);
 ioxd_slice ioxd_req_param (const ioxd_ctx *ctx, const char *key);
 
+/* The weight Accept-Encoding gives a coding: its own q (1 when named without one), else the q
+ * of "*", else 0 - so 0 means the client does not take it, whether refused or never offered. */
+double ioxd_accepts_encoding(const ioxd_ctx *ctx, const char *coding);
+
+/* ── the moments of a reply, for middleware ────────────────────────────────────────────── */
+
+/* The head is final at the reply's first flush: the status, the content type and whether the
+ * body fit the slab are known, and the head can still be shaped. Middleware that must decide
+ * then - response compression - sets a delegate before running the chain, and the engine calls
+ * it once, before the head is serialized, with the body bytes in the slab so far and whether
+ * they are all of it (ioxd_header still works inside it). Not called for HEAD. False once the
+ * head is out. */
+typedef void (*ioxd_head_fn)(ioxd_ctx *ctx, void *arg, size_t buffered, bool whole);
+bool ioxd_on_head(ioxd_ctx *ctx, ioxd_head_fn fn, void *arg);
+
+/* A filter on the body - a coder: what the handler wrote passes through run, and what run
+ * writes is what is framed and sent. run takes input (all of it may not fit: *in_len comes
+ * back as what was consumed, *out_len as what was produced into out) and an op - MORE while
+ * the body goes on, FLUSH when the handler flushed on purpose, so a live feed moves, FINISH
+ * once the body is complete, called again until nothing is pending. It returns 1 while it has
+ * more output than fit, 0 when done with the call, -1 on an error, which fails the reply. end
+ * runs once when the reply is over, however it ended. Installed at the on_head moment, before
+ * the head is out (false after): the engine then frames the reply chunked when the body
+ * streams - a declared length is the plaintext's - and with the exact coded length when it was
+ * buffered whole, still one message. */
+enum ioxd_filter_op { IOXD_FILTER_MORE, IOXD_FILTER_FLUSH, IOXD_FILTER_FINISH };
+typedef struct ioxd_filter {
+    int  (*run)(void *arg, const void *in, size_t *in_len, void *out, size_t *out_len, enum ioxd_filter_op op);
+    void (*end)(void *arg);
+    void  *arg;
+} ioxd_filter;
+bool ioxd_reply_filter(ioxd_ctx *ctx, const ioxd_filter *filter);
+
 /* ── the body ──────────────────────────────────────────────────────────────────────────── */
 
 /* The whole body, read into the request buffer once and returned as a slice (also req.body). It

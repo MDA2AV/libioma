@@ -79,11 +79,6 @@
  * The file, or a directory's index; -1 when neither is a regular file.
  */
 
-/* coding_q / qvalue:
- * The weight Accept-Encoding gives a coding: named, its own q (1 when none), else that of "*",
- * else 0.
- */
-
 /* pick:
  * The variant to serve: the twin with the highest q the client takes, br before gzip on a tie;
  * the plain file when neither.

@@ -281,6 +281,32 @@ ioxd_slice ioxd_req_param(const ioxd_ctx *ctx, const char *key)
     return lookup(ctx->req.params, ctx->req.n_params, key);
 }
 
+static double qvalue(ioxd_slice params)
+{
+    ioxd_slice param, key, value;
+    while (ioxd_slice_next(&params, ';', &param))
+        if (ioxd_slice_cut(param, '=', &key, &value) && ioxd_slice_eq_ci(ioxd_slice_trim(key), "q")) {
+            double q;
+            return ioxd_to_double(ioxd_slice_trim(value), &q) ? q : 0;
+        }
+    return 1;
+}
+
+double ioxd_accepts_encoding(const ioxd_ctx *ctx, const char *coding)
+{
+    ioxd_slice accept = ioxd_req_header(ctx, "accept-encoding"), item, name, params;
+    double     any = 0;
+    while (ioxd_slice_next(&accept, ',', &item)) {
+        ioxd_slice_cut(item, ';', &name, &params);
+        name = ioxd_slice_trim(name);
+        if (ioxd_slice_eq_ci(name, coding))
+            return qvalue(params);
+        if (ioxd_slice_eq(name, "*"))
+            any = qvalue(params);
+    }
+    return any;
+}
+
 static bool is_tchar(unsigned char c)
 {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')

@@ -156,9 +156,25 @@ ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's write
  * Mark the reply dead (the peer is gone, or a head that cannot be built) and fail the call.
  */
 
+/* send_coded:
+ * The coded buffer as a frame: a chunk's size line and CRLF around it when the reply is chunked,
+ * the head in front the first time, one send. What the coder's loop calls when the buffer fills
+ * with more to come.
+ */
+
+/* encode:
+ * The slab through the reply's filter into the coded buffer, with the engine's op, until the
+ * filter has consumed it all and holds nothing more; a full coded buffer goes out as a frame on
+ * the way (never for a body coded whole, which must fit, and does: the buffer has slack past
+ * the slab for the coding's own overhead). A filter that consumes nothing and produces nothing
+ * with room to spare would loop forever, so it fails the reply instead. The slab is empty after.
+ */
+
 /* flush_with:
- * Send the slab, with the head in front of it the first time. That first time decides the
- * framing: a final flush with the head unsent means the whole body is here (Content-Length,
+ * Send the slab, with the head in front of it the first time - or, when a filter is set, the
+ * coded buffer the slab was run through, the delegate for the head having run first. That first
+ * time decides the framing (a stream coded: chunked, the declared length being the
+ * plaintext's; a body coded whole: the exact coded length): a final flush with the head unsent means the whole body is here (Content-Length,
  * one send); an early flush means the body outgrew the slab, so it streams - with the declared
  * length if the handler gave one, else chunked on HTTP/1.1, else until close on HTTP/1.0. It
  * also settles what the request and the status dictate: no body at all after HEAD, a 1xx, 204
@@ -192,6 +208,19 @@ ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's write
 /* raw_framed:
  * Whether body bytes go out as they are - a declared length, or HTTP/1.0 until close - rather
  * than inside chunks: decided by the head once it is out, else by what the handler declared.
+ * Never while a delegate for the head or a filter is set: what they do to the body is not known
+ * yet, or is a coding, so the bytes must pass through the slab.
+ */
+
+/* ioxd_on_head / ioxd_reply_filter:
+ * The hooks (ioxd/http.h): a delegate for the first flush, and a filter on the body, kept in
+ * the per-request state; refused once the head is out.
+ */
+
+/* filter_end / after_dispatch:
+ * What follows the chain: the body drained or the connection marked to close, the reply
+ * finished, then the filter's end on every way out - the request's coder goes back to its pool
+ * whether the reply completed or the connection is closing.
  */
 
 /* finish:

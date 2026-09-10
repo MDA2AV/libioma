@@ -32,6 +32,7 @@ PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/socket.h", "ioxd_socket", "outbound connections, as pipes"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
     ("ioxd/static.h", "ioxd_static", "files from a directory, kept in memory per worker"),
+    ("ioxd/compress.h", "ioxd_compress", "response compression, as middleware"),
 ]
 
 
@@ -487,6 +488,15 @@ and a date for conditional requests, byte ranges, a pre-compressed twin when the
 worker served it keeps in memory and checks against the disk before serving again, so a replaced file is served
 new; a file larger than the slab goes out from where it is, in one message behind the head.</p>
 
+<h3>Compression</h3>
+<p>The <a href="ioxd_compress.html">compression middleware</a> codes a reply of a compressible type for a client
+whose Accept-Encoding takes br or gzip. It decides at the reply's first flush, the moment the head is final and
+still mutable, which middleware reaches through <a href="ioxd_http.html#ioxd_on_head">ioxd_on_head</a>, and the
+engine runs every flushed span through the coder it installs with
+<a href="ioxd_http.html#ioxd_reply_filter">ioxd_reply_filter</a>: a body that fit the slab is one call and one
+message with the exact coded length, one that streams is coded flush by flush. Handlers write and flush as they
+always did.</p>
+
 <h3>Threads and lifetimes</h3>
 <p>Register routes, configure and bind from the main thread, before the run. Handlers run on worker threads,
 one at a time per worker; a request's slices are valid until the handler returns, and anything a handler hands
@@ -521,6 +531,7 @@ when the registered file table is on, which is the default.</p>
 <dt><a href="ioxd_socket.html">&lt;ioxd/socket.h&gt;</a></dt><dd>outbound connections, as pipes</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
 <dt><a href="ioxd_static.html">&lt;ioxd/static.h&gt;</a></dt><dd>files from a directory, kept in memory per worker</dd>
+<dt><a href="ioxd_compress.html">&lt;ioxd/compress.h&gt;</a></dt><dd>response compression, as middleware</dd>
 </dl>
 
 <h2>SEE ALSO</h2>
@@ -734,6 +745,18 @@ int main(void)
     ioxd_bind(8080, NULL);
     return ioxd_run(0);
 }"""),
+    ],
+    "ioxd_compress": [
+        ("One endpoint compressed, the rest untouched; brotli asked to try harder:",
+         """ioxd_compress_configure(&(ioxd_compress_config){ .brotli_quality = 4 });
+IOXD_GET("/api/report", report, ioxd_compress);     /* coded when the client takes br or gzip */
+IOXD_GET("/api/ping", ping);                        /* never */
+ioxd_bind(8080, NULL);
+return ioxd_run(0);"""),
+        ("Every reply of a compressible type, from the root:",
+         """IOXD_USE(ioxd_compress);
+IOXD_GET("/", home);                                /* text/html: coded */
+IOXD_GET("/avatar.png", avatar);                    /* image/png: as it is */"""),
     ],
     "ioxd_tls": [
         ("A TLS port beside a plain one; the files rotated, then reloaded:",

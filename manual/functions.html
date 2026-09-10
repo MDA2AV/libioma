@@ -10,7 +10,8 @@
 <nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="ioxd_examples.html">examples</a> &rsaquo; <a href="functions.html">all names</a></nav>
 <main>
 <div class="hdr"><span>FUNCTIONS(3)</span><span>libioxd Programmer's Manual</span><span>FUNCTIONS(3)</span></div>
-<h2>NAME</h2><p>functions - every public name of libioxd, alphabetically, with the page that describes it</p><h2>DESCRIPTION</h2><table><tr><td><a href="ioxd_http.html#ioxd_advance">ioxd_advance</a></td><td class="dim">ioxd_http(3)</td></tr>
+<h2>NAME</h2><p>functions - every public name of libioxd, alphabetically, with the page that describes it</p><h2>DESCRIPTION</h2><table><tr><td><a href="ioxd_http.html#ioxd_accepts_encoding">ioxd_accepts_encoding</a></td><td class="dim">ioxd_http(3)</td></tr>
+<tr><td><a href="ioxd_http.html#ioxd_advance">ioxd_advance</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_run.html#ioxd_bind">ioxd_bind</a></td><td class="dim">ioxd_run(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_body_all">ioxd_body_all</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_body_read_next_chunk">ioxd_body_read_next_chunk</a></td><td class="dim">ioxd_http(3)</td></tr>
@@ -18,6 +19,10 @@
 <tr><td><a href="ioxd_tls.html#ioxd_certs_free">ioxd_certs_free</a></td><td class="dim">ioxd_tls(3)</td></tr>
 <tr><td><a href="ioxd_tls.html#ioxd_certs_load">ioxd_certs_load</a></td><td class="dim">ioxd_tls(3)</td></tr>
 <tr><td><a href="ioxd_tls.html#ioxd_certs_reload">ioxd_certs_reload</a></td><td class="dim">ioxd_tls(3)</td></tr>
+<tr><td><a href="ioxd_compress.html#ioxd_compress">ioxd_compress</a></td><td class="dim">ioxd_compress(3)</td></tr>
+<tr><td><a href="ioxd_compress.html#ioxd_compress_codings">ioxd_compress_codings</a></td><td class="dim">ioxd_compress(3)</td></tr>
+<tr><td><a href="ioxd_compress.html#ioxd_compress_config">ioxd_compress_config</a></td><td class="dim">ioxd_compress(3)</td></tr>
+<tr><td><a href="ioxd_compress.html#ioxd_compress_configure">ioxd_compress_configure</a></td><td class="dim">ioxd_compress(3)</td></tr>
 <tr><td><a href="ioxd_config.html#ioxd_config">ioxd_config</a></td><td class="dim">ioxd_config(3)</td></tr>
 <tr><td><a href="ioxd_config.html#ioxd_configure">ioxd_configure</a></td><td class="dim">ioxd_config(3)</td></tr>
 <tr><td><a href="ioxd_socket.html#ioxd_connect">ioxd_connect</a></td><td class="dim">ioxd_socket(3)</td></tr>
@@ -34,6 +39,7 @@
 <tr><td><a href="ioxd_socket.html#ioxd_disconnect">ioxd_disconnect</a></td><td class="dim">ioxd_socket(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_endpoint">ioxd_endpoint</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_endpoint_use">ioxd_endpoint_use</a></td><td class="dim">ioxd_router(3)</td></tr>
+<tr><td><a href="ioxd_http.html#ioxd_filter">ioxd_filter</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_flush">ioxd_flush</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_get">ioxd_get</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#IOXD_GET">IOXD_GET</a></td><td class="dim">ioxd_router(3)</td></tr>
@@ -43,6 +49,7 @@
 <tr><td><a href="ioxd_http.html#ioxd_handler">ioxd_handler</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_head">ioxd_head</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#IOXD_HEAD">IOXD_HEAD</a></td><td class="dim">ioxd_router(3)</td></tr>
+<tr><td><a href="ioxd_http.html#ioxd_head_fn">ioxd_head_fn</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_header">ioxd_header</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_json.html#ioxd_json">ioxd_json</a></td><td class="dim">ioxd_json(3)</td></tr>
 <tr><td><a href="ioxd_json.html#ioxd_json_array">ioxd_json_array</a></td><td class="dim">ioxd_json(3)</td></tr>
@@ -77,6 +84,7 @@
 <tr><td><a href="ioxd_http.html#ioxd_mw">ioxd_mw</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_next">ioxd_next</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_next_run">ioxd_next_run</a></td><td class="dim">ioxd_http(3)</td></tr>
+<tr><td><a href="ioxd_http.html#ioxd_on_head">ioxd_on_head</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_options">ioxd_options</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#IOXD_OPTIONS">IOXD_OPTIONS</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#ioxd_patch">ioxd_patch</a></td><td class="dim">ioxd_router(3)</td></tr>
@@ -103,6 +111,7 @@
 <tr><td><a href="ioxd_router.html#ioxd_put">ioxd_put</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_router.html#IOXD_PUT">IOXD_PUT</a></td><td class="dim">ioxd_router(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_reason">ioxd_reason</a></td><td class="dim">ioxd_http(3)</td></tr>
+<tr><td><a href="ioxd_http.html#ioxd_reply_filter">ioxd_reply_filter</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_req_header">ioxd_req_header</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_req_param">ioxd_req_param</a></td><td class="dim">ioxd_http(3)</td></tr>
 <tr><td><a href="ioxd_http.html#ioxd_request">ioxd_request</a></td><td class="dim">ioxd_http(3)</td></tr>

@@ -30,6 +30,12 @@
 <span class="c-ty">void</span> <a href="#ioxd_next_run">ioxd_next_run</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="#ioxd_next">ioxd_next</a> *next);
 <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> <a href="#ioxd_req_header">ioxd_req_header</a>(<span class="c-kw">const</span> <a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *name);
 <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> <a href="#ioxd_req_param">ioxd_req_param</a> (<span class="c-kw">const</span> <a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *key);
+<span class="c-ty">double</span> <a href="#ioxd_accepts_encoding">ioxd_accepts_encoding</a>(<span class="c-kw">const</span> <a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *coding);
+<span class="c-kw">typedef</span> <span class="c-ty">void</span> (*<a href="#ioxd_head_fn">ioxd_head_fn</a>)(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-ty">void</span> *arg, <span class="c-ty">size_t</span> buffered, <span class="c-ty">bool</span> whole);
+<span class="c-ty">bool</span> <a href="#ioxd_on_head">ioxd_on_head</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="#ioxd_head_fn">ioxd_head_fn</a> fn, <span class="c-ty">void</span> *arg);
+<span class="c-kw">enum</span> ioxd_filter_op { IOXD_FILTER_MORE, IOXD_FILTER_FLUSH, IOXD_FILTER_FINISH };
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> { ... } <a href="#ioxd_filter">ioxd_filter</a>;
+<span class="c-ty">bool</span> <a href="#ioxd_reply_filter">ioxd_reply_filter</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-kw">const</span> <a href="#ioxd_filter">ioxd_filter</a> *filter);
 <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> <a href="#ioxd_body_all">ioxd_body_all</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx);
 <span class="c-ty">int</span> <a href="#ioxd_body_read_until">ioxd_body_read_until</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-ty">void</span> *dst, <span class="c-ty">size_t</span> n);
 <span class="c-ty">int</span> <a href="#ioxd_body_read_next_chunk">ioxd_body_read_next_chunk</a>(<a href="#ioxd_ctx">ioxd_ctx</a> *ctx, <span class="c-ty">void</span> *dst, <span class="c-ty">size_t</span> cap);
@@ -138,6 +144,32 @@ ioxd_slice ioxd_req_header(<span class="c-kw">const</span> ioxd_ctx *ctx, <span 
 ioxd_slice ioxd_req_param (<span class="c-kw">const</span> ioxd_ctx *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *key);
 </pre>
 <div class="text"><p>A header of the request by name, or a query parameter by key: the value of the first one, or an absent slice (p NULL, len 0) when there is none - <a href="ioxd_slice.html#ioxd_slice_eq">ioxd_slice_eq</a>(v, "") is true of both an absent value and an empty one; v.p tells them apart. Header names arrive lower-cased, so ask with lowercase.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_accepts_encoding">
+<span class="c-ty">double</span> ioxd_accepts_encoding(<span class="c-kw">const</span> ioxd_ctx *ctx, <span class="c-kw">const</span> <span class="c-ty">char</span> *coding);
+</pre>
+<div class="text"><p>The weight Accept-Encoding gives a coding: its own q (1 when named without one), else the q of "*", else 0 - so 0 means the client does not take it, whether refused or never offered.</p></div>
+</div>
+<h3>the moments of a reply, for middleware</h3>
+<div class="entry">
+<pre class="decl" id="ioxd_head_fn">
+<span class="c-kw">typedef</span> <span class="c-ty">void</span> (*ioxd_head_fn)(ioxd_ctx *ctx, <span class="c-ty">void</span> *arg, <span class="c-ty">size_t</span> buffered, <span class="c-ty">bool</span> whole);
+<span class="c-ty">bool</span> ioxd_on_head(ioxd_ctx *ctx, ioxd_head_fn fn, <span class="c-ty">void</span> *arg);
+</pre>
+<div class="text"><p>The head is final at the reply's first flush: the status, the content type and whether the body fit the slab are known, and the head can still be shaped. Middleware that must decide then - response compression - sets a delegate before running the chain, and the engine calls it once, before the head is serialized, with the body bytes in the slab so far and whether they are all of it (<a href="#ioxd_header">ioxd_header</a> still works inside it). Not called for HEAD. False once the head is out.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="">
+<span class="c-kw">enum</span> ioxd_filter_op { IOXD_FILTER_MORE, IOXD_FILTER_FLUSH, IOXD_FILTER_FINISH };
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_filter {
+    <span class="c-ty">int</span>  (*run)(<span class="c-ty">void</span> *arg, <span class="c-kw">const</span> <span class="c-ty">void</span> *in, <span class="c-ty">size_t</span> *in_len, <span class="c-ty">void</span> *out, <span class="c-ty">size_t</span> *out_len, <span class="c-kw">enum</span> ioxd_filter_op op);
+    <span class="c-ty">void</span> (*end)(<span class="c-ty">void</span> *arg);
+    <span class="c-ty">void</span>  *arg;
+} ioxd_filter;
+<span class="c-ty">bool</span> ioxd_reply_filter(ioxd_ctx *ctx, <span class="c-kw">const</span> ioxd_filter *filter);
+</pre>
+<div class="text"><p>A filter on the body - a coder: what the handler wrote passes through run, and what run writes is what is framed and sent. run takes input (all of it may not fit: *in_len comes back as what was consumed, *out_len as what was produced into out) and an op - MORE while the body goes on, FLUSH when the handler flushed on purpose, so a live feed moves, FINISH once the body is complete, called again until nothing is pending. It returns 1 while it has more output than fit, 0 when done with the call, -1 on an error, which fails the reply. end runs once when the reply is over, however it ended. Installed at the on_head moment, before the head is out (false after): the engine then frames the reply chunked when the body streams - a declared length is the plaintext's - and with the exact coded length when it was buffered whole, still one message.</p></div>
 </div>
 <h3>the body</h3>
 <div class="entry">
@@ -250,7 +282,7 @@ ioxd_slice ioxd_body_all(ioxd_ctx *ctx);
     <span class="c-cm">/* the head may already be out (a streamed reply): <a href="#ioxd_header">ioxd_header</a> then returns false */</span>
 }</pre>
 <h2>SEE ALSO</h2>
-<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_static.html">ioxd_static(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_static.html">ioxd_static(3)</a>, <a href="ioxd_compress.html">ioxd_compress(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_HTTP(3)</span></div>
 </main>
 </body>

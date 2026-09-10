@@ -127,6 +127,14 @@
  * A query parameter's value by key.
  */
 
+/* qvalue:
+ * The q of an item's parameters (";q=0.8"): 1 when there is none, 0 when it does not parse.
+ */
+
+/* ioxd_accepts_encoding:
+ * Accept-Encoding taken apart item by item: the coding's own q, else that of "*", else 0.
+ */
+
 /* is_tchar:
  * An HTTP token character (RFC 9110): what a field name is made of.
  */

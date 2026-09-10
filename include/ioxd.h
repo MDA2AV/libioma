@@ -34,3 +34,4 @@
 #include "ioxd/socket.h"   /* outbound connections, as pipes                       */
 #include "ioxd/tls.h"      /* certificates, for a TLS listener                    */
 #include "ioxd/static.h"   /* files from a directory, kept in memory per worker    */
+#include "ioxd/compress.h" /* response compression, as middleware                  */

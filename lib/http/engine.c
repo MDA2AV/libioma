@@ -41,7 +41,14 @@ struct serve_state {
     bool         head_only;
     bool         no_body;
     bool         continue_sent;
+    ioxd_head_fn    on_head;
+    void           *on_head_arg;
+    ioxd_filter     filter;
+    ioxd_pipewriter coded;
 };
+
+#define CODED_SLACK 256
+enum flush_kind { FLUSH_FULL, FLUSH_ASKED, FLUSH_FINAL };
 #define STATE(ctx)  ((struct serve_state *)(ctx)->priv)
 #define READER(ctx) (&STATE(ctx)->pipe->in)
 #define WRITER(ctx) (&STATE(ctx)->pipe->out)
@@ -333,15 +340,87 @@ static int fail(ioxd_response *res)
     return -1;
 }
 
-static int flush_with(ioxd_ctx *ctx, bool final, const void *extra, size_t extra_len)
+static int send_coded(ioxd_ctx *ctx, const char *head, int *head_len)
+{
+    ioxd_response   *res = &ctx->res;
+    ioxd_pipewriter *cw  = &STATE(ctx)->coded;
+    res->body_sent += cw->len;
+    if (res->chunked && cw->len) {
+        char  size_line[16];
+        int   digits = put_hex(size_line, cw->len);
+        char *front  = ioxd__pipewriter_front(cw, (size_t)digits + 2);
+        char *back   = ioxd__pipewriter_back(cw, 2);
+        if (!front || !back)
+            return fail(res);
+        memcpy(front, size_line, (size_t)digits);
+        front[digits]     = '\r';
+        front[digits + 1] = '\n';
+        back[0] = '\r';
+        back[1] = '\n';
+    }
+    if (*head_len) {
+        char *front = ioxd__pipewriter_front(cw, (size_t)*head_len);
+        if (front)
+            memcpy(front, head, (size_t)*head_len);
+        else if (ioxd__pipewriter_through(cw, head, (size_t)*head_len) < 0)
+            return fail(res);
+        *head_len = 0;
+    }
+    if (ioxd__pipewriter_flush(cw) < 0)
+        return fail(res);
+    return 0;
+}
+
+static int encode(ioxd_ctx *ctx, enum ioxd_filter_op op, char *head, int *head_len)
+{
+    struct serve_state *state = STATE(ctx);
+    ioxd_pipewriter    *pw    = WRITER(ctx);
+    ioxd_pipewriter    *cw    = &state->coded;
+    const char         *in    = pw->buf + pw->lead;
+    size_t              left  = pw->len;
+    for (;;) {
+        size_t in_len = left, out_len = ioxd__pipewriter_room(cw);
+        int    rc     = state->filter.run(state->filter.arg, in, &in_len, ioxd__pipewriter_at(cw), &out_len, op);
+        if (rc < 0 || in_len > left || out_len > ioxd__pipewriter_room(cw))
+            return fail(&ctx->res);
+        in   += in_len;
+        left -= in_len;
+        ioxd__pipewriter_advance(cw, out_len);
+        if (rc == 0 && left == 0)
+            break;
+        if (ioxd__pipewriter_room(cw) == 0) {
+            if (!head_len || send_coded(ctx, head, head_len) < 0)
+                return fail(&ctx->res);
+        } else if (in_len == 0 && out_len == 0) {
+            return fail(&ctx->res);
+        }
+    }
+    pw->len = 0;
+    return 0;
+}
+
+static int flush_with(ioxd_ctx *ctx, enum flush_kind kind, const void *extra, size_t extra_len)
 {
     ioxd_response      *res   = &ctx->res;
     ioxd_pipewriter    *pw    = WRITER(ctx);
     struct serve_state *state = STATE(ctx);
     if (res->failed)
         return -1;
+    bool final = kind == FLUSH_FINAL;
     char head[IOXD_HEAD_CAP];
     int  head_len = 0;
+    if (!res->head_sent && state->on_head && !state->head_only) {
+        ioxd_head_fn fn = state->on_head;
+        state->on_head  = nullptr;
+        fn(ctx, state->on_head_arg, pw->len, final);
+    }
+    bool             coding = state->filter.run && !state->head_only;
+    bool             whole  = coding && !res->head_sent && final;
+    ioxd_pipewriter *sw     = coding ? &state->coded : pw;
+    if (coding && !res->head_sent && !whole)
+        res->has_length = false;
+    if (whole && encode(ctx, IOXD_FILTER_FINISH, nullptr, nullptr) < 0)
+        return -1;
     if (!res->head_sent) {
         int          status   = wire_status(res->status);
         bool         bodyless = status < 200 || status == 204 || status == 304;
@@ -349,9 +428,9 @@ static int flush_with(ioxd_ctx *ctx, bool final, const void *extra, size_t extra
         state->no_body = state->head_only || bodyless;
 
         bool   declared = res->has_length && (!final || state->no_body);
-        size_t body_len = declared ? res->content_length : pw->len;
+        size_t body_len = declared ? res->content_length : sw->len;
         if (res->has_length && !declared)
-            res->content_length = pw->len;
+            res->content_length = sw->len;
         if (bodyless) {
             framing = status == 304 && res->has_length ? FRAME_LENGTH : FRAME_NONE;
         } else if (!res->has_length && !final) {
@@ -377,29 +456,35 @@ static int flush_with(ioxd_ctx *ctx, bool final, const void *extra, size_t extra
     }
     if (state->no_body) {
         ioxd__pipewriter_reset(pw);
+        ioxd__pipewriter_reset(&state->coded);
         if (head_len && ioxd__pipewriter_through(pw, head, (size_t)head_len) < 0)
             return fail(res);
         return 0;
     }
+    if (coding && !whole) {
+        enum ioxd_filter_op op = final ? IOXD_FILTER_FINISH : kind == FLUSH_ASKED ? IOXD_FILTER_FLUSH : IOXD_FILTER_MORE;
+        if (encode(ctx, op, head, &head_len) < 0)
+            return -1;
+    }
     bool over = false;
     if (res->has_length) {
         size_t left = res->content_length - res->body_sent;
-        if (pw->len > left) {
-            pw->len = left;
+        if (sw->len > left) {
+            sw->len = left;
             over    = true;
         }
-        left -= pw->len;
+        left -= sw->len;
         if (extra_len > left) {
             extra_len = left;
             over      = true;
         }
     }
-    res->body_sent += pw->len + extra_len;
-    if (res->chunked && pw->len) {
+    res->body_sent += sw->len + extra_len;
+    if (res->chunked && sw->len) {
         char  size_line[16];
-        int   digits = put_hex(size_line, pw->len);
-        char *front  = ioxd__pipewriter_front(pw, (size_t)digits + 2);
-        char *back   = ioxd__pipewriter_back(pw, 2);
+        int   digits = put_hex(size_line, sw->len);
+        char *front  = ioxd__pipewriter_front(sw, (size_t)digits + 2);
+        char *back   = ioxd__pipewriter_back(sw, 2);
         if (!front || !back)
             return fail(res);
         memcpy(front, size_line, (size_t)digits);
@@ -409,33 +494,36 @@ static int flush_with(ioxd_ctx *ctx, bool final, const void *extra, size_t extra
         back[1] = '\n';
     }
     if (final && res->chunked) {
-        char *back = ioxd__pipewriter_back(pw, 5);
+        char *back = ioxd__pipewriter_back(sw, 5);
         if (!back)
             return fail(res);
         put_terminator(back);
     }
     if (head_len) {
-        char *front = ioxd__pipewriter_front(pw, (size_t)head_len);
+        char *front = ioxd__pipewriter_front(sw, (size_t)head_len);
         if (front)
             memcpy(front, head, (size_t)head_len);
-        else if (ioxd__pipewriter_through(pw, head, (size_t)head_len) < 0)
+        else if (ioxd__pipewriter_through(sw, head, (size_t)head_len) < 0)
             return fail(res);
     }
-    if (ioxd__pipewriter_flush_with(pw, extra, extra_len) < 0)
+    if (ioxd__pipewriter_flush_with(sw, extra, extra_len) < 0)
         return fail(res);
     if (over)
         return fail(res);
     return 0;
 }
 
-static int flush(ioxd_ctx *ctx, bool final)
+static int flush(ioxd_ctx *ctx, enum flush_kind kind)
 {
-    return flush_with(ctx, final, nullptr, 0);
+    return flush_with(ctx, kind, nullptr, 0);
 }
 
 static bool raw_framed(const ioxd_ctx *ctx)
 {
-    const ioxd_response *res = &ctx->res;
+    const ioxd_response      *res   = &ctx->res;
+    const struct serve_state *state = STATE(ctx);
+    if (state->on_head || state->filter.run)
+        return false;
     return res->head_sent ? !res->chunked : (res->has_length || ctx->req.minor_version == 0);
 }
 
@@ -445,8 +533,8 @@ static int finish(ioxd_ctx *ctx)
     ioxd_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
-    if (!res->head_sent || pw->len) {
-        if (flush(ctx, true) < 0)
+    if (!res->head_sent || pw->len || STATE(ctx)->filter.run) {
+        if (flush(ctx, FLUSH_FINAL) < 0)
             return -1;
     } else if (res->chunked) {
         char *back = ioxd__pipewriter_back(pw, 5);
@@ -468,12 +556,12 @@ int ioxd_write(ioxd_ctx *ctx, const void *data, size_t len)
     if (res->failed)
         return -1;
     if (len > ioxd__pipewriter_room(pw) && raw_framed(ctx))
-        return flush_with(ctx, false, data, len);
+        return flush_with(ctx, FLUSH_FULL, data, len);
     const char *src = data;
     while (len) {
         size_t room = ioxd__pipewriter_room(pw);
         if (room == 0) {
-            if (flush(ctx, false) < 0)
+            if (flush(ctx, FLUSH_FULL) < 0)
                 return -1;
             continue;
         }
@@ -517,7 +605,7 @@ int ioxd_printf(ioxd_ctx *ctx, const char *fmt, ...)
         rc = 0;
     } else if ((size_t)n >= pw->cap) {
         rc = write_formatted_heap(ctx, fmt, again, (size_t)n);
-    } else if (flush(ctx, false) == 0) {
+    } else if (flush(ctx, FLUSH_FULL) == 0) {
         ioxd__pipewriter_advance(pw, (size_t)vsnprintf(ioxd__pipewriter_at(pw), pw->cap, fmt, again));
         rc = 0;
     }
@@ -527,7 +615,25 @@ int ioxd_printf(ioxd_ctx *ctx, const char *fmt, ...)
 
 int ioxd_flush(ioxd_ctx *ctx)
 {
-    return flush(ctx, false);
+    return flush(ctx, FLUSH_ASKED);
+}
+
+bool ioxd_on_head(ioxd_ctx *ctx, ioxd_head_fn fn, void *arg)
+{
+    if (ctx->res.head_sent)
+        return false;
+    STATE(ctx)->on_head     = fn;
+    STATE(ctx)->on_head_arg = arg;
+    return true;
+}
+
+bool ioxd_reply_filter(ioxd_ctx *ctx, const ioxd_filter *filter)
+{
+    struct serve_state *state = STATE(ctx);
+    if (ctx->res.head_sent || state->filter.run)
+        return false;
+    state->filter = *filter;
+    return true;
 }
 
 ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx)
@@ -541,7 +647,7 @@ void *ioxd_reserve(ioxd_ctx *ctx, size_t n)
     ioxd_pipewriter *pw  = WRITER(ctx);
     if (res->failed || n > pw->cap)
         return nullptr;
-    if (n > ioxd__pipewriter_room(pw) && flush(ctx, false) < 0)
+    if (n > ioxd__pipewriter_room(pw) && flush(ctx, FLUSH_FULL) < 0)
         return nullptr;
     return ioxd__pipewriter_at(pw);
 }
@@ -951,9 +1057,35 @@ static void init_response(ioxd_response *res, ioxd_pipewriter *pw)
     ioxd__pipewriter_reset(pw);
 }
 
+static void filter_end(struct serve_state *state)
+{
+    if (state->filter.end)
+        state->filter.end(state->filter.arg);
+    state->filter = (ioxd_filter){};
+}
+
+static int after_dispatch(ioxd_ctx *ctx, struct serve_state *state, ioxd_pipe *pipe)
+{
+    if (state->body_err) {
+        if (state->body_err > 0 && !ctx->res.head_sent)
+            send_status(&pipe->out, state->body_err);
+        return -1;
+    }
+    if (ctx->req.expect_continue && !state->continue_sent && !state->body_done)
+        ctx->res.close = true;
+    else
+        drain_body(ctx);
+    if (state->body_err)
+        return -1;
+    if (finish(ctx) < 0)
+        return -1;
+    return !ctx->req.keep_alive || ctx->res.close ? -1 : 0;
+}
+
 void ioxd__engine_serve(ioxd_pipe *pipe)
 {
     char params[IOXD_PARAM_CAP];
+    char coded[IOXD_PIPE_LEAD + IOXD_PIPE_CAP + CODED_SLACK + IOXD_PIPE_SLACK];
 
     for (;;) {
         ioxd_ctx           ctx;
@@ -965,6 +1097,7 @@ void ioxd__engine_serve(ioxd_pipe *pipe)
             return;
         int refused = fill_request(&ctx.req, params, sizeof params);
         init_body_state(&state, pipe, &ctx.req);
+        ioxd__pipewriter_init(&state.coded, pipe->out.conn, coded, IOXD_PIPE_LEAD, IOXD_PIPE_CAP + CODED_SLACK, IOXD_PIPE_SLACK);
         init_response(&ctx.res, &pipe->out);
         ctx.user = nullptr;
         if (refused) {
@@ -974,21 +1107,9 @@ void ioxd__engine_serve(ioxd_pipe *pipe)
         state.head_only = ctx.req.method.len == 4 && memcmp(ctx.req.method.p, "HEAD", 4) == 0;
 
         ioxd__router_dispatch(&ctx);
-
-        if (state.body_err) {
-            if (state.body_err > 0 && !ctx.res.head_sent)
-                send_status(&pipe->out, state.body_err);
-            return;
-        }
-        if (ctx.req.expect_continue && !state.continue_sent && !state.body_done)
-            ctx.res.close = true;
-        else
-            drain_body(&ctx);
-        if (state.body_err)
-            return;
-        if (finish(&ctx) < 0)
-            return;
-        if (!ctx.req.keep_alive || ctx.res.close)
+        int rc = after_dispatch(&ctx, &state, pipe);
+        filter_end(&state);
+        if (rc < 0)
             return;
         ioxd__pipereader_release(&pipe->in);
     }

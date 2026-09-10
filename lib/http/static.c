@@ -499,39 +499,10 @@ static int open_file(const ioxd_static *st, char *name, size_t *len, struct stat
 
 /* ── the reply ─────────────────────────────────────────────────────────────────────────── */
 
-static double qvalue(ioxd_slice params)
-{
-    ioxd_slice param, key, value;
-    while (ioxd_slice_next(&params, ';', &param))
-        if (ioxd_slice_cut(param, '=', &key, &value) && ioxd_slice_eq_ci(ioxd_slice_trim(key), "q")) {
-            double q;
-            return ioxd_to_double(ioxd_slice_trim(value), &q) ? q : 0;
-        }
-    return 1;
-}
-
-static double coding_q(ioxd_slice accept, const char *name)
-{
-    double     any = 0;
-    ioxd_slice item, coding, params;
-    while (ioxd_slice_next(&accept, ',', &item)) {
-        ioxd_slice_cut(item, ';', &coding, &params);
-        coding = ioxd_slice_trim(coding);
-        if (ioxd_slice_eq_ci(coding, name))
-            return qvalue(params);
-        if (ioxd_slice_eq(coding, "*"))
-            any = qvalue(params);
-    }
-    return any;
-}
-
 static enum variant pick(const ioxd_ctx *ctx, const struct entry *e)
 {
-    ioxd_slice accept = ioxd_req_header(ctx, "accept-encoding");
-    if (!accept.p)
-        return PLAIN;
-    double br = e->v[BR].data ? coding_q(accept, coding[BR]) : 0;
-    double gz = e->v[GZIP].data ? coding_q(accept, coding[GZIP]) : 0;
+    double br = e->v[BR].data ? ioxd_accepts_encoding(ctx, coding[BR]) : 0;
+    double gz = e->v[GZIP].data ? ioxd_accepts_encoding(ctx, coding[GZIP]) : 0;
     if (br > 0 && br >= gz)
         return BR;
     return gz > 0 ? GZIP : PLAIN;

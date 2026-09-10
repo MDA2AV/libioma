@@ -560,7 +560,11 @@ int main(void)
     IOXD_POST("/upload",                upload);
     IOXD_POST("/chunks",                chunks);
     IOXD_GET ("/json/:id",              json_item);
-    IOXD_GET ("/json/big",              json_big);          /* static beside the capture */
+    IOXD_GET ("/json/big",              json_big, ioxd_compress);   /* static beside the capture; coded when the client takes br or gzip */
+    IOXD_GET ("/zip/stream",            stream,   ioxd_compress);   /* a chunked feed, coded flush by flush */
+    IOXD_GET ("/zip/declared",          declared, ioxd_compress);   /* a declared length: streams coded, chunked */
+    IOXD_GET ("/zip/health",            health,   ioxd_compress);   /* two bytes: below min_bytes, as it is */
+    IOXD_GET ("/zip/raw",               raw,      ioxd_compress);   /* written into the slab directly */
     IOXD_GET ("/headers",               headers);
     IOXD_GET ("/bighead",               bighead);
     IOXD_GET ("/status/:code",          status_route);

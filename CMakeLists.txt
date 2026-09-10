@@ -66,6 +66,7 @@ add_library(ioxd
         lib/http/api.c
         lib/http/find.c
         lib/http/static.c
+        lib/http/compress.c
         lib/http/router.c
         lib/http/run.c
         lib/json/json.c
@@ -113,6 +114,28 @@ if(BUILD_SHARED_LIBS)
     set_target_properties(ioxd PROPERTIES LINK_DEPENDS ${IOXD_VERSION_SCRIPT})
 endif()
 target_link_libraries(ioxd PUBLIC Threads::Threads)
+# Response compression: brotli and zlib, each AUTO (when pkg-config finds it), ON (required) or OFF.
+find_package(PkgConfig QUIET)
+foreach(codec IN ITEMS BROTLI ZLIB)
+    if(codec STREQUAL "BROTLI")
+        set(module libbrotlienc)
+    else()
+        set(module zlib)
+    endif()
+    set(IOXD_${codec} AUTO CACHE STRING "compress with ${module}: AUTO, ON or OFF")
+    set(IOXD_${codec}_FLAG 0)
+    if(NOT IOXD_${codec} STREQUAL "OFF" AND PKG_CONFIG_FOUND)
+        pkg_check_modules(${codec} IMPORTED_TARGET ${module})
+        if(${codec}_FOUND)
+            target_link_libraries(ioxd PUBLIC PkgConfig::${codec})
+            set(IOXD_${codec}_FLAG 1)
+        elseif(IOXD_${codec} STREQUAL "ON")
+            message(FATAL_ERROR "IOXD_${codec}=ON but pkg-config does not find ${module}")
+        endif()
+    endif()
+    target_compile_definitions(ioxd PRIVATE IOXD_${codec}=${IOXD_${codec}_FLAG})
+    message(STATUS "${codec}: ${IOXD_${codec}_FLAG}")
+endforeach()
 set_target_properties(ioxd PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION 0)
 
 # Vendored parser: silence its warnings, they are not ours to fix.
@@ -151,7 +174,7 @@ if(IOXD_EXAMPLES)
     add_test(NAME unit COMMAND ioxd-unit)
     add_test(NAME router COMMAND ioxd-router-test)
     add_test(NAME suites COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
-             --suite smoke --suite conformance --suite stress --suite tls --suite static
+             --suite smoke --suite conformance --suite stress --suite tls --suite static --suite compress
              --port ${IOXD_CHECK_PORT}
              --server $<TARGET_FILE:ioxd-test-server>
              --tls-python ${IOXD_TLS_PYTHON}
