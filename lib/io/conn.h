@@ -26,7 +26,7 @@ struct msghdr;                            /* <sys/socket.h>, for ioxd__conn_send
 enum recv_state {
     RECV_ARMED,                           /* multishot recv in flight; the kernel may post CQEs */
     RECV_STARVED,                         /* it ended on -ENOBUFS; re-armed once buffers return */
-    RECV_PAUSED,                          /* stopped on purpose, its ref kept; resume re-arms   */
+    RECV_PAUSED,                          /* stopped on purpose - a prologue, or the queue's high-water mark - its ref kept; resume re-arms */
     RECV_DONE,                            /* it posted its terminal CQE                         */
 };
 
@@ -38,10 +38,11 @@ struct conn {
     struct spsc     rx;                   /* delivered while nobody was reading (io/spsc.h)     */
     enum recv_state recv;
     bool            pausing;              /* a cancel is in flight to pause the recv           */
+    bool            throttled;            /* paused at the queue's high-water mark: the reader re-arms it as it drains */
     bool            cancelling;           /* a cancel is in flight: do not stage a second one  */
     int             refs;                 /* the handler coroutine + the armed/starved recv    */
     bool            closed;               /* the handler returned; fd closed                   */
-    bool            eof;                  /* recv ended: peer FIN, error, or queue overflow    */
+    bool            eof;                  /* recv ended: peer FIN or error                     */
     int             err;                  /* 0 on FIN, else the negative errno                 */
     struct conn    *pool_next;            /* free-list link while recycled (not in use): a LIFO - a  */
                                           /* returned conn becomes the head and points at the old one */
@@ -51,7 +52,7 @@ struct conn {
  * resumes it when the completion arrives - so none is named for the waiting, each for what it
  * does, after the syscall where there is one. */
 int ioxd__conn_send     (conn_t *c, const void *buf, size_t len);   /* all of buf: len, else -errno                */
-int ioxd__conn_recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive) */
+int ioxd__conn_recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive); re-arms a recv the queue paused */
 
 /* For a protocol prologue (TLS): stop the multishot recv so nothing more leaves the socket, take
  * what it already delivered, read exact byte counts straight from the socket, program the
@@ -100,9 +101,8 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  */
 
 /* cancel_recv:
- * Cancel the multishot recv, at most one cancel in flight: the queue-full policy would
- * otherwise stage another on every arrival while the queue stays full. Cleared on the terminal
- * CQE.
+ * Cancel the multishot recv, at most one cancel in flight: a pause asked while one is pending,
+ * or a close after a pause, must not stage another. Cleared on the terminal CQE.
  */
 
 /* end_input:
@@ -116,8 +116,8 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  */
 
 /* conn_unref:
- * Drop one owner's ref. At zero the conn holds nothing (fd closed, buffers returned) and goes
- * back to the pool, or is freed past the cap.
+ * Drop one owner's ref. At zero the conn holds nothing (fd closed, buffers returned, a ring
+ * grown for a burst given back) and goes back to the pool, or is freed past the cap.
  */
 
 /* ioxd__conn_pool_drain:
@@ -126,7 +126,8 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
 
 /* ioxd__conn_arm_recv:
  * Arm the multishot recv: one SQE, then a CQE per arrival, each in a buffer the kernel picks.
- *   - a fresh arm: no cancel of ours is in flight  [c->cancelling = false;]
+ *   - a fresh arm: no cancel of ours is in flight, and no pause of the queue's holds it
+ *     [c->cancelling = false;]
  */
 
 /* wake_reader:
@@ -151,6 +152,8 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
 /* ioxd__conn_on_recv:
  * A recv CQE: queue the data and wake the reader, or record the end of input and drop the
  * recv's ref. -ENOBUFS is not an error: the buffer group ran dry, so park and re-arm later.
+ * Nothing delivered is ever dropped: a queue that fills while the handler is parked elsewhere
+ * pauses the recv instead, and the burst the kernel had already posted goes into a grown ring.
  *   - the multishot ends here: no cancel is left in flight  [c->cancelling = false;]
  *   - the pause we asked for; starvation stopped it first  [if (c->pausing) {]
  *   - the input already ended: there is nothing to re-arm  [if (c->eof) {]
@@ -163,11 +166,15 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  *   - a parked reader sees 0 / -errno  [wake_reader(c);]
  *   - the recv's ref; may recycle c  [conn_unref(c);]
  *   - A positive result must name the buffer it landed in. Nothing can be done with bytes we
- *     cannot find, so end the input the way the queue-full policy does.  [end_input(c,
- *     -EPROTO);]
+ *     cannot find, so end the input.  [end_input(c, -EPROTO);]
  *   - the handler is gone; nobody will read it  [ioxd__bufring_return(&p->bufs, buf_id);]
- *   - The handler is not draining. Rather than let one peer hoard the buffer group, end its
- *     input: the next read sees -ENOBUFS.  [ioxd__bufring_return(&p->bufs, buf_id);]
+ *   - a burst the kernel posted before a pause could land is kept: the ring grows; only a heap
+ *     that refuses ends the input  [} else if (ioxd__spsc_full(&c->rx) &&
+ *     !ioxd__spsc_grow(&c->rx)) {]
+ *   - The high-water mark: the handler is parked elsewhere - a send, a timer - while the peer
+ *     keeps sending. Stop the kernel filling buffers for this one, so it cannot hoard the group;
+ *     the socket's own window then holds the peer, and the reader re-arms as it drains.  [if
+ *     (more && !c->pausing && !c->closed && ioxd__spsc_count(&c->rx) >= RX_QUEUE) {]
  *   - the kernel ended the multishot: re-arm  [if (!more) {]
  *   - ended on its own while a pause was asked  [if (c->pausing && !c->closed) {]
  *   - shutting down without a blanket cancel  [} else if (p->cancel_each && !c->closed) {]
@@ -198,9 +205,16 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * The connection's coroutine: run the worker's handler to completion, then close.
  */
 
+/* throttle_release:
+ * Re-arm a recv the queue paused, once the pause has landed. While the cancel is still in
+ * flight the recv is armed and nothing can be staged; its CQE wakes the reader, which comes
+ * back here. The arm clears the throttle.
+ */
+
 /* ioxd__conn_recv_item:
  * The next received buffer, whole: the caller owns it until ioxd__bufring_return. Suspends
- * until one arrives; 1 with the item, 0 at the end of input, <0 an error.
+ * until one arrives; 1 with the item, 0 at the end of input, <0 an error. A recv the queue
+ * paused is re-armed once the queue has drained to half the mark, or before waiting on it.
  *   - ioxd__conn_on_recv wakes us  [ioxd__coro_yield();]
  */
 

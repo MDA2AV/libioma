@@ -143,7 +143,7 @@ check: $(TESTSRV) $(UNIT) $(PIPESRV) $(ROUTER)
 # 8 x 64 B receive buffers (ioxd_configure, through the fixture's environment) and a 4-deep
 # per-connection queue (a build-time constant, so a second object directory): every request
 # empties the buffer group, so recvs park on -ENOBUFS and are re-armed as handlers give buffers
-# back, and the queue overflows at the first stall.
+# back, and the per-connection queue pauses the recv at the first stall.
 TINY      := -DRX_QUEUE=4                # the buffers come from the environment: ioxd_configure at run time
 TINYOBJ   := $(addprefix obj-tiny/,$(addsuffix .o,$(UNITS))) obj-tiny/io/switch_x86_64.o obj-tiny/picohttpparser.o
 TINYSRV   := tests/ioxd-test-server-tiny

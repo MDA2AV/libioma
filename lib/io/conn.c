@@ -55,6 +55,7 @@ conn_t *ioxd__conn_new(proactor_t *p, struct listener *l, int fd)
     c->recv       = RECV_ARMED;
     c->pausing    = false;
     c->cancelling = false;
+    c->throttled  = false;
     c->refs       = 2;
     c->closed     = false;
     c->eof        = false;
@@ -70,6 +71,7 @@ static void conn_unref(conn_t *c)
         return;
     proactor_t *p = c->p;
     p->live--;
+    ioxd__spsc_reset(&c->rx);
     if (p->conn_free_count < p->cfg.idle_connections) {
         c->pool_next = p->conn_free;
         p->conn_free = c;
@@ -100,6 +102,7 @@ void ioxd__conn_arm_recv(proactor_t *p, conn_t *c)
     sqe->user_data = UD(c, TAG_RECV);
     c->recv       = RECV_ARMED;
     c->cancelling = false;
+    c->throttled  = false;
 }
 
 static void wake_reader(conn_t *c)
@@ -212,18 +215,23 @@ void ioxd__conn_on_recv(proactor_t *p, conn_t *c, int result, unsigned flags)
         wake_reader(c);
     } else if (c->closed) {
         ioxd__bufring_return(&p->bufs, buf_id);
-    } else if (ioxd__spsc_full(&c->rx)) {
+    } else if (ioxd__spsc_full(&c->rx) && !ioxd__spsc_grow(&c->rx)) {
         ioxd__bufring_return(&p->bufs, buf_id);
-        end_input(c, -ENOBUFS);
+        end_input(c, -ENOMEM);
         if (more)
             cancel_recv(p, c);
         wake_reader(c);
     } else {
         struct rx_item *item = ioxd__spsc_push(&c->rx);
-        item->ptr = ioxd__bufring_at(&p->bufs, buf_id);
-        item->len = (uint32_t)result;
+        item->ptr    = ioxd__bufring_at(&p->bufs, buf_id);
+        item->len    = (uint32_t)result;
         item->buf_id = buf_id;
         wake_reader(c);
+        if (more && !c->pausing && !c->closed && ioxd__spsc_count(&c->rx) >= RX_QUEUE) {
+            c->pausing   = true;
+            c->throttled = true;
+            cancel_recv(p, c);
+        }
     }
 
     if (!more) {
@@ -297,16 +305,26 @@ void ioxd__conn_main(void *arg)
     ioxd__conn_close(c);
 }
 
+static void throttle_release(conn_t *c)
+{
+    if (c->recv == RECV_PAUSED)
+        ioxd__conn_recv_resume(c);
+}
+
 int ioxd__conn_recv_item(conn_t *c, struct rx_item *out)
 {
     for (;;) {
         if (!ioxd__spsc_empty(&c->rx)) {
             *out = ioxd__spsc_pop(&c->rx);
+            if (c->throttled && ioxd__spsc_count(&c->rx) <= RX_QUEUE / 2)
+                throttle_release(c);
             return 1;
         }
         if (c->eof)
             return c->err;
-        c->waiter = ioxd__coro_current();
+        if (c->throttled)
+            throttle_release(c);
+        c->waiter = ioxd__coro_current();   /* NOLINT(clang-analyzer-unix.Malloc): our own ref keeps c through the recv's drop */
         ioxd__coro_yield();
     }
 }

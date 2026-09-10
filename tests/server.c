@@ -194,6 +194,26 @@ static void raw(ioxd_ctx *ctx)
 /* POST /upload - a body of any size, streamed: each ioxd_body_read_until hands over the next bytes
  * straight from the wire (suspending the handler while they arrive), nothing is buffered. A
  * handler that never asks for the body does not pay for it either: the framework drains it. */
+/* POST /echo-stream - the body back as it came, a slab at a time: each piece is read straight
+ * into the reply slab and goes out as the next is read, so the handler is parked on a send while
+ * the body keeps arriving - the recv queue's pause and re-arm at work. A Content-Length request
+ * gets a reply framed the same way; a chunked one streams chunked. */
+static void echo_stream(ioxd_ctx *ctx)
+{
+    ctx->res.content_type = (ioxd_slice){ "application/octet-stream", 24 };
+    if (!ctx->req.chunked)
+        ioxd_content_length(ctx, ctx->req.content_length);
+    for (;;) {
+        char *at = ioxd_reserve(ctx, 8192);
+        if (!at)
+            return;
+        int n = ioxd_body_read_until(ctx, at, 8192);
+        if (n <= 0)
+            return;
+        ioxd_advance(ctx, (size_t)n);
+    }
+}
+
 static void upload(ioxd_ctx *ctx)
 {
     char   chunk[4096];
@@ -540,6 +560,7 @@ int main(void)
     IOXD_GET ("/stream",                stream);
     IOXD_GET ("/declared",              declared);          /* a declared length, streamed in flushes */
     IOXD_GET ("/raw",                   raw);               /* written into the slab directly        */
+    IOXD_POST("/echo-stream",           echo_stream);       /* sends while the body still arrives */
     IOXD_POST("/upload",                upload);
     IOXD_POST("/chunks",                chunks);
     IOXD_GET ("/json/:id",              json_item);
