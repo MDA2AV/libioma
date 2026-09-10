@@ -428,7 +428,8 @@ def render_page(header, page, subject, top_paras, entries, index, version_str, e
             body.append(f"<p>{link(esc(title))}</p>")
             body.append('<pre class="ex">' + link(highlight(code)) + "</pre>")
     body.append("<h2>SEE ALSO</h2>")
-    body.append("<p>" + ", ".join(f'<a href="{p}.html">{p}({s})</a>' for p, s in see_also) + "</p>")
+    body.append("<p>" + ", ".join(f'<a href="{p}.{s}.html">{p}({s})</a>' if s == "7" and p != "ioxd_examples" else f'<a href="{p}.html">{p}({s})</a>'
+                                  for p, s in see_also) + "</p>")
     return page_html(page, "3", "\n".join(body), version_str)
 
 
@@ -535,8 +536,126 @@ when the registered file table is on, which is the default.</p>
 </dl>
 
 <h2>SEE ALSO</h2>
-<p><a href="functions.html">every public name</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, and the
+<p><a href="ioxd_engine.7.html">ioxd_engine(7)</a> for how a request is read and a reply goes out,
+<a href="functions.html">every public name</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, and the
 repository at <a href="https://github.com/MDA2AV/libioxd">github.com/MDA2AV/libioxd</a>.</p>
+"""
+
+ENGINE = """
+<h2>NAME</h2>
+<p>ioxd_engine - how a request is read and a reply goes out: the buffers a connection owns, the first flush and the
+head, the moments middleware gets, and the paths compression and static files take</p>
+
+<h2>DESCRIPTION</h2>
+<p>This page is the engine seen from a handler's side: what happens to the bytes it reads and writes, and when. Nothing
+here is needed to use the library; it is what to know before writing middleware that shapes a reply, or when a
+measurement asks where the time went.</p>
+
+<h3>What a connection owns</h3>
+<p>Every connection runs on its own coroutine, and its buffers live on that coroutine's stack, so a request allocates
+nothing:</p>
+<pre class="ex">the reader's gathering buffer     16 KB   the request head, a body kept whole, bytes carried between reads
+the slab                          16 KB   where the handler's body bytes go, with a 512-byte lead in front and 8 bytes behind
+the coded buffer               16 KB + 256   the same shape; used only while a filter is on the reply</pre>
+<p>Received bytes never pass through the gathering buffer unless they must: the worker's multishot recv delivers into
+the worker's ring of provided buffers, the head is parsed where it landed, and a body is read from those buffers as
+the handler asks for it. A delivered buffer goes back to the ring once its bytes are consumed.</p>
+
+<h3>Reading a request</h3>
+<p>The head is parsed in place and the request is filled with slices into it: method, target, path, query, headers
+with their names lower-cased. The body stays on the wire until asked for. <a href="ioxd_http.html#ioxd_body_all">ioxd_body_all</a>
+keeps it in the reader, so it must fit the 16 KB; <a href="ioxd_http.html#ioxd_body_read_until">ioxd_body_read_until</a>
+copies it out in pieces of any size, decoding chunked framing on the way; a body the handler never read is drained
+after it, up to a limit, past which the connection closes instead.</p>
+
+<h3>Writing a reply: the slab, the first flush, the head</h3>
+<p>A handler writes body bytes into the slab - <a href="ioxd_http.html#ioxd_write">ioxd_write</a>,
+<a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>, the <a href="ioxd_json.html">JSON writer</a> writing in place,
+or <a href="ioxd_http.html#ioxd_reserve">ioxd_reserve</a> and <a href="ioxd_http.html#ioxd_advance">ioxd_advance</a>
+for bytes produced straight into it. Nothing is sent while there is room. Three things send: the slab fills, the
+handler calls <a href="ioxd_http.html#ioxd_flush">ioxd_flush</a>, or the handler returns and the engine finishes the
+reply. All three reach the same flush, and the <b>first</b> flush is the moment the head becomes final:</p>
+<pre class="ex">middleware pre-phase ─ handler writes ─ slab fills, or ioxd_flush ─ handler writes more ─ returns ─ post-phase ─ finish
+                                              │                                                                │
+                                first flush: the delegate runs, the head is built                  last flush: the rest,
+                                from the reply so far, placed in the lead ending                   and the terminator
+                                where the body starts, sent with it, frozen</pre>
+<p>The head is serialized into a temporary from the reply as the handler shaped it - status, content type, the
+headers it added, a declared length - then copied into the lead growing backwards from the body's first byte, so
+one send of one contiguous span carries head and body. Unused lead is simply not sent. From then on the head is
+frozen: <a href="ioxd_http.html#ioxd_header">ioxd_header</a> returns false and a status change is ignored.</p>
+<p>The first flush also decides the framing. When it is the last flush too - the whole body fit the slab and the
+handler never flushed - the head carries the exact Content-Length. When the body streams, the length is not known:
+on HTTP/1.1 the reply is chunked, each later flush a chunk whose size line goes into the lead and whose CRLF goes
+into the slack, the terminator at the end; on HTTP/1.0 the body runs until the connection closes. A length declared
+with <a href="ioxd_http.html#ioxd_content_length">ioxd_content_length</a> is held to and the body goes raw. A reply
+to HEAD, or a 1xx, 204 or 304, sends its head and no body whatever was written.</p>
+<p>One shortcut: a write larger than the slab's room, on a reply framed raw (a declared length, or HTTP/1.0), goes
+out from the caller's own buffer - the head and whatever was pending first, then the caller's bytes, in one message
+of two pieces - so a file served from memory costs no copy. The caller's buffer is only read for as long as the call
+lasts. The shortcut stands aside while a delegate or a filter is set on the reply, since every body byte must then
+pass through the slab.</p>
+
+<h3>Sends, and the ring</h3>
+<p>A send is one operation on the worker's io_uring; the coroutine parks until its completion and the worker serves
+its other connections meanwhile. Because the coroutine's stack is frozen while it is parked, the slab and the head
+stay where they are for as long as the kernel reads them. On a TLS port the record layer is the kernel's, so after
+the handshake a send is the same operation and the kernel encrypts; a 60 KB file over TLS is one message.</p>
+
+<h3>The moments middleware gets</h3>
+<p>Middleware wraps the handler: a pre-phase, the call into the rest of the chain, a post-phase. Two more moments
+belong to the reply itself, and are set from the pre-phase:</p>
+<table>
+<tr><th>moment</th><th>when</th><th>what it can do</th></tr>
+<tr><td>pre-phase</td><td>before the handler</td><td>set headers, shape the context, answer and short-circuit</td></tr>
+<tr><td>the delegate, <a href="ioxd_http.html#ioxd_on_head">ioxd_on_head</a></td><td>inside the first flush, before the head is serialized</td><td>read the final status and type, add headers, install a filter; it is told how many body bytes are buffered and whether they are all of it</td></tr>
+<tr><td>the filter, <a href="ioxd_http.html#ioxd_reply_filter">ioxd_reply_filter</a></td><td>every flushed span, and once more at the end</td><td>replace the body's bytes with its own: a coder</td></tr>
+<tr><td>post-phase</td><td>after the handler returned</td><td>read the status and what was sent; add headers only if nothing was flushed yet</td></tr>
+</table>
+<p>The delegate exists because the pre-phase is too early - the handler has not chosen the status or the type - and
+the post-phase is too late for a reply that streamed, whose head went out with its first chunk. The delegate runs
+whether the first flush comes mid-body or at the end, and not at all for HEAD.</p>
+
+<h3>Compression</h3>
+<p><a href="ioxd_compress.html">ioxd_compress</a> is the middleware on those two moments. Its pre-phase does one
+thing: when the request carries Accept-Encoding, it registers the delegate. At the first flush the delegate gates -
+2xx, a compressible type, no Content-Encoding already, a whole body no smaller than the threshold - adds Vary,
+picks brotli when the client takes br with a q at least gzip's and gzip when it takes that, takes a coder from
+this worker's pool, installs it as the filter and sets Content-Encoding.</p>
+<p>From then on the flush chooses the coded buffer as the span to send. The slab's bytes are the coder's input,
+read where they lie; its output lands in the coded buffer; the slab's length goes back to zero, its bytes dropped.
+The head, the chunk framing and the send are then written against the coded buffer, by the same code. A body that
+fit the slab is one coder call at the final flush and one message with the exact coded length, the same message
+count as an uncompressed reply. A body that streams is coded at every flush and framed chunked, a declared length
+being the plaintext's; a handler's own flush is a coder flush too, so a live feed keeps moving. The coded buffer's
+256 bytes past the slab's size are for a coding's own overhead on data that does not compress, so one slab's
+worth of output always fits; a stream whose coded buffer fills mid-flush sends it as a chunk and goes on.</p>
+<p>Coders are pooled per worker with no lock, a free list per coding. brotli has no reset, so each reply gets a new
+instance over an arena the coder keeps: allocations are pointer bumps, frees nothing, the arena grown to the peak
+a reply asked for; the instance is created with the body's size as a hint when the body was buffered whole, which
+sizes its tables for the body rather than for a window. zlib has a reset, so a gzip coder is one stream reset per
+reply. A buffered reply holds its coder within one flush and never overlaps another on the worker; a streamed reply
+holds it across its flushes, so a worker keeps as many coders as it ever had streamed coded replies in flight.</p>
+
+<h3>Static files</h3>
+<p><a href="ioxd_static.html">ioxd_static</a> keeps what a worker served in a table of its own, no lock: a hit is
+checked against the disk with one fstatat - inode, size, modification time - every time by default, or at most
+once per interval; a miss is opened and read through the ring, with its .br and .gz twins when wanted, and kept, the
+least recently served dropped past the budget. The reply is the entry's bytes written from where they are: larger
+than the slab, they take the shortcut above and go out behind the head in one message, so a file costs no copy.
+A file past the keep limit streams from the disk in slab-sized pieces instead.</p>
+
+<h3>Where the costs are</h3>
+<p>Per request: a walk down the route tree, one flat middleware chain, a header lookup per middleware that asks,
+one send per slab filled. A buffered reply is one ring operation. Compression costs the coder call - about 11 us
+for 8 KB of JSON at brotli quality 1, 9 at quality 0, 13 for gzip level 1 - and nothing else. A kept static file
+costs one fstatat. The JSON writer writes in place at the slab's tail, one run of stores per value; the slice
+search compares 32 positions a step.</p>
+
+<h2>SEE ALSO</h2>
+<p><a href="ioxd.7.html">ioxd(7)</a> for the model and the limits, <a href="ioxd_http.html">ioxd_http(3)</a> for the
+calls named here, <a href="ioxd_compress.html">ioxd_compress(3)</a>, <a href="ioxd_static.html">ioxd_static(3)</a>,
+<a href="ioxd_examples.html">ioxd_examples(7)</a>.</p>
 """
 
 EXAMPLES = {
@@ -851,14 +970,16 @@ def build():
                         index.setdefault(n, (page, anchor_id(n)))
     index.setdefault("ioxd_run", ("ioxd_run", "ioxd_run"))
     for header, page, subject, top_paras, entries in parsed:
-        see = [(p, "3") for _h, p, _s in PAGES if p != page] + [("ioxd_examples", "7"), ("ioxd", "7")]
+        see = [(p, "3") for _h, p, _s in PAGES if p != page] + [("ioxd_examples", "7"), ("ioxd", "7"), ("ioxd_engine", "7")]
         out = render_page(header, page, subject, top_paras, entries, index, version_str, EXAMPLES.get(page, []), see)
         with open(os.path.join(HERE, page + ".html"), "w") as f:
             f.write(out)
 
-    # ioxd(7)
+    # ioxd(7), ioxd_engine(7)
     with open(os.path.join(HERE, "ioxd.7.html"), "w") as f:
         f.write(page_html("ioxd", "7", OVERVIEW, version_str))
+    with open(os.path.join(HERE, "ioxd_engine.7.html"), "w") as f:
+        f.write(page_html("ioxd_engine", "7", ENGINE, version_str))
 
     # ioxd_examples(7): the programs under playground/examples, whole, their top comment first
     link = make_linker(index, "ioxd_examples")
@@ -906,6 +1027,7 @@ one page per public header, generated from the headers themselves, so what a pag
 header declares. Start with the overview.</p>
 <h2>SECTION 7: OVERVIEW</h2>
 <table><tr><td><a href="ioxd.7.html">ioxd(7)</a></td><td></td><td>the library, its model and its limits</td></tr>
+<tr><td><a href="ioxd_engine.7.html">ioxd_engine(7)</a></td><td></td><td>how a request is read and a reply goes out: buffers, the first flush, middleware's moments, compression, files</td></tr>
 <tr><td><a href="ioxd_examples.html">ioxd_examples(7)</a></td><td></td><td>whole programs: streaming, middleware, groups, static files, raw pipes</td></tr></table>
 <h2>SECTION 3: HEADERS</h2>
 <table>{rows}
