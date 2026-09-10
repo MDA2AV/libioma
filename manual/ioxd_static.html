@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ioxd_static(3) - libioxd manual</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="crumbs"><a href="index.html">libioxd manual</a> &rsaquo; <a href="ioxd.7.html">ioxd(7)</a> &rsaquo; <a href="ioxd_examples.html">examples</a> &rsaquo; <a href="functions.html">all names</a></nav>
+<main>
+<div class="hdr"><span>IOXD_STATIC(3)</span><span>libioxd Programmer's Manual</span><span>IOXD_STATIC(3)</span></div>
+<h2>NAME</h2>
+<p>ioxd/static.h - files from a directory: the request path mapped under a mount, the type from the extension, a validator and a date for conditional requests, byte ranges, a pre-compressed twin when the client takes the coding - and what was served kept in memory, per worker, checked against the disk so a replaced file is served new.</p>
+<h2>SYNOPSIS</h2>
+<pre class="syn"><span class="c-pp">#include &lt;ioxd.h&gt;</span>
+
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> <a href="#ioxd_static">ioxd_static</a> <a href="#ioxd_static">ioxd_static</a>;
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> { ... } <a href="#ioxd_static_config">ioxd_static_config</a>;
+<a href="#ioxd_static">ioxd_static</a> *<a href="#ioxd_static_open">ioxd_static_open</a>(<span class="c-kw">const</span> <a href="#ioxd_static_config">ioxd_static_config</a> *config);
+<span class="c-ty">bool</span> <a href="#ioxd_static_serve">ioxd_static_serve</a>(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="#ioxd_static">ioxd_static</a> *files);
+<span class="c-ty">void</span> <a href="#ioxd_static_file">ioxd_static_file</a>(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx, <a href="#ioxd_static">ioxd_static</a> *files, <span class="c-kw">const</span> <span class="c-ty">char</span> *name);
+<span class="c-ty">void</span> <a href="#ioxd_static_close">ioxd_static_close</a>(<a href="#ioxd_static">ioxd_static</a> *files);</pre>
+<h2>DESCRIPTION</h2>
+<div class="entry">
+<pre class="decl" id="ioxd_static">
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_static ioxd_static;
+</pre>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_static_config">
+<span class="c-kw">typedef</span> <span class="c-kw">struct</span> ioxd_static_config {
+    <span class="c-kw">const</span> <span class="c-ty">char</span> *dir;             <span class="c-cm">/* the directory; required                                             */</span>
+    <span class="c-kw">const</span> <span class="c-ty">char</span> *mount;           <span class="c-cm">/* the request path prefix that maps to it: "/static"; NULL or "" is the root */</span>
+    <span class="c-kw">const</span> <span class="c-ty">char</span> *index;           <span class="c-cm">/* the file a directory serves: "index.html" unless set; "" for none     */</span>
+    <span class="c-kw">const</span> <span class="c-ty">char</span> *cache_control;   <span class="c-cm">/* sent with every file ("max-age=3600"); NULL for none                */</span>
+    <span class="c-ty">size_t</span>      cache_bytes;     <span class="c-cm">/* file bytes each worker keeps in memory; 0: 64 MB                     */</span>
+    <span class="c-ty">size_t</span>      cache_file_max;  <span class="c-cm">/* a larger file is not kept, and streams from the disk; 0: 8 MB        */</span>
+    <span class="c-ty">unsigned</span>    revalidate_ms;   <span class="c-cm">/* how long a kept file goes unchecked against the disk; 0: every request */</span>
+    <span class="c-ty">bool</span>        precompressed;   <span class="c-cm">/* serve name.br or name.gz beside a file when the client takes the coding */</span>
+    <span class="c-ty">bool</span>        hidden;          <span class="c-cm">/* serve names that begin with a dot (refused otherwise)                */</span>
+} ioxd_static_config;
+</pre>
+<div class="text"><p>How a directory is served. Zero is the default of every field but dir. What a worker serves it keeps in memory, up to cache_bytes of file contents, the least recently served dropped first; a file larger than cache_file_max is not kept, and is read from the disk in pieces each time. A kept file is checked against the disk before it is served again - its inode, size and modification time - every time by default, or at most once per revalidate_ms; a file that changed or went is dropped, so a deploy that replaces files shows at once.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_static_open">
+ioxd_static *ioxd_static_open(<span class="c-kw">const</span> ioxd_static_config *config);
+</pre>
+<div class="text"><p>Open a directory to serve: NULL, with the reason on stderr, when it cannot be. From the main thread, before the run; at most 16 open at once.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_static_serve">
+<span class="c-ty">bool</span> ioxd_static_serve(ioxd_ctx *ctx, ioxd_static *files);
+</pre>
+<div class="text"><p>The file the request's path names under the mount, served: 200 with the body - the .br or .gz twin as Content-Encoding when there is one and Accept-Encoding takes it, with Vary - 304 when the client's copy is current (If-None-Match, If-Modified-Since), 206 for a byte range, 404 when there is no such file or the name is refused (a dot segment, a hidden name), 405 for a method other than GET and HEAD. The 404 carries no body, so a handler may add one of its own after. False, with nothing written, when the path is not under the mount at all: a fallback handler then goes on to its own reply.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_static_file">
+<span class="c-ty">void</span> ioxd_static_file(ioxd_ctx *ctx, ioxd_static *files, <span class="c-kw">const</span> <span class="c-ty">char</span> *name);
+</pre>
+<div class="text"><p>A named file under the directory, whatever the path: an index, a 404 page, a single-page app's shell. The same replies; 404 when it is not there.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_static_close">
+<span class="c-ty">void</span> ioxd_static_close(ioxd_static *files);
+</pre>
+<div class="text"><p>Give it back, with everything the workers kept: after <a href="ioxd_run.html#ioxd_run">ioxd_run</a> returned. NULL is a no-op.</p></div>
+</div>
+<h2>EXAMPLES</h2>
+<p>A directory under /static, its twins served by Accept-Encoding, through the fallback handler so nested paths reach it:</p>
+<pre class="ex"><span class="c-kw">static</span> <a href="#ioxd_static">ioxd_static</a> *g_files;
+
+<span class="c-kw">static</span> <span class="c-ty">void</span> files(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
+{
+    <span class="c-kw">if</span> (<a href="#ioxd_static_serve">ioxd_static_serve</a>(ctx, g_files))            <span class="c-cm">/* 200, 304, 206 or 404 for anything under /static */</span>
+        <span class="c-kw">return</span>;
+    ctx-&gt;res.status = <span class="c-num">404</span>;                          <span class="c-cm">/* not under the mount: a reply of our own */</span>
+}
+
+<span class="c-ty">int</span> main(<span class="c-ty">void</span>)
+{
+    g_files = <a href="#ioxd_static_open">ioxd_static_open</a>(&amp;(<a href="#ioxd_static_config">ioxd_static_config</a>){ .dir = <span class="c-str">"/srv/www"</span>, .mount = <span class="c-str">"/static"</span>, .precompressed = <span class="c-kw">true</span> });
+    <span class="c-kw">if</span> (!g_files)
+        <span class="c-kw">return</span> <span class="c-num">1</span>;
+    <a href="ioxd_router.html#IOXD_DEFAULT">IOXD_DEFAULT</a>(files);
+    <a href="ioxd_run.html#ioxd_bind">ioxd_bind</a>(<span class="c-num">8080</span>, <span class="c-kw">NULL</span>);
+    <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
+}</pre>
+<h2>SEE ALSO</h2>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_STATIC(3)</span></div>
+</main>
+</body>
+</html>

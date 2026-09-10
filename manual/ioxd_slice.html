@@ -22,6 +22,14 @@
 <span class="c-ty">bool</span>       <a href="#ioxd_slice_starts_with">ioxd_slice_starts_with</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-kw">const</span> <span class="c-ty">char</span> *prefix);
 <span class="c-ty">bool</span>       <a href="#ioxd_slice_ends_with">ioxd_slice_ends_with</a>  (<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-kw">const</span> <span class="c-ty">char</span> *suffix);
 <a href="#ioxd_slice">ioxd_slice</a> <a href="#ioxd_slice_trim">ioxd_slice_trim</a>       (<a href="#ioxd_slice">ioxd_slice</a> s);
+ptrdiff_t <a href="#ioxd_slice_find">ioxd_slice_find</a>      (<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-kw">const</span> <span class="c-ty">char</span> *needle);
+ptrdiff_t <a href="#ioxd_slice_find_bytes">ioxd_slice_find_bytes</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-kw">const</span> <span class="c-ty">void</span> *needle, <span class="c-ty">size_t</span> n);
+ptrdiff_t <a href="#ioxd_slice_find_char">ioxd_slice_find_char</a> (<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">char</span> c);
+ptrdiff_t <a href="#ioxd_slice_rfind_char">ioxd_slice_rfind_char</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">char</span> c);
+<span class="c-kw">static</span> <span class="c-kw">inline</span> <a href="#ioxd_slice">ioxd_slice</a> <a href="#ioxd_slice_from">ioxd_slice_from</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">size_t</span> at);
+<span class="c-kw">static</span> <span class="c-kw">inline</span> <a href="#ioxd_slice">ioxd_slice</a> <a href="#ioxd_slice_upto">ioxd_slice_upto</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">size_t</span> at);
+<span class="c-ty">bool</span> <a href="#ioxd_slice_cut">ioxd_slice_cut</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">char</span> sep, <a href="#ioxd_slice">ioxd_slice</a> *head, <a href="#ioxd_slice">ioxd_slice</a> *tail);
+<span class="c-ty">bool</span> <a href="#ioxd_slice_next">ioxd_slice_next</a>(<a href="#ioxd_slice">ioxd_slice</a> *list, <span class="c-ty">char</span> sep, <a href="#ioxd_slice">ioxd_slice</a> *item);
 <span class="c-ty">bool</span> <a href="#ioxd_cstr">ioxd_cstr</a>(<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">char</span> *buf, <span class="c-ty">size_t</span> cap);
 <span class="c-ty">bool</span> <a href="#ioxd_to_int">ioxd_to_int</a>   (<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">int</span>      *out);
 <span class="c-ty">bool</span> <a href="#ioxd_to_i64">ioxd_to_i64</a>   (<a href="#ioxd_slice">ioxd_slice</a> s, <span class="c-ty">int64_t</span>  *out);
@@ -57,6 +65,40 @@ ioxd_slice ioxd_slice_trim       (ioxd_slice s);
 <dt>ioxd_slice_eq_ci</dt><dd>ASCII case-insensitive</dd>
 <dt>ioxd_slice_trim</dt><dd>no leading/trailing space, tab, CR, LF</dd>
 </dl>
+</div>
+<h3>searching</h3>
+<div class="entry">
+<pre class="decl" id="ioxd_slice_find">
+ptrdiff_t ioxd_slice_find      (ioxd_slice s, <span class="c-kw">const</span> <span class="c-ty">char</span> *needle);
+ptrdiff_t ioxd_slice_find_bytes(ioxd_slice s, <span class="c-kw">const</span> <span class="c-ty">void</span> *needle, <span class="c-ty">size_t</span> n);
+ptrdiff_t ioxd_slice_find_char (ioxd_slice s, <span class="c-ty">char</span> c);
+ptrdiff_t ioxd_slice_rfind_char(ioxd_slice s, <span class="c-ty">char</span> c);
+</pre>
+<div class="text"><p>Where something is in a slice - IndexOf: the index of the first needle, or -1 when it is not there. One byte is memchr; a longer needle is matched a block of positions at a time (32 with AVX2 where the CPU has it, 16 with SSE2): its first and last byte compared across the block at once, the middle only where both hit. An empty needle is at 0; one longer than the slice is nowhere.</p></div>
+<dl class="trail">
+<dt>ioxd_slice_find_bytes</dt><dd>the needle as bytes</dd>
+<dt>ioxd_slice_find_char</dt><dd>the first c</dd>
+<dt>ioxd_slice_rfind_char</dt><dd>the last c</dd>
+</dl>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_slice_from">
+<span class="c-kw">static</span> <span class="c-kw">inline</span> ioxd_slice ioxd_slice_from(ioxd_slice s, <span class="c-ty">size_t</span> at);
+<span class="c-kw">static</span> <span class="c-kw">inline</span> ioxd_slice ioxd_slice_upto(ioxd_slice s, <span class="c-ty">size_t</span> at);
+</pre>
+<div class="text"><p>A part of a slice: from an index to the end, or from the start up to one. An index past the end is the end.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_slice_cut">
+<span class="c-ty">bool</span> ioxd_slice_cut(ioxd_slice s, <span class="c-ty">char</span> sep, ioxd_slice *head, ioxd_slice *tail);
+</pre>
+<div class="text"><p>Cut at the first sep: what is before it into *head, what is after it into *tail - either may be NULL. False when sep is not there; *head is then all of s and *tail is empty, so "name;params" cut at ';' gives the name either way.</p></div>
+</div>
+<div class="entry">
+<pre class="decl" id="ioxd_slice_next">
+<span class="c-ty">bool</span> ioxd_slice_next(ioxd_slice *list, <span class="c-ty">char</span> sep, ioxd_slice *item);
+</pre>
+<div class="text"><p>The next item of a separated list, trimmed, with *list moved past it: "br;q=1, gzip" cut at ',' yields "br;q=1", then "gzip". Empty items are skipped. False once the list is spent.</p></div>
 </div>
 <div class="entry">
 <pre class="decl" id="ioxd_cstr">
@@ -101,7 +143,7 @@ ioxd_slice ioxd_slice_trim       (ioxd_slice s);
     <span class="c-kw">if</span> (<a href="#ioxd_slice_eq">ioxd_slice_eq</a>(form[i].key, <span class="c-str">"name"</span>))
         <a href="ioxd_http.html#ioxd_printf">ioxd_printf</a>(ctx, <span class="c-str">"hello %.*s\n"</span>, (<span class="c-ty">int</span>)form[i].value.len, form[i].value.p);</pre>
 <h2>SEE ALSO</h2>
-<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
+<p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd_static.html">ioxd_static(3)</a>, <a href="ioxd_examples.html">ioxd_examples(7)</a>, <a href="ioxd.html">ioxd(7)</a></p>
 <div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_SLICE(3)</span></div>
 </main>
 </body>

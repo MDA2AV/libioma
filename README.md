@@ -19,6 +19,11 @@ int main(void)
 }
 ```
 
+Routes with captures and middleware, the body read whole or streamed, the reply written as it
+goes with a JSON writer that writes in place, a static directory kept in memory per worker, raw
+pipes for other protocols, TLS 1.3 from a certificate store, and slices for everything the
+request carries - compared, searched (SIMD), cut.
+
 The manual, with every header, whole example programs and how to build, is at
 **[mda2av.github.io/libioxd](https://mda2av.github.io/libioxd/)**. `make` builds the library and the
 examples; `make check` runs the tests.

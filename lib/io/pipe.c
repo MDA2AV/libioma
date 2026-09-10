@@ -2,6 +2,7 @@
 #include "io/proactor.h"
 
 #include <string.h>
+#include <sys/uio.h>
 
 void ioxd__pipereader_init(ioxd_pipereader *pr, conn_t *conn, char *buf, size_t cap)
 {
@@ -327,20 +328,31 @@ void ioxd__pipewriter_reset(ioxd_pipewriter *pw)
     pw->head = pw->len = pw->tail = 0;
 }
 
-int ioxd__pipewriter_flush(ioxd_pipewriter *pw)
+int ioxd__pipewriter_flush_with(ioxd_pipewriter *pw, const void *data, size_t n)
 {
     if (pw->failed)
         return -1;
     size_t total = pw->head + pw->len + pw->tail;
-    if (total == 0)
-        return 0;
-    int rc = ioxd__conn_send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    int    rc    = 0;
+    if (total && n) {
+        struct iovec iov[2] = { { pw->buf + pw->lead - pw->head, total }, { (void *)(uintptr_t)data, n } };
+        rc = ioxd__conn_sendv(pw->conn, iov, 2);
+    } else if (total) {
+        rc = ioxd__conn_send(pw->conn, pw->buf + pw->lead - pw->head, total);
+    } else if (n) {
+        rc = ioxd__conn_send(pw->conn, data, n);
+    }
     pw->head = pw->len = pw->tail = 0;
     if (rc < 0) {
         pw->failed = true;
         return -1;
     }
     return 0;
+}
+
+int ioxd__pipewriter_flush(ioxd_pipewriter *pw)
+{
+    return ioxd__pipewriter_flush_with(pw, nullptr, 0);
 }
 
 void *ioxd__pipewriter_reserve(ioxd_pipewriter *pw, size_t n)

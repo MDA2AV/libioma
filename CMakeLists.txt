@@ -64,6 +64,8 @@ add_library(ioxd
         lib/clients/socket.c
         lib/http/engine.c
         lib/http/api.c
+        lib/http/find.c
+        lib/http/static.c
         lib/http/router.c
         lib/http/run.c
         lib/json/json.c
@@ -134,6 +136,7 @@ if(IOXD_EXAMPLES)
     target_link_libraries(ioxd-pipe-server PRIVATE ioxd::ioxd)
     add_executable(ioxd-unit tests/unit.c)
     target_link_libraries(ioxd-unit PRIVATE ioxd::ioxd)
+    target_include_directories(ioxd-unit PRIVATE lib)   # http/find.h: the search, one function per instruction set
     add_executable(ioxd-router-test tests/router_test.c)
     target_link_libraries(ioxd-router-test PRIVATE ioxd::ioxd)
     # The suites, through the one script `make check` runs, so the sequence lives in one place.
@@ -148,7 +151,7 @@ if(IOXD_EXAMPLES)
     add_test(NAME unit COMMAND ioxd-unit)
     add_test(NAME router COMMAND ioxd-router-test)
     add_test(NAME suites COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/run-suites.sh
-             --suite smoke --suite conformance --suite stress --suite tls
+             --suite smoke --suite conformance --suite stress --suite tls --suite static
              --port ${IOXD_CHECK_PORT}
              --server $<TARGET_FILE:ioxd-test-server>
              --tls-python ${IOXD_TLS_PYTHON}

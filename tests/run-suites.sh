@@ -1,6 +1,6 @@
 #!/bin/sh
 # run-suites.sh - the check sequence, in one place: the unit test, then the HTTP fixture with the
-# smoke, conformance, stress and early-TLS suites against it, then the pipe fixture with the pipe suite. Both
+# smoke, conformance, stress, early-TLS and static suites against it, then the pipe fixture with the pipe suite. Both
 # `make check` and CMake's `check` target run this, so the sequence lives here and nowhere else.
 #
 #   sh tests/run-suites.sh --unit tests/ioxd-unit --server tests/ioxd-test-server \
@@ -14,7 +14,7 @@
 #   --python PY       the python the suites run under                             [python3]
 #   --tls-python PY   the python for tls_early.py (needs tlslite-ng)              [--python]
 #   --work DIR        scratch: the fixture's log and the certificates it serves   [obj/check]
-#   --suite NAME      run only this one (repeatable): unit smoke conformance stress tls pipes
+#   --suite NAME      run only this one (repeatable): unit smoke conformance stress tls static pipes
 #
 # The suites named in one run share the fixture they talk to, and are meant to: a fixture bound to
 # a port the suite before it left full of TIME_WAIT connections has some of its new connections
@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$tls_python" ] || tls_python=$python
 [ -n "$work" ] || work=$root/obj/check
-[ -n "$suites" ] || suites="unit smoke conformance stress tls pipes"
+[ -n "$suites" ] || suites="unit smoke conformance stress tls static pipes"
 tls_port=$((port + 2))
 
 wanted() {
@@ -108,26 +108,30 @@ if wanted unit && [ -n "$unit" ]; then
 fi
 
 # --- the HTTP fixture, with every suite that talks to it ---
-if wanted smoke || wanted stress || wanted tls; then
+if wanted smoke || wanted stress || wanted tls || wanted static; then
     [ -n "$server" ] || { echo "run-suites: --server is required for the http suites" >&2; exit 2; }
     certs=
-    if wanted smoke || wanted tls; then
+    if wanted smoke || wanted tls || wanted static; then
         sh "$tests/mkcerts.sh" "$tests/certs" >/dev/null || rc=1
         rm -rf "$work/certs"
         cp -r "$tests/certs" "$work/certs"         # the fixture serves a copy: a suite may rewrite it
         certs=$work/certs
     fi
     log=$work/fixture.log
+    www=$work/www                                  # the directory static.py fills and the fixture serves under /static
+    rm -rf "$www"
+    mkdir -p "$www"
     if [ -n "$certs" ]; then                       # unset means no TLS listener, not an empty path
-        IOXD_WORKERS=$workers IOXD_PORT=$port IOXD_CERTS="$certs" "$server" >"$log" 2>&1 &
+        IOXD_WORKERS=$workers IOXD_PORT=$port IOXD_CERTS="$certs" IOXD_STATIC="$www" "$server" >"$log" 2>&1 &
     else
-        IOXD_WORKERS=$workers IOXD_PORT=$port "$server" >"$log" 2>&1 &
+        IOXD_WORKERS=$workers IOXD_PORT=$port IOXD_STATIC="$www" "$server" >"$log" 2>&1 &
     fi
     pid=$!
     if wait_for_fixture "$port" "$log"; then
         wanted smoke  && { IOXD_CERTS="$certs" "$python" "$tests/smoke.py" "$port" || rc=1; }
         wanted conformance && { "$python" "$tests/conformance.py" "$port" || rc=1; }
         wanted stress && { "$python" "$tests/stress.py" "$port" || rc=1; }
+        wanted static && { "$python" "$tests/static.py" "$port" "$www" || rc=1; }
         if wanted tls; then
             if port_open "$tls_port"; then
                 "$tls_python" "$tests/tls_early.py" "$tls_port" || rc=1

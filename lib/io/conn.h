@@ -20,6 +20,7 @@ typedef struct proactor proactor_t;
 typedef struct conn     conn_t;
 struct listener;                          /* io/proactor.h: the port it was accepted on */
 struct msghdr;                            /* <sys/socket.h>, for ioxd__conn_sendmsg          */
+struct iovec;                             /* <sys/uio.h>, for ioxd__conn_sendv               */
 
 /* A slice the kernel delivered into a provided buffer, waiting for the handler to read it. */
 
@@ -51,6 +52,7 @@ struct conn {
  * resumes it when the completion arrives - so none is named for the waiting, each for what it
  * does, after the syscall where there is one. */
 int ioxd__conn_send     (conn_t *c, const void *buf, size_t len);   /* all of buf: len, else -errno                */
+int ioxd__conn_sendv    (conn_t *c, struct iovec *iov, int n);      /* all of n pieces, one message: 0, else -errno; the vector is consumed */
 int ioxd__conn_recv_item(conn_t *c, struct rx_item *out);           /* the next delivered buffer, whole: 1; 0 at the end; <0 -errno (the reader's primitive) */
 
 /* For a protocol prologue (TLS): stop the multishot recv so nothing more leaves the socket, take
@@ -234,4 +236,10 @@ void    ioxd__conn_pool_drain(proactor_t *p);            /* free the pool at tea
  * Send all of buf: a SEND SQE per round, parked until its CQE. Returns len, or -errno.
  *   - no SIGPIPE; the loop finishes short sends (kernel TLS refuses MSG_WAITALL)
  *     [sqe->msg_flags = MSG_NOSIGNAL;]
+ */
+
+/* ioxd__conn_sendv:
+ * The pieces as one sendmsg, so a reply's head and a body that lives elsewhere (a file the
+ * static handler keeps) go out in one message and, on a TLS socket, one run of records. A short
+ * send moves the vector past what went and sends again.
  */

@@ -113,6 +113,15 @@ typedef struct ioxd_next ioxd_next;
 typedef void (*ioxd_mw)(ioxd_ctx *ctx, ioxd_next *next);
 void ioxd_next_run(ioxd_ctx *ctx, ioxd_next *next);
 
+/* ── the request, looked up ────────────────────────────────────────────────────────────── */
+
+/* A header of the request by name, or a query parameter by key: the value of the first one, or
+ * an absent slice (p NULL, len 0) when there is none - ioxd_slice_eq(v, "") is true of both an
+ * absent value and an empty one; v.p tells them apart. Header names arrive lower-cased, so
+ * ask with lowercase. */
+ioxd_slice ioxd_req_header(const ioxd_ctx *ctx, const char *name);
+ioxd_slice ioxd_req_param (const ioxd_ctx *ctx, const char *key);
+
 /* ── the body ──────────────────────────────────────────────────────────────────────────── */
 
 /* The whole body, read into the request buffer once and returned as a slice (also req.body). It

@@ -24,13 +24,14 @@ PAGES = [  # (header, page name, one-line subject used on the index)
     ("ioxd/config.h", "ioxd_config", "the runtime's knobs"),
     ("ioxd/http.h",   "ioxd_http",   "request, response, context, body, reply"),
     ("ioxd/router.h", "ioxd_router", "groups, endpoints, middleware; the script macros"),
-    ("ioxd/slice.h",  "ioxd_slice",  "slices, conversions, key/value parsing"),
+    ("ioxd/slice.h",  "ioxd_slice",  "slices: compared, searched, cut; conversions; key/value parsing"),
     ("ioxd/json.h",   "ioxd_json",   "JSON written as you go; structs described once"),
     ("ioxd/pipe.h",   "ioxd_pipe",   "a connection as a pipe, for other protocols"),
     ("ioxd/run.h",    "ioxd_run",    "bind the ports, run the workers"),
     ("ioxd/timer.h",  "ioxd_timer",  "a delay that parks the connection, not the worker"),
     ("ioxd/socket.h", "ioxd_socket", "outbound connections, as pipes"),
     ("ioxd/tls.h",    "ioxd_tls",    "a certificate store, for a TLS port"),
+    ("ioxd/static.h", "ioxd_static", "files from a directory, kept in memory per worker"),
 ]
 
 
@@ -480,6 +481,12 @@ resolved once, when the run starts, into a segment tree and one flat middleware 
 costs one walk and no scan. The script macros (IOXD_GROUP, IOXD_GET, IOXD_USE) are the same registrations
 written as a block.</p>
 
+<h3>Static files</h3>
+<p>A <a href="ioxd_static.html">directory</a> is served under a mount: the type from the extension, a validator
+and a date for conditional requests, byte ranges, a pre-compressed twin when the client takes the coding. What a
+worker served it keeps in memory and checks against the disk before serving again, so a replaced file is served
+new; a file larger than the slab goes out from where it is, in one message behind the head.</p>
+
 <h3>Threads and lifetimes</h3>
 <p>Register routes, configure and bind from the main thread, before the run. Handlers run on worker threads,
 one at a time per worker; a request's slices are valid until the handler returns, and anything a handler hands
@@ -506,13 +513,14 @@ when the registered file table is on, which is the default.</p>
 <dt><a href="ioxd_config.html">&lt;ioxd/config.h&gt;</a></dt><dd>the runtime's knobs: ring, buffers, stacks, pools</dd>
 <dt><a href="ioxd_http.html">&lt;ioxd/http.h&gt;</a></dt><dd>request, response, context, body, reply</dd>
 <dt><a href="ioxd_router.html">&lt;ioxd/router.h&gt;</a></dt><dd>groups, endpoints, middleware, the script macros</dd>
-<dt><a href="ioxd_slice.html">&lt;ioxd/slice.h&gt;</a></dt><dd>slices, conversions, key/value parsing</dd>
+<dt><a href="ioxd_slice.html">&lt;ioxd/slice.h&gt;</a></dt><dd>slices: compared, searched, cut; conversions; key/value parsing</dd>
 <dt><a href="ioxd_json.html">&lt;ioxd/json.h&gt;</a></dt><dd>the JSON writer and IOXD_JSON_STRUCT</dd>
 <dt><a href="ioxd_pipe.html">&lt;ioxd/pipe.h&gt;</a></dt><dd>a connection as a pipe, for protocols other than HTTP</dd>
 <dt><a href="ioxd_run.html">&lt;ioxd/run.h&gt;</a></dt><dd>bind the ports, plain or TLS, run the workers</dd>
 <dt><a href="ioxd_timer.html">&lt;ioxd/timer.h&gt;</a></dt><dd>a delay that parks the connection, not the worker</dd>
 <dt><a href="ioxd_socket.html">&lt;ioxd/socket.h&gt;</a></dt><dd>outbound connections, as pipes</dd>
 <dt><a href="ioxd_tls.html">&lt;ioxd/tls.h&gt;</a></dt><dd>a certificate store, for a TLS port</dd>
+<dt><a href="ioxd_static.html">&lt;ioxd/static.h&gt;</a></dt><dd>files from a directory, kept in memory per worker</dd>
 </dl>
 
 <h2>SEE ALSO</h2>
@@ -706,6 +714,27 @@ int main(void)
     ioxd_disconnect(up);
 }"""),
     ],
+    "ioxd_static": [
+        ("A directory under /static, its twins served by Accept-Encoding, through the fallback handler so nested paths reach it:",
+         """static ioxd_static *g_files;
+
+static void files(ioxd_ctx *ctx)
+{
+    if (ioxd_static_serve(ctx, g_files))            /* 200, 304, 206 or 404 for anything under /static */
+        return;
+    ctx->res.status = 404;                          /* not under the mount: a reply of our own */
+}
+
+int main(void)
+{
+    g_files = ioxd_static_open(&(ioxd_static_config){ .dir = "/srv/www", .mount = "/static", .precompressed = true });
+    if (!g_files)
+        return 1;
+    IOXD_DEFAULT(files);
+    ioxd_bind(8080, NULL);
+    return ioxd_run(0);
+}"""),
+    ],
     "ioxd_tls": [
         ("A TLS port beside a plain one; the files rotated, then reloaded:",
          """ioxd_certs *certs = ioxd_certs_load("/etc/ioxd/certs");   /* <dir>/<host>/cert.pem and key.pem; `default` required */
@@ -854,7 +883,7 @@ one page per public header, generated from the headers themselves, so what a pag
 header declares. Start with the overview.</p>
 <h2>SECTION 7: OVERVIEW</h2>
 <table><tr><td><a href="ioxd.7.html">ioxd(7)</a></td><td></td><td>the library, its model and its limits</td></tr>
-<tr><td><a href="ioxd_examples.html">ioxd_examples(7)</a></td><td></td><td>whole programs: streaming, middleware, groups, raw pipes</td></tr></table>
+<tr><td><a href="ioxd_examples.html">ioxd_examples(7)</a></td><td></td><td>whole programs: streaming, middleware, groups, static files, raw pipes</td></tr></table>
 <h2>SECTION 3: HEADERS</h2>
 <table>{rows}
 <tr><td><a href="functions.html">functions(3)</a></td><td></td><td>every public name, alphabetically</td></tr></table>

@@ -156,7 +156,7 @@ ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's write
  * Mark the reply dead (the peer is gone, or a head that cannot be built) and fail the call.
  */
 
-/* flush:
+/* flush_with:
  * Send the slab, with the head in front of it the first time. That first time decides the
  * framing: a final flush with the head unsent means the whole body is here (Content-Length,
  * one send); an early flush means the body outgrew the slab, so it streams - with the declared
@@ -185,6 +185,15 @@ ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's write
  *   - the handler wrote past its own length: nothing more goes  [return fail(res);]
  */
 
+/* flush:
+ * The flush with nothing to add.
+ */
+
+/* raw_framed:
+ * Whether body bytes go out as they are - a declared length, or HTTP/1.0 until close - rather
+ * than inside chunks: decided by the head once it is out, else by what the handler declared.
+ */
+
 /* finish:
  * After the chain: send what is left - the whole reply if nothing went out yet - and close a
  * chunked stream. A streamed reply that fell short of its declared length closes the
@@ -194,7 +203,10 @@ ioxd_pipewriter *ioxd__engine_writer(ioxd_ctx *ctx);   /* the reply slab's write
  */
 
 /* ioxd_write:
- * Append body bytes to the slab; send it, head first, whenever it fills.
+ * Append body bytes to the slab; send it, head first, whenever it fills. More than fits, on a
+ * reply framed raw, goes out from the caller's buffer in one message behind the head and what
+ * was pending - no copy for a file served from memory; the caller's buffer is only read for as
+ * long as the call lasts.
  */
 
 /* write_formatted_heap:

@@ -61,6 +61,30 @@ ioxd_slice ioxd_slice_trim(ioxd_slice s)
     return s;
 }
 
+bool ioxd_slice_cut(ioxd_slice s, char sep, ioxd_slice *head, ioxd_slice *tail)
+{
+    ptrdiff_t at = ioxd_slice_find_char(s, sep);
+    if (head)
+        *head = at < 0 ? s : ioxd_slice_upto(s, (size_t)at);
+    if (tail)
+        *tail = at < 0 ? ioxd_slice_from(s, s.len) : ioxd_slice_from(s, (size_t)at + 1);
+    return at >= 0;
+}
+
+bool ioxd_slice_next(ioxd_slice *list, char sep, ioxd_slice *item)
+{
+    while (list->len) {
+        ioxd_slice head;
+        ioxd_slice_cut(*list, sep, &head, list);
+        head = ioxd_slice_trim(head);
+        if (head.len) {
+            *item = head;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ioxd_cstr(ioxd_slice s, char *buf, size_t cap)
 {
     if (cap == 0)
@@ -236,6 +260,25 @@ size_t ioxd_kv_parse(const char *text, size_t len, ioxd_kv *out, size_t cap, cha
     if (truncated)
         *truncated = lost;
     return count;
+}
+
+static ioxd_slice lookup(const ioxd_kv *pairs, size_t n, const char *name)
+{
+    size_t len = strlen(name);
+    for (size_t i = 0; i < n; i++)
+        if (pairs[i].key.len == len && memcmp(pairs[i].key.p, name, len) == 0)
+            return pairs[i].value;
+    return (ioxd_slice){ nullptr, 0 };
+}
+
+ioxd_slice ioxd_req_header(const ioxd_ctx *ctx, const char *name)
+{
+    return lookup(ctx->req.headers, ctx->req.n_headers, name);
+}
+
+ioxd_slice ioxd_req_param(const ioxd_ctx *ctx, const char *key)
+{
+    return lookup(ctx->req.params, ctx->req.n_params, key);
 }
 
 static bool is_tchar(unsigned char c)

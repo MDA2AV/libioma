@@ -1,13 +1,19 @@
 /*
  * unit.c - the handler helpers of include/ioxd.h checked without a server: comparisons, the
- * typed conversions and key/value parsing. `make check` runs it before the HTTP suites.
+ * substring search on every instruction set the machine has, lists, the typed conversions and
+ * key/value parsing. `make check` runs it before the HTTP suites.
  */
 #include <ioxd.h>
+
+#include "http/find.h"
 
 #include <locale.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 static int checks, failures;
 
@@ -162,6 +168,143 @@ static void test_strings(void)
     CHECK(ioxd_cstr(S(""), buf, sizeof buf) && buf[0] == '\0');
     buf[0] = 'x';
     CHECK(!ioxd_cstr(S("a"), buf, 0) && buf[0] == 'x');                         /* cap 0 writes nothing */
+}
+
+/* The search every implementation must agree with. */
+static ptrdiff_t naive_find(const char *hay, size_t len, const char *needle, size_t n)
+{
+    for (size_t i = 0; i + n <= len; i++)
+        if (memcmp(hay + i, needle, n) == 0)
+            return (ptrdiff_t)i;
+    return -1;
+}
+
+/* A haystack that ends exactly where an unreadable page begins: a load past the end faults. */
+static char *g_edge;                                 /* the byte after the last readable one */
+
+static char *at_edge(const char *bytes, size_t len)
+{
+    char *at = g_edge - len;
+    memcpy(at, bytes, len);
+    return at;
+}
+
+static bool all_find(const char *hay, size_t len, const char *needle, size_t n, ptrdiff_t want)
+{
+    const char *edge = at_edge(hay, len);
+    if (ioxd_slice_find_bytes((ioxd_slice){ edge, len }, needle, n) != want)
+        return false;
+    if (n < 2 || n > len)
+        return true;                                 /* the implementations want 2 <= n <= len */
+    if (ioxd__find_scalar(edge, len, needle, n) != want)
+        return false;
+#ifdef __x86_64__
+    if (ioxd__find_sse2(edge, len, needle, n) != want)
+        return false;
+    if (__builtin_cpu_supports("avx2") && ioxd__find_avx2(edge, len, needle, n) != want)
+        return false;
+#endif
+    return true;
+}
+
+static void test_find(void)
+{
+    size_t page = (size_t)sysconf(_SC_PAGESIZE);
+    char  *map  = mmap(nullptr, 2 * page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    CHECK(map != MAP_FAILED && mprotect(map + page, page, PROT_NONE) == 0);
+    g_edge = map + page;
+
+    CHECK(ioxd_slice_find(S("br;q=1, gzip;q=0.8"), "gzip") == 8);
+    CHECK(ioxd_slice_find(S("br;q=1, gzip;q=0.8"), "deflate") == -1);
+    CHECK(ioxd_slice_find(S("abc"), "") == 0);
+    CHECK(ioxd_slice_find(S(""), "") == 0);
+    CHECK(ioxd_slice_find(S(""), "a") == -1);
+    CHECK(ioxd_slice_find(S("ab"), "abc") == -1);
+    CHECK(ioxd_slice_find(S("abc"), "abc") == 0);
+    CHECK(ioxd_slice_find(S("aaab"), "aab") == 1);
+    CHECK(ioxd_slice_find(S("abab"), "aba") == 0);
+    CHECK(ioxd_slice_find(S("xxabab"), "bab") == 3);
+    CHECK(ioxd_slice_find_bytes((ioxd_slice){ "a\0b", 3 }, "\0b", 2) == 1);
+    CHECK(ioxd_slice_find_char(S("key=value"), '=') == 3);
+    CHECK(ioxd_slice_find_char(S("key"), '=') == -1);
+    CHECK(ioxd_slice_find_char((ioxd_slice){ nullptr, 0 }, '=') == -1);
+    CHECK(ioxd_slice_rfind_char(S("a/b/c.tar.gz"), '.') == 9);
+    CHECK(ioxd_slice_rfind_char(S("a/b/c.tar.gz"), '/') == 3);
+    CHECK(ioxd_slice_rfind_char(S("abc"), '/') == -1);
+
+    /* every implementation against the naive search, on short alphabets so matches and near
+     * misses are frequent, on every length around the block sizes, at the edge of a page */
+    unsigned seed = 12345;
+    int      agreed = 0, cases = 0;
+    for (int round = 0; round < 4000; round++) {
+        char   hay[300], needle[48];
+        size_t len = seed % 300, n = 2 + seed / 7 % 40;
+        int    alphabet = 2 + (round % 3);
+        for (size_t i = 0; i < len; i++) {
+            seed   = seed * 1103515245U + 12345U;
+            hay[i] = (char)('a' + (seed >> 16) % (unsigned)alphabet);
+        }
+        for (size_t i = 0; i < n; i++) {
+            seed      = seed * 1103515245U + 12345U;
+            needle[i] = (char)('a' + (seed >> 16) % (unsigned)alphabet);
+        }
+        if (round % 5 == 0 && n <= len)                 /* a planted match, at a random place */
+            memcpy(hay + seed % (len - n + 1), needle, n);
+        if (round % 7 == 0)
+            needle[n - 1] = needle[0];                   /* first and last byte the same */
+        seed = seed * 1103515245U + 12345U;
+        cases++;
+        agreed += all_find(hay, len, needle, n, naive_find(hay, len, needle, n));
+    }
+    CHECK(agreed == cases);
+    /* bytes above 127 and zeros, at every length from 0 to 70 */
+    for (size_t len = 0; len <= 70; len++) {
+        char hay[72];
+        for (size_t i = 0; i < len; i++)
+            hay[i] = (char)(i % 3 ? 0xff : 0);
+        const char needle[3] = { (char)0xff, 0, (char)0xff };
+        CHECK(all_find(hay, len, needle, 3, naive_find(hay, len, needle, 3)));
+        CHECK(all_find(hay, len, needle, 2, naive_find(hay, len, needle, 2)));
+    }
+    munmap(map, 2 * page);
+}
+
+static void test_lists(void)
+{
+    ioxd_slice head, tail;
+    CHECK(ioxd_slice_cut(S("q=0.8"), '=', &head, &tail) && ioxd_slice_eq(head, "q") && ioxd_slice_eq(tail, "0.8"));
+    CHECK(!ioxd_slice_cut(S("gzip"), ';', &head, &tail) && ioxd_slice_eq(head, "gzip") && tail.len == 0);
+    CHECK(ioxd_slice_cut(S("a;"), ';', &head, &tail) && ioxd_slice_eq(head, "a") && tail.len == 0);
+    CHECK(ioxd_slice_cut(S(";b"), ';', nullptr, &tail) && ioxd_slice_eq(tail, "b"));
+    CHECK(ioxd_slice_cut(S("x=y"), '=', &head, nullptr) && ioxd_slice_eq(head, "x"));
+
+    ioxd_slice list = S(" br;q=1 , gzip;q=0.8,, *;q=0.1 ,"), item;
+    CHECK(ioxd_slice_next(&list, ',', &item) && ioxd_slice_eq(item, "br;q=1"));
+    CHECK(ioxd_slice_next(&list, ',', &item) && ioxd_slice_eq(item, "gzip;q=0.8"));
+    CHECK(ioxd_slice_next(&list, ',', &item) && ioxd_slice_eq(item, "*;q=0.1"));
+    CHECK(!ioxd_slice_next(&list, ',', &item) && list.len == 0);
+    list = (ioxd_slice){ nullptr, 0 };
+    CHECK(!ioxd_slice_next(&list, ',', &item));
+    list = S(" , , ");
+    CHECK(!ioxd_slice_next(&list, ',', &item));
+
+    ioxd_slice s = S("hello world");
+    CHECK(ioxd_slice_eq(ioxd_slice_from(s, 6), "world") && ioxd_slice_eq(ioxd_slice_upto(s, 5), "hello"));
+    CHECK(ioxd_slice_from(s, 100).len == 0 && ioxd_slice_eq(ioxd_slice_upto(s, 100), "hello world"));
+    CHECK(ioxd_slice_from((ioxd_slice){ nullptr, 0 }, 0).len == 0);
+
+    /* the request looked up: the first of a repeated header, absent as a NULL slice */
+    static ioxd_ctx ctx;
+    ctx.req.headers[0]  = (ioxd_kv){ S("accept-encoding"), S("br") };
+    ctx.req.headers[1]  = (ioxd_kv){ S("x-empty"), S("") };
+    ctx.req.headers[2]  = (ioxd_kv){ S("accept-encoding"), S("gzip") };
+    ctx.req.n_headers   = 3;
+    ctx.req.params[0]   = (ioxd_kv){ S("m"), S("3") };
+    ctx.req.n_params    = 1;
+    CHECK(ioxd_slice_eq(ioxd_req_header(&ctx, "accept-encoding"), "br"));
+    CHECK(ioxd_req_header(&ctx, "x-empty").p != nullptr && ioxd_req_header(&ctx, "x-empty").len == 0);
+    CHECK(ioxd_req_header(&ctx, "host").p == nullptr);
+    CHECK(ioxd_slice_eq(ioxd_req_param(&ctx, "m"), "3") && ioxd_req_param(&ctx, "n").p == nullptr);
 }
 
 static void test_kv_parse(void)
@@ -462,6 +605,8 @@ int main(void)
     test_bools();
     test_strings();
     test_kv_parse();
+    test_find();
+    test_lists();
     printf("unit: %d checks, %d failed\n", checks, failures);   /* test_json ran first, above */
     return failures ? 1 : 0;
 }

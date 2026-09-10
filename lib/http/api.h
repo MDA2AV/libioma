@@ -6,8 +6,9 @@
 /* ── api.c: the notes ──────────────────────────────────────────────────────────────────── */
 
 /*
- * api.c - the helpers a handler calls: slices and conversions, key/value parsing, shaping the
- * reply, reasons. Nothing here touches the runtime.
+ * api.c - the helpers a handler calls: slices and conversions (the substring search is find.c),
+ * key/value parsing, the request looked up, shaping the reply, reasons. Nothing here touches the
+ * runtime.
  */
 
 /* at file scope:
@@ -49,6 +50,14 @@
 
 /* ioxd_slice_trim:
  * The slice without leading and trailing whitespace.
+ */
+
+/* ioxd_slice_cut:
+ * The slice in two at the first sep: absent, the head is the whole slice and the tail empty.
+ */
+
+/* ioxd_slice_next:
+ * The next non-empty item of a separated list, trimmed; the list moves past it.
  */
 
 /* ioxd_cstr:
@@ -104,6 +113,18 @@
  * arena.
  *   - skip empty pairs ("&&")  [if (end > start) {]
  *   - skip the pair, give its arena back  [used = mark;]
+ */
+
+/* lookup:
+ * The value of the first pair whose key is exactly name; an absent slice otherwise.
+ */
+
+/* ioxd_req_header:
+ * A request header's value by (lower-cased) name.
+ */
+
+/* ioxd_req_param:
+ * A query parameter's value by key.
  */
 
 /* is_tchar:

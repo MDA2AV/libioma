@@ -333,7 +333,7 @@ static int fail(ioxd_response *res)
     return -1;
 }
 
-static int flush(ioxd_ctx *ctx, bool final)
+static int flush_with(ioxd_ctx *ctx, bool final, const void *extra, size_t extra_len)
 {
     ioxd_response      *res   = &ctx->res;
     ioxd_pipewriter    *pw    = WRITER(ctx);
@@ -388,8 +388,13 @@ static int flush(ioxd_ctx *ctx, bool final)
             pw->len = left;
             over    = true;
         }
+        left -= pw->len;
+        if (extra_len > left) {
+            extra_len = left;
+            over      = true;
+        }
     }
-    res->body_sent += pw->len;
+    res->body_sent += pw->len + extra_len;
     if (res->chunked && pw->len) {
         char  size_line[16];
         int   digits = put_hex(size_line, pw->len);
@@ -416,11 +421,22 @@ static int flush(ioxd_ctx *ctx, bool final)
         else if (ioxd__pipewriter_through(pw, head, (size_t)head_len) < 0)
             return fail(res);
     }
-    if (ioxd__pipewriter_flush(pw) < 0)
+    if (ioxd__pipewriter_flush_with(pw, extra, extra_len) < 0)
         return fail(res);
     if (over)
         return fail(res);
     return 0;
+}
+
+static int flush(ioxd_ctx *ctx, bool final)
+{
+    return flush_with(ctx, final, nullptr, 0);
+}
+
+static bool raw_framed(const ioxd_ctx *ctx)
+{
+    const ioxd_response *res = &ctx->res;
+    return res->head_sent ? !res->chunked : (res->has_length || ctx->req.minor_version == 0);
 }
 
 static int finish(ioxd_ctx *ctx)
@@ -451,6 +467,8 @@ int ioxd_write(ioxd_ctx *ctx, const void *data, size_t len)
     ioxd_pipewriter *pw  = WRITER(ctx);
     if (res->failed)
         return -1;
+    if (len > ioxd__pipewriter_room(pw) && raw_framed(ctx))
+        return flush_with(ctx, false, data, len);
     const char *src = data;
     while (len) {
         size_t room = ioxd__pipewriter_room(pw);

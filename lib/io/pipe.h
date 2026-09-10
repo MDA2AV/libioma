@@ -73,6 +73,7 @@ char  *ioxd__pipewriter_back   (ioxd_pipewriter *pw, size_t n);                /
 int    ioxd__pipewriter_write  (ioxd_pipewriter *pw, const void *data, size_t n);   /* copy in; larger than the slab goes straight out          */
 int    ioxd__pipewriter_through(ioxd_pipewriter *pw, const void *data, size_t n);   /* send now, ahead of the pending span, bypassing the slab   */
 int    ioxd__pipewriter_flush  (ioxd_pipewriter *pw);                          /* send front, data and back; suspends */
+int    ioxd__pipewriter_flush_with(ioxd_pipewriter *pw, const void *data, size_t n);   /* the same, with n bytes from elsewhere right behind the span, in the same message */
 int    ioxd__pipewriter_send   (ioxd_pipewriter *pw, const void *data, size_t n);   /* write, then flush                                         */
 
 /* Where the next byte goes, and how many fit before the slab is full. */
@@ -184,6 +185,12 @@ void ioxd__pipe_close(ioxd_pipe *p);
 
 /* ioxd__pipewriter_advance:
  *   - never past the slab, whatever was claimed  [pw->len += n < room ? n : room;]
+ */
+
+/* ioxd__pipewriter_flush_with:
+ * The span and then data, as one message: how a body that lives elsewhere goes out behind the
+ * head and whatever was pending, without a copy into the slab. Nothing pending is a plain send
+ * of data; nothing to add is a plain flush.
  */
 
 /* ioxd__pipewriter_write:

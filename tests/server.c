@@ -502,9 +502,26 @@ static void client_route(ioxd_ctx *ctx)
         ctx->res.status = 502;
 }
 
-/* The fallback for anything unrouted, replacing the built-in text 404. */
+/* A directory served under /static when IOXD_STATIC names one: twins by Accept-Encoding, a
+ * Cache-Control, and files past 64 KB streamed rather than kept, so a suite can see both paths. */
+static ioxd_static *g_files;
+
+/* GET /shell - a named file, whatever the path: how a single-page app serves its one page. */
+static void shell(ioxd_ctx *ctx)
+{
+    if (g_files)
+        ioxd_static_file(ctx, g_files, "index.html");
+    else
+        ctx->res.status = 503;
+}
+
+/* The fallback for anything unrouted, replacing the built-in text 404: the static directory
+ * answers for its mount first (its own 404 for a file that is not there), the JSON 404 for the
+ * rest. */
 static void not_found(ioxd_ctx *ctx)
 {
+    if (g_files && ioxd_static_serve(ctx, g_files))
+        return;
     ctx->res.status = 404;
     ioxd_content_type(ctx, "application/json");
     ioxd_text(ctx, "{\"error\":\"not found\"}");
@@ -552,6 +569,7 @@ int main(void)
     IOXD_GET ("/reflect",               reflect);
     IOXD_GET ("/promise",               promise);
     IOXD_GET ("/params",                params);
+    IOXD_GET ("/shell",                 shell);             /* a named static file        */
     IOXD_DEFAULT(not_found);
 
     /* groups: /api with middleware of its own (IOXD_USE inside a block adds to that group; listing
@@ -578,6 +596,14 @@ int main(void)
     };
     if (ioxd_configure(&cfg) < 0)
         return 1;
+    const char *www = getenv("IOXD_STATIC");                   /* NOLINT(concurrency-mt-unsafe): a directory to serve under /static */
+    if (www && *www) {
+        g_files = ioxd_static_open(&(ioxd_static_config){
+            .dir = www, .mount = "/static", .cache_control = "max-age=60", .cache_file_max = 64UL * 1024, .precompressed = true,
+        });
+        if (!g_files)
+            return 1;
+    }
     int workers = (int)env_number("IOXD_WORKERS", 0);          /* 0: one per core */
     int port    = (int)env_number("IOXD_PORT", 8080);
     int p = port > 0 && port < 65536 ? port : 8080;
@@ -591,5 +617,7 @@ int main(void)
             IOXD_POST("/tls/reload", tls_reload);              /* only a build with certificates has it */
         }
     }
-    return ioxd_run(workers);
+    int rc = ioxd_run(workers);
+    ioxd_static_close(g_files);
+    return rc;
 }

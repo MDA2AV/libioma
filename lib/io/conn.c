@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -387,6 +388,37 @@ int ioxd__conn_setsockopt(conn_t *c, int level, int name, const void *val, size_
     if ((rc == -EOPNOTSUPP || rc == -EINVAL) && !c->p->ring.fixed_files)
         rc = setsockopt(c->fd, level, name, val, (socklen_t)len) < 0 ? -errno : 0;
     return rc;
+}
+
+int ioxd__conn_sendv(conn_t *c, struct iovec *iov, int n)
+{
+    while (n > 0) {
+        struct msghdr        msg = { .msg_iov = iov, .msg_iovlen = (size_t)n };
+        op_t                 op;
+        struct io_uring_sqe *sqe = ioxd__proactor_sqe(c->p);
+        sqe->opcode    = IORING_OP_SENDMSG;
+        sqe->fd        = c->fd;
+        sqe->flags     = c->p->ring.fixed_files ? IOSQE_FIXED_FILE : 0;
+        sqe->addr      = (uintptr_t)&msg;
+        sqe->len       = 1;
+        sqe->msg_flags = MSG_NOSIGNAL;
+        int sent = ioxd__io_await(sqe, &op);
+        if (sent < 0)
+            return sent;
+        if (sent == 0)
+            return -EPIPE;
+        size_t left = (size_t)sent;
+        while (n > 0 && left >= iov->iov_len) {
+            left -= iov->iov_len;
+            iov++;
+            n--;
+        }
+        if (n > 0) {
+            iov->iov_base = (char *)iov->iov_base + left;
+            iov->iov_len -= left;
+        }
+    }
+    return 0;
 }
 
 int ioxd__conn_sendmsg(conn_t *c, const struct msghdr *msg)
