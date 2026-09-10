@@ -94,7 +94,7 @@ static inline size_t ioxd__pipewriter_room(const ioxd_pipewriter *pw)
 #define IOXD_PIPE_LEAD   512                /* in front of the slab: a frame's front               */
 #endif
 #ifndef IOXD_PIPE_CAP
-#define IOXD_PIPE_CAP    8192               /* the slab: bytes buffered before a flush             */
+#define IOXD_PIPE_CAP    16384              /* the slab: bytes buffered before a flush - one full TLS record */
 #endif
 #ifndef IOXD_PIPE_SLACK
 #define IOXD_PIPE_SLACK  8                  /* behind the slab: a frame's back                     */

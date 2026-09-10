@@ -79,7 +79,7 @@ static void send_file(ioxd_ctx *ctx, const char *name)
         return;
     }
     for (off_t left = st.st_size; left > 0;) {
-        size_t piece = left < 8192 ? (size_t)left : 8192;
+        size_t piece = left < 16384 ? (size_t)left : 16384;
         char  *at = ioxd_reserve(ctx, piece);        /* room in the slab, flushed first when full */
         if (!at)
             break;                                   /* the peer is gone */

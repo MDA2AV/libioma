@@ -11,9 +11,9 @@
  * on -ENOBUFS (the log says "raise recv_buffers" when that happens) and their size bounds what
  * one delivery holds; a worker's slab is count x size bytes. */
 typedef struct ioxd_config {
-    unsigned ring_entries;      /* submission queue entries, the completion queue twice that; a power of two, at most 32768; 4096 */
-    unsigned recv_buffers;      /* provided receive buffers; a power of two, at most 32768; 4096 */
-    unsigned recv_buffer_size;  /* bytes in each, 64 to 1 MB; 2048 */
+    unsigned ring_entries;      /* submission queue entries, the completion queue twice that; a power of two, at most 32768; 8192 */
+    unsigned recv_buffers;      /* provided receive buffers; a power of two, at most 32768; 1024 */
+    unsigned recv_buffer_size;  /* bytes in each, 64 to 1 MB; 16384 - a whole TLS record, a body of 10 KB in one delivery */
     size_t   stack_size;        /* a connection's coroutine stack, above a 64 KB guard; at least 64 KB; 128 KB */
     unsigned idle_stacks;       /* stacks kept warm for the next connections; 512 */
     unsigned idle_connections;  /* connection records kept warm; 1024 */

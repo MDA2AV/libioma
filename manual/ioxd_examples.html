@@ -325,7 +325,7 @@ printf '\0\0\0\5hello' | nc -q1 127.0.0.1 8100 | xxd     # 00000005 6f6c6c6568</
         <a href="ioxd_slice.html#ioxd_slice">ioxd_slice</a> payload = <a href="ioxd_pipe.html#ioxd_pipe_kept">ioxd_pipe_kept</a>(pipe);   <span class="c-cm">/* len bytes, contiguous */</span>
 
         <span class="c-cm">/* the reply, framed the same way, written straight into the slab: the length, then the
-         * payload reversed in pieces no larger than the slab (8 KB) - reserve flushes what is
+         * payload reversed in pieces no larger than the slab (16 KB) - reserve flushes what is
          * there when a piece would not fit, so a reply of any size streams through it */</span>
         <span class="c-ty">unsigned</span> <span class="c-ty">char</span> *out = <a href="ioxd_pipe.html#ioxd_pipe_reserve">ioxd_pipe_reserve</a>(pipe, <span class="c-num">4</span>);
         <span class="c-kw">if</span> (!out)
@@ -426,7 +426,7 @@ curl -i -H <span class="c-str">'If-None-Match: "&lt;the etag&gt;"'</span> http:<
         <span class="c-kw">return</span>;
     }
     <span class="c-kw">for</span> (off_t left = st.st_size; left &gt; <span class="c-num">0</span>;) {
-        <span class="c-ty">size_t</span> piece = left &lt; <span class="c-num">8192</span> ? (<span class="c-ty">size_t</span>)left : <span class="c-num">8192</span>;
+        <span class="c-ty">size_t</span> piece = left &lt; <span class="c-num">16384</span> ? (<span class="c-ty">size_t</span>)left : <span class="c-num">16384</span>;
         <span class="c-ty">char</span>  *at = <a href="ioxd_http.html#ioxd_reserve">ioxd_reserve</a>(ctx, piece);        <span class="c-cm">/* room in the slab, flushed first when full */</span>
         <span class="c-kw">if</span> (!at)
             <span class="c-kw">break</span>;                                   <span class="c-cm">/* the peer is gone */</span>
@@ -567,7 +567,7 @@ curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body
 }
 
 <span class="c-cm">/* GET /rows?n=: n lines. The slab streams by itself when it fills; the flush every 100 rows
- * sends earlier, so a client sees the feed move instead of 8 KB at a time. */</span>
+ * sends earlier, so a client sees the feed move instead of 16 KB at a time. */</span>
 <span class="c-kw">static</span> <span class="c-ty">void</span> rows(<a href="ioxd_http.html#ioxd_ctx">ioxd_ctx</a> *ctx)
 {
     <span class="c-ty">long</span> n = count_param(ctx, <span class="c-num">1000</span>);
@@ -607,7 +607,7 @@ curl -I http://127.0.0.1:8080/blob?n=50000000          # HEAD: the head, no body
     <span class="c-kw">return</span> <a href="ioxd_run.html#ioxd_run">ioxd_run</a>(<span class="c-num">0</span>);
 }</pre></div>
 <h2>SEE ALSO</h2><p><a href="ioxd_config.html">ioxd_config(3)</a>, <a href="ioxd_http.html">ioxd_http(3)</a>, <a href="ioxd_router.html">ioxd_router(3)</a>, <a href="ioxd_slice.html">ioxd_slice(3)</a>, <a href="ioxd_json.html">ioxd_json(3)</a>, <a href="ioxd_pipe.html">ioxd_pipe(3)</a>, <a href="ioxd_run.html">ioxd_run(3)</a>, <a href="ioxd_timer.html">ioxd_timer(3)</a>, <a href="ioxd_socket.html">ioxd_socket(3)</a>, <a href="ioxd_tls.html">ioxd_tls(3)</a>, <a href="ioxd.7.html">ioxd(7)</a></p>
-<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-09</span><span>IOXD_EXAMPLES(7)</span></div>
+<div class="ftr"><span>libioxd 0.1.0</span><span>2026-09-10</span><span>IOXD_EXAMPLES(7)</span></div>
 </main>
 </body>
 </html>

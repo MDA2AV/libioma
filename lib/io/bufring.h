@@ -13,12 +13,12 @@
 
 /* defaults (override with -D, or at run time with ioxd_configure) */
 #ifndef BUF_COUNT
-#define BUF_COUNT 4096                    /* provided recv buffers per worker, power of two     */
+#define BUF_COUNT 1024                    /* provided recv buffers per worker, power of two     */
 #endif
 static_assert(((unsigned)BUF_COUNT & ((unsigned)BUF_COUNT - 1U)) == 0 && BUF_COUNT >= 2 && BUF_COUNT <= 32768,
               "BUF_COUNT: a power of two, at most 32768 (the kernel refuses a ring of 65536 entries)");
 #ifndef BUF_SIZE
-#define BUF_SIZE  2048                    /* bytes per recv buffer (a request rarely needs more) */
+#define BUF_SIZE  16384                   /* bytes per recv buffer: a whole TLS record, a 10 KB body in one */
 #endif
 #define BGID      1                       /* the one buffer group a worker registers            */
 

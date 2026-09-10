@@ -47,7 +47,7 @@ static void frames(ioxd_pipe *pipe)
         ioxd_slice payload = ioxd_pipe_kept(pipe);   /* len bytes, contiguous */
 
         /* the reply, framed the same way, written straight into the slab: the length, then the
-         * payload reversed in pieces no larger than the slab (8 KB) - reserve flushes what is
+         * payload reversed in pieces no larger than the slab (16 KB) - reserve flushes what is
          * there when a piece would not fit, so a reply of any size streams through it */
         unsigned char *out = ioxd_pipe_reserve(pipe, 4);
         if (!out)

@@ -29,7 +29,7 @@
 
 /* defaults (override with -D, or at run time with ioxd_configure) */
 #ifndef RING_ENTRIES
-#define RING_ENTRIES 4096                 /* SQ depth; the CQ is twice that                     */
+#define RING_ENTRIES 8192                 /* SQ depth; the CQ is twice that                     */
 #endif
 #ifndef STACK_SIZE
 #define STACK_SIZE   (128UL * 1024)       /* per coroutine, plus a 64 KB guard; only touched pages cost RSS */

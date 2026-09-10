@@ -42,7 +42,7 @@ static void ticks(ioxd_ctx *ctx)
 }
 
 /* GET /rows?n=: n lines. The slab streams by itself when it fills; the flush every 100 rows
- * sends earlier, so a client sees the feed move instead of 8 KB at a time. */
+ * sends earlier, so a client sees the feed move instead of 16 KB at a time. */
 static void rows(ioxd_ctx *ctx)
 {
     long n = count_param(ctx, 1000);
